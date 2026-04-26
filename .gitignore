@@ -21,3 +21,11 @@ import/*
 
 # Claude Code
 .claude/
+CLAUDE.MD
+
+!.gitignore
+db/
+storage/
+import/
+python_env/
+node_modules/
