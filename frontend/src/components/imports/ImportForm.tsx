@@ -1,0 +1,293 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  AIConfig,
+  aiConfigsApi,
+  extractApiError,
+  importsApi,
+  importSettingsApi,
+  SystemPrompt,
+  systemPromptsApi,
+} from "@/lib/api";
+
+export default function ImportForm() {
+  const router = useRouter();
+
+  const [company, setCompany] = useState("");
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [comment, setComment] = useState("");
+  const [subfolder, setSubfolder] = useState("");
+
+  const [importBasePath, setImportBasePath] = useState("");
+  const [storagePath, setStoragePath] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Optionen
+  const [deleteSourceFiles, setDeleteSourceFiles] = useState(false);
+  const [folderSync, setFolderSync] = useState(false);
+  const [analyzeAfterImport, setAnalyzeAfterImport] = useState(false);
+
+  // KI-Optionen
+  const [aiConfigs, setAiConfigs] = useState<AIConfig[]>([]);
+  const [selectedAiConfigId, setSelectedAiConfigId] = useState<string>("");
+  // Nur Prompts vom Typ 1 (Standard-Extraktion Eingangsrechnung) für "Dokumente an KI senden"
+  const [extractionPrompts, setExtractionPrompts] = useState<SystemPrompt[]>([]);
+  const [selectedSystemPromptId, setSelectedSystemPromptId] = useState<string>("");
+
+  useEffect(() => {
+    importSettingsApi.getPaths()
+      .then((p) => { setImportBasePath(p.import_base_path); setStoragePath(p.storage_path); })
+      .catch(() => {});
+
+    aiConfigsApi.list()
+      .then((configs) => {
+        setAiConfigs(configs);
+        const active = configs.find((c) => c.active);
+        if (active) setSelectedAiConfigId(String(active.id));
+      })
+      .catch(() => {});
+
+    systemPromptsApi.list()
+      .then((prompts) => {
+        // Nur Typ 1 = Standard-Extraktion (Eingangsrechnung) für KI-Analyse
+        const extraction = prompts.filter((p) => p.type === 1);
+        setExtractionPrompts(extraction);
+        if (extraction.length > 0) setSelectedSystemPromptId(String(extraction[0].id));
+      })
+      .catch(() => {});
+  }, []);
+
+  // "Dokumente an KI senden" ist nur verfügbar wenn KI-Konfigurationen UND Extraction-Prompts vorhanden
+  const canAnalyze = aiConfigs.length > 0 && extractionPrompts.length > 0;
+
+  // Pfad-Vorschau
+  const importFolderPreview = subfolder.trim()
+    ? `${importBasePath}/${subfolder.trim()}`
+    : importBasePath;
+  const storagePreview = company.trim() && year.trim()
+    ? `${storagePath}/${company.trim()}_${year.trim()}/`
+    : null;
+
+  function handleDeleteSourceFiles(checked: boolean) {
+    setDeleteSourceFiles(checked);
+    if (checked) setFolderSync(false);
+  }
+
+  function handleFolderSync(checked: boolean) {
+    setFolderSync(checked);
+    if (checked) setDeleteSourceFiles(false);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const batch = await importsApi.create({
+        company_name: company.trim(),
+        year: parseInt(year),
+        comment: comment.trim() || undefined,
+        subfolder: subfolder.trim() || undefined,
+        folder_sync: folderSync,
+        analyze_after_import: analyzeAfterImport && canAnalyze,
+        ai_config_id: analyzeAfterImport && selectedAiConfigId ? parseInt(selectedAiConfigId) : undefined,
+        system_prompt_id: analyzeAfterImport && selectedSystemPromptId ? parseInt(selectedSystemPromptId) : undefined,
+        delete_source_files: deleteSourceFiles,
+      });
+      router.push(`/imports/${batch.id}`);
+    } catch (err: unknown) {
+      setError(extractApiError(err, "Fehler beim Starten des Imports"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6 rounded-lg border bg-white p-6 shadow-sm">
+      <h2 className="text-base font-semibold">Neuer Import</h2>
+
+      {error && (
+        <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+      )}
+
+      {/* Firma + Jahr */}
+      <div className="flex gap-4">
+        <div className="flex-1">
+          <label className="mb-1 block text-sm font-medium text-gray-700">
+            Firmenname <span className="text-red-500">*</span>
+          </label>
+          <input
+            className="input"
+            placeholder="z.B. Lieferant GmbH"
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            required
+          />
+        </div>
+        <div className="w-28">
+          <label className="mb-1 block text-sm font-medium text-gray-700">
+            Jahr <span className="text-red-500">*</span>
+          </label>
+          <input
+            className="input"
+            placeholder="2025"
+            value={year}
+            onChange={(e) => setYear(e.target.value)}
+            required
+            pattern="\d{4}"
+            inputMode="numeric"
+            maxLength={4}
+          />
+        </div>
+      </div>
+
+      {/* Unterordner */}
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">
+          Unterordner im Import-Verzeichnis{" "}
+          <span className="text-xs font-normal text-gray-400">(optional)</span>
+        </label>
+        <input
+          className="input"
+          placeholder="z.B. 2025/Q1 oder Lieferant_GmbH"
+          value={subfolder}
+          onChange={(e) => setSubfolder(e.target.value)}
+        />
+        {/* Pfad-Vorschau */}
+        <div className="mt-1.5 space-y-0.5 rounded bg-gray-50 px-3 py-2 text-xs text-gray-500">
+          <div>
+            <span className="font-medium">Quelle:</span>{" "}
+            <span className="font-mono">{importFolderPreview || "…"}</span>
+          </div>
+          {storagePreview && (
+            <div>
+              <span className="font-medium">Ziel:</span>{" "}
+              <span className="font-mono">{storagePreview}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Kommentar */}
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">
+          Kommentar{" "}
+          <span className="text-xs font-normal text-gray-400">(optional)</span>
+        </label>
+        <textarea
+          className="input"
+          placeholder="Notizen zu diesem Import..."
+          rows={2}
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+        />
+      </div>
+
+      {/* Import-Optionen */}
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Optionen</p>
+
+        {/* Quelldateien löschen */}
+        <label className={`flex cursor-pointer items-start gap-3 ${folderSync ? "opacity-40 cursor-not-allowed" : ""}`}>
+          <input
+            type="checkbox"
+            checked={deleteSourceFiles}
+            onChange={(e) => handleDeleteSourceFiles(e.target.checked)}
+            disabled={folderSync}
+            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+          />
+          <div>
+            <span className="text-sm font-medium text-gray-800">Quelldateien nach Import löschen</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Original-PDFs werden aus dem Import-Ordner entfernt, sobald sie erfolgreich kopiert wurden.
+            </p>
+          </div>
+        </label>
+
+        {/* Folder Sync */}
+        <label className={`flex cursor-pointer items-start gap-3 ${deleteSourceFiles ? "opacity-40 cursor-not-allowed" : ""}`}>
+          <input
+            type="checkbox"
+            checked={folderSync}
+            onChange={(e) => handleFolderSync(e.target.checked)}
+            disabled={deleteSourceFiles}
+            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+          />
+          <div>
+            <span className="text-sm font-medium text-gray-800">Ordner-Sync aktivieren</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Der Import-Ordner wird periodisch auf neue PDFs geprüft und automatisch importiert.
+            </p>
+          </div>
+        </label>
+
+        {/* Dokumente direkt an KI senden */}
+        <label className={`flex cursor-pointer items-start gap-3 ${!canAnalyze ? "opacity-40 cursor-not-allowed" : ""}`}>
+          <input
+            type="checkbox"
+            checked={analyzeAfterImport && canAnalyze}
+            onChange={(e) => setAnalyzeAfterImport(e.target.checked)}
+            disabled={!canAnalyze}
+            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <div>
+            <span className="text-sm font-medium text-gray-800">Dokumente direkt an KI senden</span>
+            {!canAnalyze ? (
+              <p className="text-xs text-amber-600 mt-0.5">
+                {aiConfigs.length === 0
+                  ? "Keine aktive KI-Konfiguration vorhanden — bitte unter Einstellungen anlegen."
+                  : "Kein Extraktions-Systemprompt (Typ 0) vorhanden — bitte unter Einstellungen anlegen."}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500 mt-0.5">
+                Nach dem Import wird automatisch die KI-Analyse für alle Dokumente gestartet.
+              </p>
+            )}
+          </div>
+        </label>
+
+        {analyzeAfterImport && canAnalyze && (
+          <div className="pl-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-600">KI-Konfiguration</label>
+              <select
+                value={selectedAiConfigId}
+                onChange={(e) => setSelectedAiConfigId(e.target.value)}
+                className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+              >
+                {aiConfigs.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.active ? " (aktiv)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-600">Systemprompt</label>
+              <select
+                value={selectedSystemPromptId}
+                onChange={(e) => setSelectedSystemPromptId(e.target.value)}
+                className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+              >
+                {extractionPrompts.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <button
+        type="submit"
+        disabled={loading || !company.trim() || !year.trim()}
+        className="rounded bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+      >
+        {loading ? "Starte Import..." : "Import starten"}
+      </button>
+    </form>
+  );
+}

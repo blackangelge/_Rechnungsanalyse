@@ -1,0 +1,215 @@
+================================================================================
+  RECHNUNGSANALYSE — NAS-Einrichtung (Synology)
+================================================================================
+
+Verwaltung ausschliesslich über Synology Container Manager (GUI).
+Kein SSH / kein Terminal nötig.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 1 — Ordner anlegen (File Station)
+────────────────────────────────────────────────────────────────────────────────
+
+  Folgende Ordner im File Station anlegen:
+
+    /volume1/docker/_rechnungsanalyse/db/
+    /volume1/docker/_rechnungsanalyse/storage/
+    /volume1/docker/_rechnungsanalyse/python_env/
+    /volume1/docker/_rechnungsanalyse/node_modules/
+    /volume1/docker/_rechnungsanalyse/import/
+
+  Erklärung:
+    db/           → PostgreSQL-Datenbankdateien (persistent)
+    storage/      → Gespeicherte Rechnungs-PDFs, aufgeteilt in Unterordner
+                    pro Firma: storage/Firmenname_Jahr/
+    python_env/   → Python-Pakete / Virtual Environment (persistent)
+    node_modules/ → Node.js-Pakete (persistent)
+    import/       → Eingangsordner für neue PDF-Rechnungen
+                    Hier PDF-Dateien ablegen, dann Import starten.
+                    Nach dem Import können die PDFs wieder gelöscht werden.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 2 — Projektdateien ablegen
+────────────────────────────────────────────────────────────────────────────────
+
+  Alle Projektdateien in diesen Ordner kopieren (via File Station):
+
+    /volume1/docker/_rechnungsanalyse/
+
+  Die Struktur sollte danach so aussehen:
+
+    /volume1/docker/_rechnungsanalyse/
+    ├── docker-compose.yml
+    ├── .env                  ← muss angepasst werden (Schritt 3)
+    ├── SETUP_NAS.txt         ← diese Datei
+    ├── backend/              ← Python/FastAPI Backend
+    ├── frontend/             ← Next.js Frontend
+    ├── db/                   ← leer (wird von PostgreSQL befüllt)
+    ├── storage/              ← leer (wird beim Import befüllt)
+    ├── python_env/           ← leer (wird beim ersten Start befüllt)
+    ├── node_modules/         ← leer (wird beim ersten Start befüllt)
+    └── import/               ← leer (hier PDFs für den Import ablegen)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 3 — .env Datei anpassen
+────────────────────────────────────────────────────────────────────────────────
+
+  Die Datei /volume1/docker/_rechnungsanalyse/.env im Texteditor öffnen
+  und folgende Werte eintragen:
+
+    # Datenbank
+    POSTGRES_USER=appuser
+    POSTGRES_PASSWORD=sicheres_passwort_hier
+    POSTGRES_DB=rechnungsanalyse
+    DATABASE_URL=postgresql://appuser:sicheres_passwort_hier@db:5432/rechnungsanalyse
+
+    # Pfade (volle Host-Pfade)
+    IMPORT_BASE_PATH=/volume1/docker/_rechnungsanalyse/import
+    STORAGE_PATH=/volume1/docker/_rechnungsanalyse/storage
+
+  Wichtig:
+    - POSTGRES_PASSWORD in DATABASE_URL muss identisch mit POSTGRES_PASSWORD sein
+    - IMPORT_BASE_PATH = Ordner, aus dem PDFs importiert werden (Quelle)
+    - STORAGE_PATH     = Ordner, in dem importierte PDFs gespeichert werden (Ziel)
+                         Unterordner werden automatisch angelegt: storage/Firma_Jahr/
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 4 — Container starten (Container Manager)
+────────────────────────────────────────────────────────────────────────────────
+
+  Im Synology Container Manager:
+    1. "Projekt" → "Erstellen"
+    2. Projektordner: /volume1/docker/_rechnungsanalyse
+    3. docker-compose.yml wird automatisch erkannt
+    4. "Weiter" → "Fertig"
+
+  Beim ersten Start passiert automatisch:
+    → Python Virtual Environment wird erstellt (python_env/)
+    → Python-Pakete werden installiert
+    → Datenbank-Tabellen werden angelegt (Alembic-Migrationen)
+    → Node.js-Pakete werden installiert (node_modules/)
+    → Backend und Frontend starten
+
+  Der erste Start dauert einige Minuten (Pakete werden heruntergeladen).
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 5 — KI-Konfiguration einrichten
+────────────────────────────────────────────────────────────────────────────────
+
+  1. Frontend öffnen: http://NAS-IP:3100
+  2. Navigation → "KI-Einstellungen"
+  3. Neue Konfiguration anlegen:
+       Name:       z.B. "LM Studio" oder "OpenAI"
+       API-URL:    URL der OpenAI-kompatiblen API
+                   z.B. http://192.168.1.50:1234/v1  (LM Studio)
+                   z.B. https://api.openai.com/v1    (OpenAI)
+       API-Key:    Nur bei OpenAI nötig, bei lokalen APIs leer lassen
+       Modell:     Modell-ID, z.B. "gpt-4o" oder "llava-1.5-7b-hf"
+  4. "Als Standard setzen" klicken
+
+  Unterstützte KI-Dienste (OpenAI-kompatible API):
+    - LM Studio (lokal)
+    - Ollama (lokal)
+    - OpenAI (cloud)
+    - Beliebige andere OpenAI-kompatible API
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 6 — Systemprompts einrichten (optional)
+────────────────────────────────────────────────────────────────────────────────
+
+  1. Navigation → "Systemprompts"
+  2. Neuen Prompt anlegen:
+       Name:    z.B. "Rechnungsextraktion Standard"
+       Inhalt:  Systemanweisung für die KI
+                z.B. "Du bist ein Experte für die Analyse von Rechnungen.
+                      Extrahiere alle relevanten Felder strukturiert als JSON."
+  3. "Als Standard setzen" klicken
+
+  Der Systemprompt wird bei der KI-Extraktion automatisch mitgesendet.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SCHRITT 7 — Prüfen ob alles läuft
+────────────────────────────────────────────────────────────────────────────────
+
+  Frontend:   http://NAS-IP:3100
+  Backend:    http://NAS-IP:8100/docs   (Swagger UI / API-Dokumentation)
+  Health:     http://NAS-IP:8100/health
+
+
+────────────────────────────────────────────────────────────────────────────────
+  NORMALER BETRIEB — Import starten
+────────────────────────────────────────────────────────────────────────────────
+
+  1. PDF-Rechnungen in den Import-Ordner kopieren:
+       /volume1/docker/_rechnungsanalyse/import/
+
+  2. Frontend öffnen → "Neuer Import"
+       Firmenname: z.B. Lexxis
+       Jahr:       z.B. 2026
+
+  3. "Import starten" klicken
+
+  Was passiert:
+    - PDFs werden aus /import/ gelesen
+    - Kopien werden gespeichert unter /storage/Lexxis_2026/
+    - Fortschritt wird live angezeigt
+    - Nach dem Import: PDFs in /import/ können gelöscht werden
+
+
+────────────────────────────────────────────────────────────────────────────────
+  NACH CODE-ÄNDERUNGEN
+────────────────────────────────────────────────────────────────────────────────
+
+  Backend (Python) — Änderungen werden automatisch erkannt (uvicorn --reload).
+  Kein Neustart nötig, ausser bei neuen Python-Paketen.
+
+  Frontend (Next.js) — Änderungen werden automatisch erkannt (next dev).
+  Kein Neustart nötig, ausser bei neuen npm-Paketen.
+
+  Bei neuen Paketen oder docker-compose.yml Änderungen:
+    Container Manager → Projekt → "Neu erstellen"
+
+  Bei neuen Datenbank-Migrationen (neue .py in alembic/versions/):
+    Container Manager → Backend-Container → "Neustart"
+    (alembic upgrade head läuft automatisch beim Start)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ORDNERSTRUKTUR (Übersicht)
+────────────────────────────────────────────────────────────────────────────────
+
+  /volume1/docker/_rechnungsanalyse/
+  ├── .env                          ← Konfiguration (Passwörter, Pfade)
+  ├── docker-compose.yml            ← Container-Definition
+  ├── backend/                      ← Python FastAPI Quellcode
+  │   ├── app/
+  │   │   ├── models/               ← Datenbankmodelle
+  │   │   ├── routers/              ← API-Endpunkte
+  │   │   ├── services/             ← Import- und KI-Logik
+  │   │   └── crud/                 ← Datenbankoperationen
+  │   └── alembic/versions/         ← Datenbank-Migrationen
+  ├── frontend/                     ← Next.js Quellcode
+  │   └── src/app/                  ← Seiten und Komponenten
+  ├── db/                           ← PostgreSQL-Daten (nicht anfassen)
+  ├── storage/                      ← Importierte PDFs
+  │   └── Firmenname_Jahr/          ← Unterordner pro Import
+  ├── import/                       ← Eingangsordner (PDFs hier ablegen)
+  ├── python_env/                   ← Python-Pakete (nicht anfassen)
+  └── node_modules/                 ← Node.js-Pakete (nicht anfassen)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  PORTS
+────────────────────────────────────────────────────────────────────────────────
+
+  3100  → Frontend (Next.js)
+  8100  → Backend  (FastAPI)
+  5432  → Datenbank (PostgreSQL, nur intern, kein externer Zugriff)
+
+================================================================================

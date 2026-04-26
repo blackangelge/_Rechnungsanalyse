@@ -1,0 +1,31 @@
+# Web-Framework und ASGI-Server
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Datenbank (ORM + Migrationen + Treiber)
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10   # Synchroner PostgreSQL-Treiber
+asyncpg==0.30.0            # Asynchroner PostgreSQL-Treiber (für AsyncSession)
+
+# Konfiguration
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+
+# Datei-Upload (UploadFile / multipart/form-data)
+python-multipart==0.0.20
+
+# Echtzeit-Streaming (Server-Sent Events)
+sse-starlette==2.1.3
+
+# Asynchroner HTTP-Client für KI-API-Aufrufe
+httpx==0.27.0
+
+# Asynchrone Datei-Operationen (Kopieren, Lesen)
+aiofiles==24.1.0
+
+# PDF-Verarbeitung
+pypdf==4.3.1       # Seitenanzahl auslesen
+pypdfium2==4.30.0  # PDF-Seiten in Bilder umwandeln (kein Poppler nötig)
+Pillow==10.4.0     # Bildbearbeitung / Base64-Kodierung für KI-API
+openpyxl==3.1.5    # Excel-Export

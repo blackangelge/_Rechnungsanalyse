@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+python_env/*
+
+# Umgebungsvariablen (Secrets!)
+.env
+.env.local
+
+# Node
+node_modules/*
+.next/
+
+# Docker / Laufzeit-Daten
+*.log
+db/*
+storage/*
+import/*
+
+# Claude Code
+.claude/
