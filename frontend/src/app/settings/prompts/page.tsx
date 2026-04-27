@@ -1,3 +1,16 @@
+/**
+ * Seite: Systemprompts verwalten (/settings/prompts)
+ *
+ * CRUD für KI-Systemprompts. Zwei Prompt-Typen:
+ *   type=0 — Dokumententyp-Erkennungsprompt (violett markiert)
+ *             Aktiviert die zweistufige Analyse: erst Typ erkennen, dann ggf. extrahieren.
+ *             Nur ein Prompt kann gleichzeitig type=0 sein.
+ *   type=1 — Standard-Extraktionsprompt für Eingangsrechnungen (blau markiert)
+ *
+ * Beim Erstellen/Bearbeiten: Dropdown für Prompt-Typ.
+ * Liste zeigt farbige Typ-Badges und Vorschau des Prompt-Inhalts.
+ */
+
 "use client";
 
 import { useEffect, useState } from "react";

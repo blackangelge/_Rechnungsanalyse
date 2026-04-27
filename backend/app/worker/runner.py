@@ -28,19 +28,21 @@ from app.models.workflow_task import TaskKind
 
 logger = logging.getLogger(__name__)
 
-# ── Konfiguration ────────────────────────────────────────────────────────────
-POLL_INTERVAL        = float(os.getenv("WORKER_POLL_INTERVAL",    "2.0"))   # s zwischen Polls
-POLL_NO_AI           = float(os.getenv("WORKER_POLL_NO_AI",       "30.0"))  # s warten wenn keine KI
-LOCK_TIMEOUT         = timedelta(minutes=int(os.getenv("WORKER_LOCK_TIMEOUT_MIN", "10")))
-AI_MAX_FAILURES      = int(os.getenv("WORKER_AI_MAX_FAILURES",    "3"))     # Fehler bis Sperre
-AI_DISABLE_MINUTES   = int(os.getenv("WORKER_AI_DISABLE_MIN",     "10"))    # Sperrdauer in Minuten
-WORKER_HOST          = socket.gethostname()
+# ── Konfiguration (überschreibbar via Environment-Variablen) ─────────────────
+POLL_INTERVAL        = float(os.getenv("WORKER_POLL_INTERVAL",    "2.0"))   # Sekunden zwischen Polls wenn Queue leer
+POLL_NO_AI           = float(os.getenv("WORKER_POLL_NO_AI",       "30.0"))  # Sekunden warten wenn keine KI verfügbar
+LOCK_TIMEOUT         = timedelta(minutes=int(os.getenv("WORKER_LOCK_TIMEOUT_MIN", "10")))  # Wann ein "in_progress"-Task als hängend gilt
+AI_MAX_FAILURES      = int(os.getenv("WORKER_AI_MAX_FAILURES",    "3"))     # Aufeinanderfolgende Fehler bis KI gesperrt wird
+AI_DISABLE_MINUTES   = int(os.getenv("WORKER_AI_DISABLE_MIN",     "10"))    # Sperrdauer der KI in Minuten
+WORKER_HOST          = socket.gethostname()                                  # Hostname für worker_id (Identifikation im Log)
 
-# Zählt aufeinanderfolgende KI-Verbindungsfehler pro KI-Konfiguration
-# Format: {ai_config_id: consecutive_failure_count}
+# Zählt aufeinanderfolgende KI-Verbindungsfehler pro KI-Konfiguration.
+# Wird auf 0 zurückgesetzt wenn ein Task erfolgreich abgeschlossen wird.
+# Format: {ai_config_id: aufeinanderfolgende_fehler_anzahl}
 _ai_failure_counts: dict[int, int] = {}
 
-# Semaphoren pro KI-Konfiguration — begrenzen gleichzeitige Anfragen auf parallel_request
+# Semaphoren pro KI-Konfiguration — begrenzen gleichzeitige Anfragen auf parallel_request.
+# Werden beim ersten Zugriff auf eine KI-Config dynamisch erstellt.
 # Format: {ai_config_id: asyncio.Semaphore(parallel_request)}
 _ai_semaphores: dict[int, asyncio.Semaphore] = {}
 
@@ -94,13 +96,21 @@ def _prepare_document(document_id: int) -> tuple[int | None, str | None, str, in
         doc = db.get(DocModel, document_id)
         if doc is None:
             logger.error("[worker] Dokument #%d nicht gefunden", document_id)
-            return None, None, "skip"
+            return None, None, "skip", 1
         if not doc.stored_filename:
             logger.error("[worker] Dokument #%d hat keine gespeicherte Datei", document_id)
-            return None, None, "skip"
+            return None, None, "skip", 1
         if doc.soft_deleted:
             logger.warning("[worker] Dokument #%d ist gelöscht — übersprungen", document_id)
-            return None, None, "skip"
+            return None, None, "skip", 1
+        if doc.status == "processing":
+            # Bereits durch einen anderen Worker oder den direkten Analyse-Pfad in Bearbeitung.
+            # _analyze_single hat zusätzlich einen In-Memory-Guard (_analyzing_docs).
+            logger.warning(
+                "[worker] Dokument #%d wird bereits verarbeitet (status=processing) — übersprungen",
+                document_id,
+            )
+            return None, None, "skip", 1
 
         ai_config = crud.ai_config.get_default(db)
         if ai_config is None:
@@ -153,6 +163,40 @@ def _set_document_error(document_id: int, message: str) -> None:
     db = SessionLocal()
     try:
         crud.document.update_status(db, document_id, "error")
+    except Exception as exc:
+        logger.error(
+            "[worker] Konnte Fehlerstatus für Dokument #%d nicht setzen: %s", document_id, exc
+        )
+    finally:
+        db.close()
+
+
+def _set_document_error_if_not_done(document_id: int, message: str) -> None:
+    """
+    Setzt den Dokument-Status auf 'error' — aber NUR wenn er nicht bereits 'done' ist.
+
+    Hintergrund: Wenn die KI-Analyse erfolgreich abgeschlossen wurde und das Dokument
+    auf 'done' gesetzt wurde, aber danach ein technischer Fehler (z.B. COMPLETE_SQL-Fehler)
+    auftritt, darf 'done' nicht mit 'error' überschrieben werden. Andernfalls würde der
+    Task neu versucht und die KI erneut aufgerufen — obwohl das Ergebnis bereits gespeichert ist.
+    """
+    from app.database import SessionLocal
+    from app.models.document import Document as DocModel
+    db = SessionLocal()
+    try:
+        doc = db.get(DocModel, document_id)
+        if doc is None:
+            return
+        if doc.status == "done":
+            logger.info(
+                "[worker] Dokument #%d ist bereits 'done' — Fehlerstatus wird NICHT gesetzt"
+                " (Analyse war erfolgreich, nur Bookkeeping-Fehler).",
+                document_id,
+            )
+            return
+        from app import crud
+        crud.document.update_status(db, document_id, "error")
+        logger.error("[worker] Dokument #%d: Status → error. Grund: %s", document_id, message)
     except Exception as exc:
         logger.error(
             "[worker] Konnte Fehlerstatus für Dokument #%d nicht setzen: %s", document_id, exc
@@ -221,6 +265,11 @@ HANDLERS = {
 
 # ── SQL ───────────────────────────────────────────────────────────────────────
 
+# ── SQL-Statements für die Worker-Queue ──────────────────────────────────────
+
+# CLAIM_SQL: Atomares Beanspruchen des nächsten wartenden Tasks.
+# FOR UPDATE SKIP LOCKED verhindert, dass zwei Worker denselben Task beanspruchen.
+# Inkrementiert attempts — wichtig für die FAIL_SQL-Logik.
 CLAIM_SQL = text("""
     UPDATE workflow_tasks
     SET status    = 'in_progress',
@@ -238,12 +287,17 @@ CLAIM_SQL = text("""
     RETURNING id, payload, attempts, max_attempts
 """)
 
+# COMPLETE_SQL: Markiert einen Task als erfolgreich abgeschlossen.
 COMPLETE_SQL = text("""
     UPDATE workflow_tasks
     SET status = 'completed', result = :result, error = NULL, updated_at = now()
     WHERE id = :id
 """)
 
+# FAIL_SQL: Markiert einen Task als fehlgeschlagen oder stellt ihn zurück in die Queue.
+# Wenn attempts >= max_attempts → 'failed' (kein weiterer Versuch).
+# Sonst → zurück auf 'pending' für einen neuen Versuch.
+# VERBRAUCHT einen attempt (CLAIM_SQL hat bereits inkrementiert).
 FAIL_SQL = text("""
     UPDATE workflow_tasks
     SET status     = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END,
@@ -254,8 +308,10 @@ FAIL_SQL = text("""
     WHERE id = :id
 """)
 
-# Re-queue bei KI-Verbindungsfehler / fehlendem KI-Endpunkt —
-# verbraucht KEINEN Versuch des Tasks (attempts - 1 = rückgängig machen des CLAIM-Inkrements)
+# REQUEUE_SQL: Stellt einen Task zurück in die Queue OHNE einen Versuch zu verbrauchen.
+# Wird bei KI-Verbindungsfehlern verwendet — der Task soll von einer anderen KI
+# oder nach einer Pause erneut versucht werden, ohne das attempts-Budget zu belasten.
+# attempts - 1 macht das CLAIM_SQL-Inkrement rückgängig.
 REQUEUE_SQL = text("""
     UPDATE workflow_tasks
     SET status     = 'pending',
@@ -267,6 +323,10 @@ REQUEUE_SQL = text("""
     WHERE id = :id
 """)
 
+# CLEANUP_SQL: Setzt hängende 'in_progress'-Tasks zurück auf 'pending'.
+# Wird alle 60 Sekunden vom cleanup_loop ausgeführt.
+# Tasks die länger als LOCK_TIMEOUT in 'in_progress' stecken, werden freigegeben
+# (z.B. nach Container-Neustart während einer Analyse).
 CLEANUP_SQL = text("""
     UPDATE workflow_tasks
     SET status = 'pending', worker_id = NULL, locked_at = NULL, updated_at = now()
@@ -349,8 +409,10 @@ async def worker_loop(worker_name: str, shutdown: asyncio.Event) -> None:
             logger.exception("[%s] Task #%d: unbehandelter Fehler", worker_name, task_id)
             doc_id = payload.get("document_id")
             if isinstance(doc_id, int):
+                # Nicht überschreiben, wenn die Analyse schon erfolgreich war (status='done').
+                # Verhindert: Analyse ok → COMPLETE_SQL-Fehler → 'done' wird zu 'error' → Retry → 3x KI.
                 await asyncio.to_thread(
-                    _set_document_error, doc_id, f"Task #{task_id} fehlgeschlagen: {exc}"
+                    _set_document_error_if_not_done, doc_id, f"Task #{task_id} fehlgeschlagen: {exc}"
                 )
             async with async_session_factory() as s:
                 await s.execute(FAIL_SQL, {"id": task_id, "error": str(exc)[:5000]})

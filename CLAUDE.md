@@ -138,6 +138,10 @@ alembic/
 - `analyze_after_import=False, delete_source_files=True` → `_import_and_delete(batch_id, import_folder)`
 - Sonst → `run_import(batch_id)`
 
+`_import_then_analyze` ruft **NICHT** mehr `_run_analysis` direkt auf.
+Stattdessen werden die importierten Dokumente via `_db_enqueue_for_analysis()` in die **Worker-Queue** eingereiht.
+Die Worker übernehmen die KI-Analyse. Das verhindert Race-Conditions zwischen Import-Pfad und Worker.
+
 `_delete_source_files()` löscht nur Dateien, für die ein DB-Eintrag mit `stored_filename` existiert (kein Blind-Delete).
 
 ### Import löschen
@@ -592,6 +596,18 @@ Behandelt sowohl `number` als auch Strings wie `"719,99 €"`:
 - **LM Studio `channelId`-Warnung**: Entsteht durch `"detail": "high"` in image_url oder fehlendes `"stream": false`. Beides in `ai_service.py` korrekt gesetzt.
 - **Dokument bleibt auf „Wird verarbeitet"**: Kann durch fehlgeschlagenen DB-Commit entstehen (z.B. Datum im falschen Format von KI). `_date()` in `ai_service.py` normalisiert alle bekannten Formate → `None` bei unbekanntem Format, verhindert Commit-Fehler.
 - **Backend friert ein bei mehreren KI-Anfragen**: Entsteht durch parallele `asyncio.to_thread`-Aufrufe mit großen Payloads, die den Thread-Pool erschöpfen. Lösung: KI-Analyse ist sequenziell — `_run_analysis` verwendet eine `for`-Schleife statt `asyncio.gather`.
+- **Doppelte KI-Anfragen für dasselbe Dokument (3× hintereinander → Fehler)**:
+  Entsteht wenn mehrere Worker dieselbe Dokument-ID bearbeiten ODER wenn der Import-Pfad
+  (`_import_then_analyze`) und die Worker-Queue gleichzeitig dasselbe Dokument verarbeiten.
+  Drei Schutzebenen:
+  1. `_analyzing_docs: set[int]` in `documents.py` — In-Memory-Guard, der parallele
+     `_analyze_single`-Aufrufe für dieselbe ID sofort abblockt.
+  2. `_prepare_document` in `runner.py` prüft `doc.status == "processing"` → skip.
+  3. `_set_document_error_if_not_done` statt `_set_document_error` im Worker-Exception-Handler —
+     verhindert, dass ein COMPLETE_SQL-Fehler nach erfolgreicher Analyse das `done`-Status
+     mit `error` überschreibt (was 3 Retry-Zyklen auslösen würde).
+  4. `_import_then_analyze` ruft `_run_analysis` NICHT mehr direkt auf, sondern reiht
+     Dokumente via `_db_enqueue_for_analysis` in die Worker-Queue ein → kein Konflikt.
 - **`NameError: cannot access local variable 'images_b64'`**: Entsteht wenn `del images_b64` vor `len(images_b64)` steht. Seitenanzahl immer zuerst in `page_count` sichern, dann `del`.
 - **`TypeError: Unrecognized arguments` bei `InvoiceExtraction`**: `_map_new_format()` gibt `supplier_street/zip/city` zurück, die keine DB-Spalten sind. Vor `save_extraction` mit `_SUPPLIER_ONLY_KEYS` herausfiltern.
 - **`ki_*`-Spalten fehlen (Migration 0009 nicht angewendet)**: `save_extraction` fängt den Commit-Fehler ab und wiederholt den Schreibvorgang ohne KI-Stats. Migration nachholen: `alembic upgrade head`.

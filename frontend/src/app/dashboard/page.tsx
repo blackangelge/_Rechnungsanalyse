@@ -1,3 +1,15 @@
+/**
+ * Seite: Import-Dashboard (/dashboard)
+ *
+ * Übersicht aller Import-Batches mit Auto-Refresh alle 10 Sekunden.
+ * Zeigt eine Warnung wenn keine KI-Konfiguration verfügbar ist
+ * (noAI=true aus worker-stats) oder Dokumente in der Queue warten.
+ *
+ * Lädt parallel:
+ *   - Alle Import-Batches (importsApi.list) — alle 10 s
+ *   - Worker-Status (workerApi.getStats) — alle 30 s
+ */
+
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -11,6 +23,7 @@ export default function DashboardPage() {
   const [error, setError]               = useState<string | null>(null);
   const [workerStats, setWorkerStats]   = useState<WorkerStats | null>(null);
 
+  /** Alle Import-Batches laden (ohne Dokumente — schneller als die Detail-Ansicht). */
   const load = useCallback(async () => {
     try {
       setError(null);

@@ -1,3 +1,15 @@
+/**
+ * Hauptnavigationsleiste der Anwendung.
+ *
+ * Enthält Links zu allen Hauptbereichen und ein Einstellungen-Dropdown.
+ * Das JS-Badge (grün "JS ✓" / rot "JS ✗") zeigt an, ob React korrekt
+ * hydratisiert wurde — hilft beim Diagnostizieren von Hydration-Fehlern
+ * nach Cache-Problemen auf dem NAS.
+ *
+ * Das Einstellungen-Dropdown schließt automatisch bei Klick außerhalb
+ * (mousedown-Listener auf document).
+ */
+
 "use client";
 
 import Link from "next/link";

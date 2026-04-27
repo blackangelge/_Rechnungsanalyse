@@ -1,3 +1,14 @@
+"""
+CRUD-Operationen für die ai_clients-Tabelle (KI-Konfigurationen).
+
+KI-Konfigurationen beschreiben OpenAI-kompatible Endpunkte (LM Studio, Ollama, OpenAI).
+Mehrere aktive Konfigurationen sind möglich — get_default() wählt zufällig aus.
+
+Temporäre Deaktivierung: temporarily_disable() setzt timeout_at in die Zukunft,
+ohne active=False zu setzen. Bei Ablauf wird die KI automatisch wieder verwendet.
+_truly_active_filter() berücksichtigt dieses Timeout bei allen Abfragen.
+"""
+
 import logging
 import random
 from datetime import datetime, timedelta, timezone
@@ -34,10 +45,12 @@ def _truly_active_filter(query):
 # ---------------------------------------------------------------------------
 
 def get_all(db: Session) -> list[AIClients]:
+    """Gibt alle KI-Konfigurationen zurück, nach ID sortiert (aktive und inaktive)."""
     return db.query(AIClients).order_by(AIClients.id).all()
 
 
 def get_by_id(db: Session, config_id: int) -> AIClients | None:
+    """Gibt eine KI-Konfiguration anhand ihrer ID zurück. Gibt None zurück wenn nicht gefunden."""
     return db.get(AIClients, config_id)
 
 
@@ -93,6 +106,7 @@ def temporarily_disable(db: Session, config_id: int, minutes: int = 10) -> AICli
 
 
 def create(db: Session, data: AIClientsCreate) -> AIClients:
+    """Legt eine neue KI-Konfiguration an. Alle Felder aus AIClientsCreate werden übernommen."""
     obj = AIClients(**data.model_dump())
     db.add(obj)
     db.commit()
@@ -101,6 +115,10 @@ def create(db: Session, data: AIClientsCreate) -> AIClients:
 
 
 def update(db: Session, config_id: int, data: AIClientsUpdate) -> AIClients | None:
+    """
+    Aktualisiert alle Felder einer KI-Konfiguration.
+    Gibt None zurück wenn nicht gefunden.
+    """
     obj = db.get(AIClients, config_id)
     if obj is None:
         return None
@@ -112,6 +130,10 @@ def update(db: Session, config_id: int, data: AIClientsUpdate) -> AIClients | No
 
 
 def delete(db: Session, config_id: int) -> bool:
+    """
+    Löscht eine KI-Konfiguration dauerhaft.
+    Gibt False zurück wenn nicht gefunden.
+    """
     obj = db.get(AIClients, config_id)
     if obj is None:
         return False

@@ -233,8 +233,9 @@ def extract_invoice_data(
             response_data = json.loads(response.content)
             if endpoint_type == "lmstudio":
                 output_items = response_data.get("output") or []
+                # item.get("content", "") reicht nicht — content kann explizit null sein
                 raw_text = next(
-                    (item.get("content", "")
+                    (item.get("content") or ""
                      for item in output_items if item.get("type") in ("text", "message")),
                     "",
                 )
@@ -256,7 +257,7 @@ def extract_invoice_data(
                 raw_text = (
                     response_data.get("choices", [{}])[0]
                     .get("message", {})
-                    .get("content", "")
+                    .get("content") or ""
                 )
                 usage = response_data.get("usage") or {}
                 details = usage.get("completion_tokens_details") or {}
@@ -421,7 +422,7 @@ def detect_document_type(
             if endpoint_type == "lmstudio":
                 output_items = response_data.get("output") or []
                 raw_text = next(
-                    (item.get("content", "")
+                    (item.get("content") or ""
                      for item in output_items if item.get("type") in ("text", "message")),
                     "",
                 )
@@ -438,7 +439,7 @@ def detect_document_type(
                 raw_text = (
                     response_data.get("choices", [{}])[0]
                     .get("message", {})
-                    .get("content", "")
+                    .get("content") or ""
                 )
                 usage = response_data.get("usage") or {}
                 details = usage.get("completion_tokens_details") or {}

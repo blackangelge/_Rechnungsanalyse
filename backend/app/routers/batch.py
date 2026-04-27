@@ -1,8 +1,11 @@
 """
-Router für KI-Konfigurationen.
+Router für Worker-Batch-Verwaltung (Platzhalter).
 
-Endpunkte:
+Aktuell keine aktiven Endpunkte — zukünftig geplant für:
+  - Batch-weite KI-Analyse-Steuerung (alle pending-Dokumente eines Batches)
+  - Prioritätsverwaltung in der Worker-Queue
 
+Vorhandene Batch-Endpunkte befinden sich in routers/imports.py.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status

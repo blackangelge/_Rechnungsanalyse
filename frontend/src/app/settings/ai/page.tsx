@@ -1,3 +1,19 @@
+/**
+ * Seite: KI-Einstellungen (/settings/ai)
+ *
+ * CRUD-Verwaltung für KI-Konfigurationen (LM Studio, Ollama, OpenAI etc.).
+ * Mehrere Konfigurationen können gleichzeitig aktiv sein (Cluster-Betrieb).
+ *
+ * Features:
+ *   - Neue KI-Konfiguration anlegen / bearbeiten / löschen / kopieren
+ *   - Aktiv/Inaktiv umschalten (toggleActive — hebt auch temporäre Sperren auf)
+ *   - Temporäre Sperre manuell aufheben (clearTimeout)
+ *   - Farbcodierung: grün=aktiv, orange=temporär gesperrt, weiß=inaktiv
+ *
+ * Temporäre Sperren entstehen automatisch wenn der Worker 429/503-Fehler
+ * von einer KI erhält. Sie laufen nach 10 Minuten automatisch ab.
+ */
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -27,8 +43,10 @@ export default function AISettingsPage() {
   const [configs, setConfigs] = useState<AIConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // null = Liste anzeigen, undefined = neue KI anlegen, AIConfig = bearbeiten
   const [editTarget, setEditTarget] = useState<AIConfig | undefined | null>(null);
 
+  /** Alle KI-Konfigurationen vom Server laden. */
   async function load() {
     try {
       setError(null);
@@ -43,6 +61,7 @@ export default function AISettingsPage() {
 
   useEffect(() => { load(); }, []);
 
+  /** Löscht eine KI-Konfiguration nach Bestätigungs-Dialog. */
   async function handleDelete(config: AIConfig) {
     if (!confirm(`"${config.name}" wirklich löschen?`)) return;
     try {
@@ -53,6 +72,7 @@ export default function AISettingsPage() {
     }
   }
 
+  /** Schaltet aktiv/inaktiv um. Beim Aktivieren wird eine temporäre Sperre automatisch aufgehoben. */
   async function handleToggleActive(config: AIConfig) {
     try {
       await aiConfigsApi.toggleActive(config.id);
@@ -62,6 +82,7 @@ export default function AISettingsPage() {
     }
   }
 
+  /** Hebt eine temporäre Sperre (timeout_at) auf, ohne den aktiv-Status zu ändern. */
   async function handleClearTimeout(config: AIConfig) {
     try {
       await aiConfigsApi.clearTimeout(config.id);
@@ -71,6 +92,7 @@ export default function AISettingsPage() {
     }
   }
 
+  /** Erstellt eine Kopie einer KI-Konfiguration (inaktiv, Name "Kopie von ..."). */
   async function handleCopy(config: AIConfig) {
     try {
       await aiConfigsApi.create({

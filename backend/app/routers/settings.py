@@ -1,3 +1,22 @@
+"""
+Router für Einstellungen und Konfiguration.
+
+Endpunkte unter /api/settings:
+  GET  /api/settings/paths               — Import- und Speicherpfade anzeigen
+  GET  /api/settings/image-conversion    — Bildkonvertierungseinstellungen abrufen
+  PUT  /api/settings/image-conversion    — Bildkonvertierungseinstellungen aktualisieren
+  GET  /api/settings/system-prompts      — alle Systemprompts auflisten
+  POST /api/settings/system-prompts      — neuen Systemprompt anlegen
+  PUT  /api/settings/system-prompts/{id} — Systemprompt aktualisieren
+  POST /api/settings/system-prompts/{id}/set-default — als Standard-Extraktionsprompt setzen
+  DELETE /api/settings/system-prompts/{id} — Systemprompt löschen
+  GET  /api/settings/backup              — Einstellungen als JSON exportieren
+  POST /api/settings/restore             — Einstellungen aus JSON-Backup importieren
+
+Zusätzlich unter /api (doc_types_router):
+  GET  /api/document-types               — alle Dokumententypen auflisten (statisch)
+"""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -38,6 +57,7 @@ def list_document_types():
 
 @router.get("/paths")
 def get_paths():
+    """Gibt die konfigurierten Pfade (Import-Basisordner und Speicherpfad) zurück."""
     return {
         "import_base_path": settings.import_base_path,
         "storage_path": settings.storage_path,
@@ -46,11 +66,13 @@ def get_paths():
 
 @router.get("/image-conversion", response_model=ImageSettingsRead)
 def get_image_settings(db: Session = Depends(get_db)):
+    """Gibt die aktuellen Bildkonvertierungseinstellungen zurück (erstellt Singleton falls nicht vorhanden)."""
     return crud.image_settings.get_or_create(db)
 
 
 @router.put("/image-conversion", response_model=ImageSettingsRead)
 def update_image_settings(payload: ImageSettingsUpdate, db: Session = Depends(get_db)):
+    """Aktualisiert die Bildkonvertierungseinstellungen (DPI, Format, Qualität, Graustufen)."""
     return crud.image_settings.update(db, payload)
 
 
@@ -58,16 +80,25 @@ def update_image_settings(payload: ImageSettingsUpdate, db: Session = Depends(ge
 
 @router.get("/system-prompts", response_model=list[SystemPromptRead])
 def list_system_prompts(db: Session = Depends(get_db)):
+    """Gibt alle gespeicherten Systemprompts zurück, nach ID sortiert."""
     return crud.system_prompt.get_all(db)
 
 
 @router.post("/system-prompts", response_model=SystemPromptRead, status_code=201)
 def create_system_prompt(payload: SystemPromptCreate, db: Session = Depends(get_db)):
+    """
+    Legt einen neuen Systemprompt an.
+    Falls is_document_type_prompt=True: wird der bisherige Dokumententyp-Prompt entfernt.
+    """
     return crud.system_prompt.create(db, payload)
 
 
 @router.put("/system-prompts/{prompt_id}", response_model=SystemPromptRead)
 def update_system_prompt(prompt_id: int, payload: SystemPromptUpdate, db: Session = Depends(get_db)):
+    """
+    Aktualisiert einen bestehenden Systemprompt.
+    Falls is_document_type_prompt=True: wird der bisherige Dokumententyp-Prompt entfernt.
+    """
     obj = crud.system_prompt.update(db, prompt_id, payload)
     if obj is None:
         raise HTTPException(status_code=404, detail="Systemprompt nicht gefunden")
@@ -76,6 +107,7 @@ def update_system_prompt(prompt_id: int, payload: SystemPromptUpdate, db: Sessio
 
 @router.post("/system-prompts/{prompt_id}/set-default", response_model=SystemPromptRead)
 def set_default_system_prompt(prompt_id: int, db: Session = Depends(get_db)):
+    """Setzt einen Prompt als Standard-Extraktionsprompt (type=1)."""
     obj = crud.system_prompt.set_default(db, prompt_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Systemprompt nicht gefunden")
@@ -84,6 +116,7 @@ def set_default_system_prompt(prompt_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/system-prompts/{prompt_id}", status_code=204)
 def delete_system_prompt(prompt_id: int, db: Session = Depends(get_db)):
+    """Löscht einen Systemprompt dauerhaft. Gibt 404 zurück wenn nicht gefunden."""
     if not crud.system_prompt.delete(db, prompt_id):
         raise HTTPException(status_code=404, detail="Systemprompt nicht gefunden")
 

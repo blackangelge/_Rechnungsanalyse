@@ -1,3 +1,24 @@
+/**
+ * Formular für das Starten eines neuen Imports.
+ *
+ * Felder:
+ *   - Firmenname und Jahr (Pflichtfelder, bilden den Speicherordner-Namen)
+ *   - Unterordner (optional, Unterordner unter IMPORT_BASE_PATH)
+ *   - Kommentar (optional)
+ *
+ * Optionen:
+ *   - Quelldateien löschen (Checkbox, orangefarben): PDFs aus Import-Ordner
+ *     entfernen nach erfolgreichem Kopieren. Schließt Ordner-Sync aus.
+ *   - Ordner-Sync (Checkbox, teal): Periodisch auf neue PDFs prüfen.
+ *     Schließt Quelldateien-Löschen aus.
+ *   - Dokumente an KI senden (Checkbox, blau): KI-Analyse nach Import starten.
+ *     Nur aktiv wenn mindestens eine KI-Konfiguration und ein Extraktions-Prompt (type=1) vorhanden.
+ *     Zeigt Dropdown für KI-Konfiguration und Systemprompt.
+ *
+ * Zeigt Pfad-Vorschau (Quelle und Ziel) unterhalb des Unterordner-Felds.
+ * Nach erfolgreichem Start wird auf /imports/{id} weitergeleitet.
+ */
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -71,16 +92,19 @@ export default function ImportForm() {
     ? `${storagePath}/${company.trim()}_${year.trim()}/`
     : null;
 
+  /** Aktiviert "Quelldateien löschen" und deaktiviert gleichzeitig "Ordner-Sync" (beide sind inkompatibel). */
   function handleDeleteSourceFiles(checked: boolean) {
     setDeleteSourceFiles(checked);
     if (checked) setFolderSync(false);
   }
 
+  /** Aktiviert "Ordner-Sync" und deaktiviert gleichzeitig "Quelldateien löschen" (beide sind inkompatibel). */
   function handleFolderSync(checked: boolean) {
     setFolderSync(checked);
     if (checked) setDeleteSourceFiles(false);
   }
 
+  /** Sendet das Formular an POST /api/imports und leitet auf die Import-Detailseite weiter. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);

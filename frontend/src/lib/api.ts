@@ -4,6 +4,14 @@
  * Verwendet axios mit einer konfigurierbaren Basis-URL:
  * - Server-seitig (SSR/RSC): vollständige URL über NEXT_PUBLIC_API_URL
  * - Client-seitig (Browser): leere Basis → Next.js-Rewrite-Proxy übernimmt
+ *
+ * WICHTIG: Alle axios-Calls verwenden einen trailing Slash (z.B. /api/documents/).
+ * Der Next.js-Rewrite-Proxy entfernt diesen, das FastAPI-Backend empfängt die URL
+ * ohne Slash — das passt zu redirect_slashes=False in main.py.
+ *
+ * Array-Parameter (batch_ids, document_type_ids) werden ohne Klammern serialisiert:
+ *   batch_ids=1&batch_ids=2  (nicht: batch_ids[]=1&batch_ids[]=2)
+ * Das entspricht dem FastAPI Query(default=None)-Format mit list[int].
  */
 
 import axios from "axios";
@@ -222,16 +230,46 @@ export interface InvoiceExtraction {
   updated_at: string;
 }
 
+/**
+ * Ein einzelner KI-Analyse-Durchlauf.
+ * Jeder Aufruf von save_extraction() im Backend erzeugt einen neuen Eintrag —
+ * bestehende werden nie überschrieben. Dadurch ist die komplette Historie sichtbar.
+ */
+export interface TokenCountEntry {
+  id: number;
+  input_token_count: number;
+  output_token_count: number;
+  /** Reasoning-Token: nur bei Reasoning-Modellen > 0, sonst immer 0 */
+  reasoning_count: number;
+  /** Gesamtdauer des HTTP-Requests in Sekunden */
+  time_spent_seconds: number;
+  /** ISO-Zeitstempel des Durchlaufs — für chronologische Sortierung im KI-Modal */
+  created_at: string;
+}
+
 export interface DocumentDetail extends DocumentItem {
+  /** Vollständige Rechnungsextraktion — nur bei Eingangsrechnungen (document_type=1) */
   extraction: InvoiceExtraction | null;
+  /** Alle extrahierten Rechnungspositionen */
   order_positions: OrderPosition[];
-  /** Token-Statistiken der KI-Analyse */
+  /** Alle KI-Analyse-Durchläufe, chronologisch — je Eintrag = ein Aufruf */
+  token_counts: TokenCountEntry[];
+  /**
+   * Aggregierte Summen über alle token_counts-Einträge.
+   * Werden direkt aus DocumentDetail gelesen (nicht aus extraction),
+   * damit auch Nicht-Eingangsrechnungen Token-Stats haben.
+   */
   ki_input_tokens: number | null;
   ki_output_tokens: number | null;
   ki_reasoning_tokens: number | null;
   ki_total_duration: number | null;
 }
 
+/**
+ * Filter-Parameter für GET /api/documents/.
+ * Fehlende Felder werden ignoriert (keine Filterung auf diesem Kriterium).
+ * Arrays (batch_ids, document_type_ids) werden als mehrfache Query-Parameter gesendet.
+ */
 export interface DocumentFilter {
   company?: string;
   year?: number;

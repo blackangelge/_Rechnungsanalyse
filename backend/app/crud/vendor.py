@@ -1,3 +1,16 @@
+"""
+CRUD-Operationen für die vendor- und vendor_bank_accounts-Tabellen.
+
+Kernfunktion ist find_or_create(), die Lieferanten dedupliziert:
+  1. Suche nach IBAN (stärkster Identifier)
+  2. Suche nach VAT-ID
+  3. Suche nach Name (Fallback)
+
+Bestehende Felder werden nur ergänzt, nie überschrieben.
+
+Hinweis: Die übergebene Session wird nicht geschlossen — das ist Aufgabe des Aufrufers.
+"""
+
 from sqlalchemy.orm import Session
 
 from app.models.vendor import Vendor
@@ -5,10 +18,12 @@ from app.models.vendor_bank_account import VendorBankAccount
 
 
 def get_all(db: Session) -> list[Vendor]:
+    """Gibt alle Lieferanten zurück, nach ID sortiert."""
     return db.query(Vendor).order_by(Vendor.id).all()
 
 
 def get_by_id(db: Session, vendor_id: int) -> Vendor | None:
+    """Gibt einen Lieferanten anhand seiner ID zurück. Gibt None zurück wenn nicht gefunden."""
     return db.get(Vendor, vendor_id)
 
 
@@ -97,6 +112,10 @@ def find_or_create(
 
 
 def update(db: Session, vendor_id: int, data: dict) -> Vendor | None:
+    """
+    Aktualisiert beliebige Felder eines Lieferanten anhand eines dicts.
+    Unbekannte Keys werden ignoriert (hasattr-Check). Gibt None zurück wenn nicht gefunden.
+    """
     obj = db.get(Vendor, vendor_id)
     if obj is None:
         return None
@@ -109,6 +128,10 @@ def update(db: Session, vendor_id: int, data: dict) -> Vendor | None:
 
 
 def delete(db: Session, vendor_id: int) -> bool:
+    """
+    Löscht einen Lieferanten dauerhaft (inkl. aller Bankkonten über CASCADE).
+    Gibt False zurück wenn nicht gefunden.
+    """
     obj = db.get(Vendor, vendor_id)
     if obj is None:
         return False

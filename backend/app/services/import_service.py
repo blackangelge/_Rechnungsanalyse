@@ -1,3 +1,26 @@
+"""
+Import-Service: Orchestriert den PDF-Import-Prozess.
+
+Ablauf für einen Import-Batch:
+  1. Batch-Status → 'running' setzen (DB)
+  2. Alle .pdf/.PDF-Dateien im Import-Ordner ermitteln (Filesystem)
+  3. Pro Datei parallel (Semaphore, max 4 gleichzeitig):
+     a. DB-Eintrag anlegen (documents, status=pending)
+     b. PDF in den Storage-Ordner kopieren ({id}.pdf)
+     c. DB-Eintrag aktualisieren (stored_filename, status=done)
+  4. Batch-Status → 'done' setzen (DB)
+
+Parallelität:
+  - Datei-I/O läuft im dedizierten _IMPORT_IO_EXECUTOR (ThreadPoolExecutor)
+  - DB-Operationen laufen via asyncio.to_thread (Standard-Pool)
+  - Semaphore begrenzt gleichzeitige Kopier-Operationen auf 4 (NAS-verträglich)
+  - KEINE Seitenanzahl beim Import — wird erst bei der KI-Analyse gesetzt
+
+Sicherheit:
+  - validate_import_path() prüft dass der Pfad unter IMPORT_BASE_PATH liegt
+  - Quell-PDFs werden NUR gelöscht wenn ein stored_filename in der DB existiert
+"""
+
 import asyncio
 import logging
 import os
@@ -11,6 +34,8 @@ from app.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+# Dedizierter Thread-Pool für Datei-I/O (PDF-Kopieren, Verzeichnis-Operationen).
+# Größerer Pool als der Standard-Asyncio-Pool, da NAS-I/O viele Threads blockieren kann.
 _IMPORT_IO_EXECUTOR = ThreadPoolExecutor(
     max_workers=min(32, (os.cpu_count() or 4) * 4),
     thread_name_prefix="import_io",
@@ -18,6 +43,7 @@ _IMPORT_IO_EXECUTOR = ThreadPoolExecutor(
 
 
 async def _run_import_io(func, *args):
+    """Führt eine blockierende Filesystem-Funktion im dedizierten Import-I/O-Pool aus."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_IMPORT_IO_EXECUTOR, func, *args)
 
@@ -25,6 +51,11 @@ async def _run_import_io(func, *args):
 # ─── Pfad-Hilfsfunktionen ────────────────────────────────────────────────────
 
 def validate_import_path(folder_path: str) -> Path:
+    """
+    Prüft dass folder_path unter IMPORT_BASE_PATH liegt (Sicherheitscheck:
+    verhindert Path-Traversal-Angriffe). Legt den Ordner an falls er noch
+    nicht existiert. Gibt den aufgelösten Path zurück.
+    """
     base = Path(settings.import_base_path).resolve()
     target = Path(folder_path).resolve()
     try:
@@ -38,6 +69,10 @@ def validate_import_path(folder_path: str) -> Path:
 
 
 def parse_folder_name(folder_name: str) -> tuple[str, int]:
+    """
+    Parst einen Ordnernamen im Format 'FirmaName_YYYY' in (firma, jahr).
+    Wirft ValueError wenn das Format nicht passt.
+    """
     import re
     match = re.match(r"^(.+)_(\d{4})$", folder_name)
     if not match:
@@ -46,6 +81,10 @@ def parse_folder_name(folder_name: str) -> tuple[str, int]:
 
 
 def list_pdf_files(folder_path: Path) -> list[Path]:
+    """
+    Gibt alle PDF-Dateien (*.pdf und *.PDF) im Ordner zurück — alphabetisch sortiert.
+    Sucht nicht in Unterordnern (nur top-level).
+    """
     all_files = sorted(
         set(folder_path.glob("*.pdf")) | set(folder_path.glob("*.PDF")),
         key=lambda p: p.name.lower(),
@@ -55,8 +94,14 @@ def list_pdf_files(folder_path: Path) -> list[Path]:
 
 
 # ─── Sync DB-Hilfsfunktionen (laufen via asyncio.to_thread) ─────────────────
+# Alle _db_* Funktionen öffnen ihre eigene Session und schließen sie im finally-Block.
+# Das vermeidet Sessions die zu lange offen bleiben und den Connection-Pool erschöpfen.
 
 def _db_batch_start(batch_id: int) -> dict | None:
+    """
+    Setzt Batch-Status → 'running' und gibt Metadaten für den Import zurück.
+    Gibt None zurück wenn der Batch nicht gefunden wurde.
+    """
     db = SessionLocal()
     try:
         batch = crud.import_batch.update_status(db, batch_id, "running")
@@ -74,6 +119,7 @@ def _db_batch_start(batch_id: int) -> dict | None:
 
 
 def _db_batch_finish(batch_id: int, processed: int, error_count: int, total: int) -> None:
+    """Setzt Batch-Status → 'done' und loggt eine Zusammenfassung."""
     db = SessionLocal()
     try:
         ok = processed - error_count
@@ -89,6 +135,7 @@ def _db_batch_finish(batch_id: int, processed: int, error_count: int, total: int
 
 
 def _db_batch_error(batch_id: int, message: str) -> None:
+    """Setzt Batch-Status → 'error' bei einem fatalen Import-Fehler."""
     db = SessionLocal()
     try:
         logger.error("Import-Fehler Batch #%d: %s", batch_id, message)
@@ -100,6 +147,10 @@ def _db_batch_error(batch_id: int, message: str) -> None:
 
 
 def _db_doc_create(batch_id: int, filename: str, file_size: int) -> int | None:
+    """
+    Legt einen neuen Document-Eintrag in der DB an (status=pending).
+    Gibt die neue Dokument-ID zurück oder None bei einem Fehler.
+    """
     db = SessionLocal()
     try:
         doc = crud.document.create(
@@ -117,6 +168,10 @@ def _db_doc_create(batch_id: int, filename: str, file_size: int) -> int | None:
 
 
 def _db_doc_finish(doc_id: int, stored_filename: str, page_count: int) -> None:
+    """
+    Aktualisiert stored_filename und setzt status → 'done' nach erfolgreichem Kopieren.
+    page_count ist beim Import immer 0 — wird erst bei der KI-Analyse gesetzt.
+    """
     db = SessionLocal()
     try:
         crud.document.update_after_copy(db, doc_id, stored_filename, page_count)
@@ -132,6 +187,7 @@ def _db_doc_finish(doc_id: int, stored_filename: str, page_count: int) -> None:
 
 
 def _db_doc_error(doc_id: int, batch_id: int, error_msg: str, filename: str) -> None:
+    """Setzt Dokument-Status → 'error' nach einem Kopier- oder DB-Fehler."""
     db = SessionLocal()
     try:
         logger.error("Import-Fehler '%s' (#%d): %s", filename, doc_id, error_msg)
@@ -145,6 +201,13 @@ def _db_doc_error(doc_id: int, batch_id: int, error_msg: str, filename: str) -> 
 # ─── Haupt-Import-Funktion ────────────────────────────────────────────────────
 
 async def run_import(batch_id: int) -> None:
+    """
+    Führt den vollständigen Import-Prozess für einen Batch durch.
+
+    Liest Metadaten aus der DB, ermittelt alle PDFs im Import-Ordner
+    und kopiert sie parallel (max. 4 gleichzeitig) in den Storage-Ordner.
+    Status-Updates laufen asynchron via asyncio.to_thread.
+    """
     logger.info("Import-Task gestartet für Batch #%d", batch_id)
 
     batch_info = await asyncio.to_thread(_db_batch_start, batch_id)
@@ -207,6 +270,15 @@ async def _process_single_document(
     pdf_path: Path,
     storage_dir: Path,
 ) -> bool:
+    """
+    Verarbeitet ein einzelnes PDF:
+      1. DB-Eintrag anlegen (original_filename, file_size, status=pending)
+      2. PDF nach storage_dir/{id}.pdf kopieren
+      3. DB aktualisieren (stored_filename, status=done)
+
+    Gibt True zurück bei Erfolg, False bei Fehler.
+    page_count wird als 0 gespeichert — die KI-Analyse setzt den echten Wert später.
+    """
     try:
         file_size = await _run_import_io(lambda: pdf_path.stat().st_size)
     except OSError:

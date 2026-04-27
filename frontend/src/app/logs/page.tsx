@@ -1,3 +1,20 @@
+/**
+ * Seite: KI-Statistiken & Worker-Status (/logs)
+ *
+ * Zeigt zwei Bereiche:
+ *
+ * 1. KI-Token-Statistiken (einmalig geladen, manuell aktualisierbar):
+ *    - Gesamtanzahl KI-Anfragen, Summe Input/Output/Reasoning-Tokens
+ *    - Gesamtdauer aller Analysen
+ *    - Quelle: GET /api/logs/ki-stats (aggregiert über documents_token_counts)
+ *
+ * 2. Worker-Pool-Status (automatisch alle 30 s aktualisiert):
+ *    - Aktive Worker / max. Kapazität
+ *    - Warteschlange (pending), laufende und fehlgeschlagene Tasks
+ *    - KI-Konfigurationen mit Verfügbarkeitsstatus (aktiv/temp. gesperrt/inaktiv)
+ *    - Quelle: GET /api/logs/worker-stats
+ */
+
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";

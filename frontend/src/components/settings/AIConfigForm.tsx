@@ -1,11 +1,31 @@
+/**
+ * Formular zum Anlegen und Bearbeiten einer KI-Konfiguration.
+ *
+ * Wird sowohl für "Neue KI anlegen" (initialData=undefined) als auch
+ * für "KI bearbeiten" (initialData=AIConfig) verwendet.
+ *
+ * Nach erfolgreichem Speichern wird onSaved() aufgerufen (→ Liste neu laden + Form schließen).
+ * onCancel() schließt das Formular ohne Speichern.
+ *
+ * Felder:
+ *   - Name, IP-Adresse, Port, API-Schlüssel, Modellname
+ *   - Endpoint-Typ (openai|lmstudio), Primär-Typ (Typ-Erkennung|Rechnungsanalyse)
+ *   - max_tokens, temperature, reasoning, chat_response
+ *   - parallel_request: max. parallele Anfragen an diese KI
+ *   - active: ob die KI sofort für Analysen verwendet werden soll
+ */
+
 "use client";
 
 import { useState } from "react";
 import { AIConfig, AIConfigCreate, aiConfigsApi, extractApiError, EndpointType, ReasoningLevel, PrimaryType } from "@/lib/api";
 
 interface Props {
+  /** Vorhandene KI-Konfiguration zum Bearbeiten (undefined = neue KI anlegen) */
   initialData?: AIConfig;
+  /** Callback nach erfolgreichem Speichern */
   onSaved: () => void;
+  /** Callback zum Abbrechen ohne Speichern */
   onCancel: () => void;
 }
 

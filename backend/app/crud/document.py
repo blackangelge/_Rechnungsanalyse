@@ -1,3 +1,19 @@
+"""
+CRUD-Operationen für die documents-Tabelle.
+
+Enthält alle Datenbankoperationen für Dokumente:
+- Anlegen beim Import (create)
+- Status-Updates (update_status, update_after_copy)
+- Soft-Delete / Restore
+- Kommentar und Dokumententyp aktualisieren
+- Gefilterte Listen-Abfrage mit joins (get_all_filtered)
+- Detail-Abfrage mit allen Relationen (get_by_id_with_details)
+- Speichern von KI-Extraktionsergebnissen (save_extraction)
+
+Alle Funktionen erwarten eine bereits geöffnete Session und schließen sie NICHT —
+das Lifecycle-Management liegt beim Aufrufer.
+"""
+
 import logging
 from decimal import Decimal
 
@@ -18,6 +34,7 @@ def create(
     original_filename: str,
     file_size_bytes: int,
 ) -> Document:
+    """Legt einen neuen Dokument-Eintrag an (status=pending). Wird beim Import aufgerufen."""
     obj = Document(
         batch_id=batch_id,
         original_filename=original_filename,
@@ -36,6 +53,10 @@ def update_after_copy(
     stored_filename: str,
     page_count: int,
 ) -> Document | None:
+    """
+    Speichert stored_filename und setzt status → 'done' nach erfolgreichem Kopieren.
+    page_count ist beim Import 0 — wird erst bei der KI-Analyse gesetzt.
+    """
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
@@ -53,6 +74,10 @@ def update_status(
     status: str,
     error_message: str | None = None,
 ) -> Document | None:
+    """
+    Setzt den Dokument-Status (pending/processing/done/error).
+    error_message wird aktuell nur geloggt, nicht persistiert.
+    """
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
@@ -63,6 +88,7 @@ def update_status(
 
 
 def soft_delete(db: Session, doc_id: int) -> Document | None:
+    """Markiert das Dokument als gelöscht (soft_deleted=True). Keine Daten werden entfernt."""
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
@@ -73,6 +99,7 @@ def soft_delete(db: Session, doc_id: int) -> Document | None:
 
 
 def restore(db: Session, doc_id: int) -> Document | None:
+    """Hebt den Soft-Delete wieder auf (soft_deleted=False)."""
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
@@ -83,6 +110,7 @@ def restore(db: Session, doc_id: int) -> Document | None:
 
 
 def update_comment(db: Session, doc_id: int, comment: str | None) -> Document | None:
+    """Speichert einen Freitext-Kommentar. None löscht den bestehenden Kommentar."""
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
@@ -93,6 +121,7 @@ def update_comment(db: Session, doc_id: int, comment: str | None) -> Document | 
 
 
 def update_document_type(db: Session, doc_id: int, type_id: int | None) -> Document | None:
+    """Setzt den Dokumententyp (Integer-ID, z.B. 1=Eingangsrechnung). None → 0 (Unbekannt)."""
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
@@ -103,6 +132,13 @@ def update_document_type(db: Session, doc_id: int, type_id: int | None) -> Docum
 
 
 def get_by_id_with_details(db: Session, doc_id: int) -> Document | None:
+    """
+    Lädt ein Dokument mit allen Relationen in einer einzigen Query:
+    - batch (für Firmenname, Jahr)
+    - extraction (InvoiceExtraction)
+    - order_positions (alle Rechnungspositionen)
+    - token_counts (alle KI-Durchlauf-Statistiken)
+    """
     return (
         db.query(Document)
         .options(
@@ -132,6 +168,16 @@ def get_all_filtered(
     doc_id: int | None = None,
     document_type_ids: list[int] | None = None,
 ) -> list[Document]:
+    """
+    Gibt eine gefilterte und sortierte (ID desc) Dokumentliste zurück.
+
+    Joins werden nur bei Bedarf durchgeführt (performance-optimiert):
+    - InvoiceExtraction: nur wenn total_min/max, has_extraction oder supplier_name gesetzt
+    - ImportBatch: nur wenn company oder year gesetzt
+
+    Für die Listenansicht werden nur batch + extraction geladen (kein joinedload von
+    order_positions oder token_counts — das käme nur bei get_by_id_with_details).
+    """
     query = db.query(Document).options(
         joinedload(Document.batch),
         joinedload(Document.extraction),
@@ -199,7 +245,8 @@ def save_extraction(
     """Speichert extrahierte Rechnungsdaten. KI-Stats kommen in DocumentTokenCount."""
     db.query(InvoiceExtraction).filter(InvoiceExtraction.document_id == doc_id).delete()
     db.query(OrderPosition).filter(OrderPosition.document_id == doc_id).delete()
-    db.query(DocumentTokenCount).filter(DocumentTokenCount.document_id == doc_id).delete()
+    # DocumentTokenCount wird NICHT gelöscht — jeder Analyse-Durchlauf bekommt
+    # einen eigenen Eintrag, damit die Historie aller Durchläufe erhalten bleibt.
 
     # Mapping alter Feldnamen → neue InvoiceExtraction-Felder
     _FIELD_MAP = {
@@ -270,5 +317,8 @@ def save_extraction(
         except Exception:
             db.rollback()
 
-    db.refresh(extraction)
+    try:
+        db.refresh(extraction)
+    except Exception:
+        pass  # Refresh nach ki_stats-Rollback kann fehlschlagen; Extraktion wurde bereits committed
     return extraction

@@ -102,12 +102,46 @@ def _db_get_analyze_setup(
         db.close()
 
 
-def _db_set_processing(doc_ids: list[int]) -> None:
-    """Setzt alle angegebenen Dokumente auf Status 'processing'."""
+def _db_enqueue_for_analysis(doc_ids: list[int]) -> int:
+    """
+    Reiht Dokumente zur KI-Analyse in die Worker-Queue ein.
+    Verhindert Duplikate: Dokumente mit bereits laufendem/wartendem Task werden übersprungen.
+    Gibt die Anzahl neu eingereihter Dokumente zurück.
+    """
+    import uuid
+    from sqlalchemy import text as _text
+    from app.models.workflow_task import WorkflowTask
     db = SessionLocal()
+    count = 0
     try:
         for doc_id in doc_ids:
-            crud.document.update_status(db, doc_id, "processing")
+            existing = db.execute(
+                _text(
+                    "SELECT id FROM workflow_tasks "
+                    "WHERE payload->>'document_id' = :doc_id "
+                    "AND status IN ('pending', 'in_progress') LIMIT 1"
+                ),
+                {"doc_id": str(doc_id)},
+            ).first()
+            if existing:
+                logger.debug("Dokument #%d bereits in Worker-Queue — übersprungen", doc_id)
+                continue
+            task = WorkflowTask(
+                workflow_id=str(uuid.uuid4()),
+                payload={"kind": "process_document", "document_id": doc_id},
+                status="pending",
+            )
+            db.add(task)
+            count += 1
+        db.commit()
+        return count
+    except Exception as exc:
+        logger.error("Fehler beim Einreihen der Analyse-Tasks: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0
     finally:
         db.close()
 
@@ -184,13 +218,14 @@ async def _import_then_analyze(
     delete_source_files: bool = False,
 ) -> None:
     """
-    Führt zuerst den Import durch, danach startet automatisch die KI-Analyse
-    für alle erfolgreich importierten Dokumente.
+    Führt zuerst den Import durch, reiht danach alle importierten Dokumente
+    zur KI-Analyse in die Worker-Queue ein.
+
     Alle DB- und Filesystem-Operationen laufen in Thread-Pools (nicht-blockierend).
+    Die Analyse wird vom WorkerPool übernommen — keine direkte _run_analysis-Ausführung.
+    Das verhindert Race-Conditions zwischen Import-Pfad und Worker-Queue.
     """
     try:
-        from app.routers.documents import _run_analysis
-
         # 1. Import abwarten
         await run_import(batch_id)
 
@@ -198,7 +233,7 @@ async def _import_then_analyze(
         if delete_source_files:
             await _delete_source_files(batch_id, import_folder)
 
-        # 3. KI-Konfiguration + Systemprompt + Dokument-IDs auflösen (im Thread)
+        # 3. Dokument-IDs für diesen Batch ermitteln (im Thread)
         setup = await asyncio.to_thread(_db_get_analyze_setup, batch_id, ai_config_id, system_prompt_id)
         if setup is None:
             return
@@ -208,11 +243,13 @@ async def _import_then_analyze(
             logger.info("Batch #%d: Keine Dokumente für KI-Analyse", batch_id)
             return
 
-        # 4. Dokumente auf "processing" setzen (im Thread)
-        await asyncio.to_thread(_db_set_processing, doc_ids)
-
-        logger.info("Batch #%d: KI-Analyse für %d Dokument(e) gestartet", batch_id, len(doc_ids))
-        await _run_analysis(doc_ids, setup["ai_config_id"], setup["system_prompt_text"])
+        # 4. Dokumente in Worker-Queue einreihen (statt direkter Analyse)
+        #    Verhindert Duplikate falls Dokumente bereits in der Queue sind.
+        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, doc_ids)
+        logger.info(
+            "Batch #%d: %d/%d Dokument(e) zur KI-Analyse in Worker-Queue eingereiht",
+            batch_id, enqueued, len(doc_ids),
+        )
 
     except Exception as exc:
         logger.error(

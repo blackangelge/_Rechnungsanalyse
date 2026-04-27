@@ -1,5 +1,26 @@
 "use client";
 
+/**
+ * Belege-Seite — Hauptansicht für alle importierten Dokumente.
+ *
+ * Funktionen:
+ * - Tabellarische Übersicht aller Dokumente mit Paginierung (100 pro Seite)
+ * - Mehrstufige Filter: Firma, Jahr, Status, Dokumententyp, Import-Batch,
+ *   Betrag von/bis, Seiten von/bis, Lieferant, Beleg-ID
+ * - Auswahl per Checkbox → Massenaktionen (KI-Analyse starten)
+ * - Soft-Delete / Wiederherstellen pro Dokument
+ * - PDF-Vorschau als Split-View (rechte Hälfte, fixiert)
+ * - KI-Modal: zeigt alle Analyse-Durchläufe mit Token-Statistiken + Rohantwort
+ * - Infos-Ansicht: 50/50-Split mit formatierter Rechnungsdetail-Ansicht + PDF
+ * - Auto-Refresh alle 5 Sekunden wenn Dokumente im Status 'processing' vorhanden
+ *
+ * KI-Analyse-Ablauf:
+ *   1. Dokumente auswählen (Checkboxen)
+ *   2. „KI-Analyse starten" → POST /api/documents/enqueue
+ *   3. Backend-Worker verarbeiten die Dokumente sequenziell
+ *   4. Auto-Refresh zeigt den aktuellen Status
+ */
+
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -17,10 +38,12 @@ import {
 
 // ─── Konstante ───────────────────────────────────────────────────────────────
 
+/** Maximale Anzahl Dokumente pro Seite in der Tabelle. */
 const PAGE_SIZE = 100;
 
 // ─── Hilfsfunktionen ────────────────────────────────────────────────────────
 
+/** Formatiert einen Betrag als deutsches Währungsformat (1.234,56 €). */
 function formatCurrency(amount: number | null | undefined): string {
   if (amount == null) return "–";
   return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(amount);
@@ -52,6 +75,10 @@ function KiBadge({ hasExtraction }: { hasExtraction: boolean }) {
 }
 
 // ─── Batch-Multiselect ───────────────────────────────────────────────────────
+/**
+ * Dropdown-Checkbox-Komponente zur Mehrfachauswahl von Import-Batches.
+ * Schließt sich automatisch bei Klick außerhalb (mousedown-Listener).
+ */
 
 function BatchMultiSelect({
   batches,
@@ -118,6 +145,11 @@ function BatchMultiSelect({
 }
 
 // ─── DocType-Multiselect ─────────────────────────────────────────────────────
+/**
+ * Dropdown-Checkbox-Komponente zur Mehrfachauswahl von Dokumententypen.
+ * Identisch in der Struktur zu BatchMultiSelect, aber für DOCUMENT_TYPES.
+ * Filtert über document_type_ids-Query-Parameter (Integer-IDs, nicht Namen).
+ */
 
 function DocTypeMultiSelect({
   docTypes,
@@ -915,45 +947,112 @@ export default function BelegePage() {
               )}
               {!viewLoading && viewedDoc && (
                 <>
-                  {/* Token-Statistiken */}
-                  {(viewedDoc.ki_input_tokens != null || viewedDoc.ki_output_tokens != null || viewedDoc.ki_total_duration != null) && (
-                    <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600">
-                      {viewedDoc.ki_input_tokens != null && (
-                        <span>
-                          <span className="font-medium text-gray-500">Input-Tokens:</span>{" "}
-                          <span className="font-semibold text-gray-800 tabular-nums">
-                            {viewedDoc.ki_input_tokens.toLocaleString("de-DE")}
-                          </span>
-                        </span>
-                      )}
-                      {viewedDoc.ki_output_tokens != null && (
-                        <span>
-                          <span className="font-medium text-gray-500">Output-Tokens:</span>{" "}
-                          <span className="font-semibold text-gray-800 tabular-nums">
-                            {viewedDoc.ki_output_tokens.toLocaleString("de-DE")}
-                          </span>
-                        </span>
-                      )}
-                      {viewedDoc.ki_reasoning_tokens != null && viewedDoc.ki_reasoning_tokens > 0 && (
-                        <span>
-                          <span className="font-medium text-gray-500">Reasoning-Tokens:</span>{" "}
-                          <span className="font-semibold text-gray-800 tabular-nums">
-                            {viewedDoc.ki_reasoning_tokens.toLocaleString("de-DE")}
-                          </span>
-                        </span>
-                      )}
-                      {viewedDoc.ki_total_duration != null && (
-                        <span>
-                          <span className="font-medium text-gray-500">Dauer:</span>{" "}
-                          <span className="font-semibold text-gray-800 tabular-nums">
-                            {viewedDoc.ki_total_duration < 60
-                              ? `${viewedDoc.ki_total_duration.toFixed(1).replace(".", ",")} s`
-                              : `${Math.floor(viewedDoc.ki_total_duration / 60)}:${String(Math.round(viewedDoc.ki_total_duration % 60)).padStart(2, "0")} min`}
-                          </span>
-                        </span>
+                  {/* ── KI-Durchläufe ──────────────────────────────────── */}
+                  {viewedDoc.token_counts && viewedDoc.token_counts.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                        KI-Durchläufe ({viewedDoc.token_counts.length})
+                      </p>
+
+                      {/* Ein Block pro Durchlauf */}
+                      {viewedDoc.token_counts.map((run, idx) => (
+                        <div key={run.id}
+                             className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600">
+                          <p className="mb-1.5 font-semibold text-gray-700">
+                            Durchlauf {idx + 1}
+                            <span className="ml-2 font-normal text-gray-400">
+                              {new Date(run.created_at).toLocaleString("de-DE", {
+                                day: "2-digit", month: "2-digit", year: "numeric",
+                                hour: "2-digit", minute: "2-digit", second: "2-digit",
+                              })}
+                            </span>
+                          </p>
+                          <div className="flex flex-wrap gap-3">
+                            {run.input_token_count > 0 && (
+                              <span>
+                                <span className="font-medium text-gray-500">Input:</span>{" "}
+                                <span className="font-semibold text-gray-800 tabular-nums">
+                                  {run.input_token_count.toLocaleString("de-DE")}
+                                </span>
+                              </span>
+                            )}
+                            {run.output_token_count > 0 && (
+                              <span>
+                                <span className="font-medium text-gray-500">Output:</span>{" "}
+                                <span className="font-semibold text-gray-800 tabular-nums">
+                                  {run.output_token_count.toLocaleString("de-DE")}
+                                </span>
+                              </span>
+                            )}
+                            {run.reasoning_count > 0 && (
+                              <span>
+                                <span className="font-medium text-gray-500">Reasoning:</span>{" "}
+                                <span className="font-semibold text-gray-800 tabular-nums">
+                                  {run.reasoning_count.toLocaleString("de-DE")}
+                                </span>
+                              </span>
+                            )}
+                            {run.time_spent_seconds > 0 && (
+                              <span>
+                                <span className="font-medium text-gray-500">Dauer:</span>{" "}
+                                <span className="font-semibold text-gray-800 tabular-nums">
+                                  {run.time_spent_seconds < 60
+                                    ? `${run.time_spent_seconds.toFixed(1).replace(".", ",")} s`
+                                    : `${Math.floor(run.time_spent_seconds / 60)}:${String(Math.round(run.time_spent_seconds % 60)).padStart(2, "0")} min`}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Gesamt-Zeile — nur bei mehr als einem Durchlauf */}
+                      {viewedDoc.token_counts.length > 1 && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-700">
+                          <p className="mb-1.5 font-semibold text-blue-800">
+                            Gesamt ({viewedDoc.token_counts.length} Durchläufe)
+                          </p>
+                          <div className="flex flex-wrap gap-3">
+                            {viewedDoc.ki_input_tokens != null && (
+                              <span>
+                                <span className="font-medium">Input:</span>{" "}
+                                <span className="font-bold tabular-nums">
+                                  {viewedDoc.ki_input_tokens.toLocaleString("de-DE")}
+                                </span>
+                              </span>
+                            )}
+                            {viewedDoc.ki_output_tokens != null && (
+                              <span>
+                                <span className="font-medium">Output:</span>{" "}
+                                <span className="font-bold tabular-nums">
+                                  {viewedDoc.ki_output_tokens.toLocaleString("de-DE")}
+                                </span>
+                              </span>
+                            )}
+                            {viewedDoc.ki_reasoning_tokens != null && viewedDoc.ki_reasoning_tokens > 0 && (
+                              <span>
+                                <span className="font-medium">Reasoning:</span>{" "}
+                                <span className="font-bold tabular-nums">
+                                  {viewedDoc.ki_reasoning_tokens.toLocaleString("de-DE")}
+                                </span>
+                              </span>
+                            )}
+                            {viewedDoc.ki_total_duration != null && (
+                              <span>
+                                <span className="font-medium">Dauer gesamt:</span>{" "}
+                                <span className="font-bold tabular-nums">
+                                  {viewedDoc.ki_total_duration < 60
+                                    ? `${viewedDoc.ki_total_duration.toFixed(1).replace(".", ",")} s`
+                                    : `${Math.floor(viewedDoc.ki_total_duration / 60)}:${String(Math.round(viewedDoc.ki_total_duration % 60)).padStart(2, "0")} min`}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
+
                   <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? null} />
                 </>
               )}
@@ -969,6 +1068,11 @@ export default function BelegePage() {
 }
 
 // ─── KI-Rohantwort-Ansicht ────────────────────────────────────────────────────
+/**
+ * Zeigt die JSON-Rohantwort der KI formatiert an.
+ * Versucht das JSON zu parsen und mit 2-Spaces-Einrückung darzustellen.
+ * Fällt bei Parse-Fehlern auf den unformatierten Original-String zurück.
+ */
 
 function KiRawView({ rawResponse }: { rawResponse: string | null }) {
   let formatted = rawResponse ?? "";
@@ -994,6 +1098,17 @@ function KiRawView({ rawResponse }: { rawResponse: string | null }) {
 }
 
 // ─── Formatierte Infos-Ansicht ────────────────────────────────────────────────
+/**
+ * Zeigt die extrahierten Rechnungsdaten strukturiert an.
+ *
+ * Liest bevorzugt aus dem raw_response (neuem verschachtelten JSON-Format):
+ *   lieferant, rechnungsdaten, zahlungsinformationen, positionen
+ *
+ * Fällt auf die flachen extraction-Felder zurück falls kein raw_response vorhanden
+ * oder das alte Format verwendet wird (Rückwärtskompatibilität).
+ *
+ * fmt(): Wandelt Zahlen und deutsche Dezimalstring-Formate in €-Beträge um.
+ */
 
 function InfosView({ doc }: { doc: DocumentDetail }) {
   const ext = doc.extraction;

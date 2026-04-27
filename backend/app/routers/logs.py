@@ -1,3 +1,11 @@
+"""
+Router für Log- und Statistik-Endpunkte.
+
+Endpunkte:
+  GET /api/logs/ki-stats      — aggregierte KI-Tokenstatistiken über alle Analysen
+  GET /api/logs/worker-stats  — aktueller Worker-Pool-Status und Queue-Länge
+"""
+
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, Request
