@@ -61,11 +61,10 @@ def get_worker_stats(request: Request, db: Session = Depends(get_db)):
     from app import crud
     from app.models.ai_clients import AIClients
 
-    # Worker-Pool-Infos aus app.state
-    pool = getattr(request.app.state, "worker_pool", None)
-    worker_count = pool.worker_count if pool else 0
-    # max_capacity wurde durch worker_count ersetzt (beide identisch seit Refactor)
-    max_capacity = worker_count
+    # Dispatcher-Infos aus app.state
+    dispatcher = getattr(request.app.state, "dispatcher", None)
+    worker_count = len(dispatcher.workers) if dispatcher else 0
+    max_capacity = dispatcher.pool.total_capacity() if dispatcher else 0
 
     # Warteschlange
     queue_length = db.execute(

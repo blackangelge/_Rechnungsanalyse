@@ -163,6 +163,18 @@ async def _run_ki_io(func, *args):
     return await loop.run_in_executor(_KI_IO_EXECUTOR, func, *args)
 
 
+def _db_set_processing(doc_id: int) -> None:
+    """Setzt den Dokument-Status auf 'processing' — öffnet eine eigene Session."""
+    try:
+        _db = SessionLocal()
+        try:
+            crud.document.update_status(_db, doc_id, "processing")
+        finally:
+            _db.close()
+    except Exception as exc:
+        logger.error("Konnte Status 'processing' für #%d nicht setzen: %s", doc_id, exc)
+
+
 def _set_error(doc_id: int, message: str) -> None:
     """
     Setzt den Status eines Dokuments auf 'error' — öffnet dafür eine EIGENE Session.
@@ -292,6 +304,16 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
             skipped += 1
             logger.debug("Dokument #%d: bereits in Warteschlange — übersprungen", doc_id)
             continue
+
+        # ── Schritt 1b: Dokument-Status zurücksetzen falls es auf "processing" hängt ──
+        # Nach einem Container-Neustart können Dokumente auf "processing" stecken, obwohl
+        # kein aktiver Task mehr existiert. Beim Einreihen eines neuen Tasks zurücksetzen,
+        # damit das Dokument korrekt in der Tabelle erscheint.
+        from app.models.document import Document as _DocCheck
+        _doc = db.get(_DocCheck, doc_id)
+        if _doc and _doc.status == "processing":
+            crud.document.update_status(db, doc_id, "pending")
+            logger.info("Dokument #%d: Status 'processing' → 'pending' zurückgesetzt", doc_id)
 
         # ── Schritt 2: Neuen WorkflowTask anlegen ────────────────────────────
         # workflow_id: UUID zur Gruppierung zusammengehöriger Tasks
@@ -1162,13 +1184,13 @@ async def _analyze_single_inner(
         )
     except Exception as exc:
         logger.error("Fehler beim Rendern von #%d: %s", doc_id, exc)
-        _set_error(doc_id, f"PDF-Rendering-Fehler: {exc}")
+        await asyncio.to_thread(_set_error, doc_id, f"PDF-Rendering-Fehler: {exc}")
         return "ok"
 
     if not images_b64:
         # Leere Liste = pypdfium2 konnte das PDF nicht lesen
         # (z.B. verschlüsselt, korrupt oder kein gültiges PDF)
-        _set_error(doc_id, "PDF konnte nicht gerendert werden")
+        await asyncio.to_thread(_set_error, doc_id, "PDF konnte nicht gerendert werden")
         return "ok"
 
     # Seitenanzahl aus den gerenderten Bildern ableiten (ein Bild = eine Seite).
@@ -1261,9 +1283,9 @@ async def _analyze_single_inner(
         # Worker-Versuch erneut analysiert wird (kein verlorenes Dokument).
         if _is_ai_conn_error(_type_raw):
             logger.warning(
-                "Dokument #%d: KI-Verbindungsfehler bei Typ-Erkennung", doc_id
+                "Dokument #%d: KI-Verbindungsfehler bei Typ-Erkennung — Retry möglich",
+                doc_id,
             )
-            _set_error(doc_id, f"KI nicht erreichbar: {_type_raw[:200]}")
             return "ai_unavailable"  # Signalisiert dem Worker: erneut versuchen
 
         # Erkannten Typ merken für späteren _db_analyze_write-Aufruf
@@ -1306,9 +1328,9 @@ async def _analyze_single_inner(
         # ── Verbindungsfehler bei der Extraktion prüfen ──────────────────────
         if _is_ai_conn_error(raw_response):
             logger.warning(
-                "Dokument #%d: KI-Verbindungsfehler bei Extraktion", doc_id
+                "Dokument #%d: KI-Verbindungsfehler bei Extraktion — Retry möglich",
+                doc_id,
             )
-            _set_error(doc_id, f"KI nicht erreichbar: {raw_response[:200]}")
             return "ai_unavailable"
 
         # Statistiken beider KI-Aufrufe zu einer Gesamtstatistik zusammenführen
@@ -1349,9 +1371,9 @@ async def _analyze_single_inner(
         # ── Verbindungsfehler prüfen ──────────────────────────────────────────
         if _is_ai_conn_error(raw_response):
             logger.warning(
-                "Dokument #%d: KI-Verbindungsfehler bei Extraktion", doc_id
+                "Dokument #%d: KI-Verbindungsfehler bei Extraktion — Retry möglich",
+                doc_id,
             )
-            _set_error(doc_id, f"KI nicht erreichbar: {raw_response[:200]}")
             return "ai_unavailable"
 
     # ═══════════════════════════════════════════════════════════════════════════

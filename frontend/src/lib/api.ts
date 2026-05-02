@@ -512,5 +512,64 @@ export interface WorkerStats {
 
 export const workerApi = {
   getStats: () =>
-    apiClient.get<WorkerStats>("/api/logs/worker-stats").then((r) => r.data),
+    apiClient.get<WorkerStats>("/api/logs/worker-stats/").then((r) => r.data),
+};
+
+// ─── Typen: Workflow-Tasks ────────────────────────────────────────────────────
+
+export interface WorkflowTask {
+  id: number;
+  workflow_id: string;
+  payload: Record<string, unknown>;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  attempts: number;
+  max_attempts: number;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  worker_id: string | null;
+  locked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowTaskListResponse {
+  items: WorkflowTask[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DispatcherServer {
+  id: number;
+  name: string;
+  active: boolean;
+  is_down: boolean;
+  parallel_request: number;
+  url: string;
+}
+
+export interface DispatcherStatus {
+  worker_count: number;
+  queue_size: number;
+  servers: DispatcherServer[];
+}
+
+export const tasksApi = {
+  list: (params?: { status?: string; limit?: number; offset?: number }) =>
+    apiClient
+      .get<WorkflowTaskListResponse>("/api/tasks/", { params })
+      .then((r) => r.data),
+
+  getDispatcherStatus: () =>
+    apiClient.get<DispatcherStatus>("/api/tasks/workers/").then((r) => r.data),
+
+  deleteOne: (taskId: number) =>
+    apiClient.delete(`/api/tasks/${taskId}/`),
+
+  deleteByStatus: (status: "completed" | "failed") =>
+    apiClient
+      .delete<{ deleted: number; status: string }>("/api/tasks/", {
+        params: { status },
+      })
+      .then((r) => r.data),
 };

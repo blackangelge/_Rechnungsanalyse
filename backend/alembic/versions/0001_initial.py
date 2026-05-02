@@ -100,7 +100,7 @@ def upgrade() -> None:
         sa.Column("page_count", sa.Integer(), nullable=False, server_default="0"), # Anzahl der Seiten im Dokument, um Informationen über die Länge des Dokuments zu haben
         sa.Column("document_type", sa.Integer(), nullable=False, server_default="0"), # Dokumententyp, z.B. 0=unbekannt, 1=Eingangsrechnung, 2=Bestellung, 3=Vertrag, etc. Je nach Anwendungsfall können hier weitere Typen definiert werden
         sa.Column("comment", sa.Text(), nullable=True),
-        sa.Column("status", sa.String(50), nullable=False, server_default="pending"),
+        sa.Column("status", sa.String(50), nullable=False, server_default="pending"), # Status der Dokumentenverarbeitung, z.B. "pending", "processing", "completed", "failed"
         sa.Column("raw_response", sa.Text(), nullable=True, server_default="{}"), # Rohdaten der KI-Antwort, um die ursprüngliche Antwort der KI zu speichern und bei Bedarf darauf zugreifen zu können}"),
         sa.Column("soft_deleted", sa.Boolean(), nullable=False, server_default="0"), # Ob das Dokument als gelöscht markiert ist, um eine einfache Möglichkeit zu haben, Dokumente zu "löschen", ohne sie tatsächlich aus der Datenbank zu entfernen, um die Datenintegrität zu gewährleisten und versehentliche Datenverluste zu vermeiden
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),

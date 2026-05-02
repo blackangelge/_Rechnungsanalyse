@@ -5,19 +5,26 @@ Alle API-Endpunkte werden hier zentral registriert.
 Die CORS-Middleware erlaubt Anfragen vom Next.js-Frontend.
 """
 
+import asyncio
+import concurrent.futures
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import asyncpg
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.routers import ai_clients
 
 #WorkerPool importieren, damit er beim Starten des Containers automatisch startet
-from app.worker.runner import WorkerPool
+#from app.worker.runner import WorkerPool
+
+from app.worker.worker import Dispatcher
 
 # ── Logging konfigurieren ────────────────────────────────────────────────────
 # Einheitliches Format für Container Manager Protokoll-Ansicht
@@ -38,12 +45,33 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 def _run_migrations() -> None:
     """
-    Führt ausstehende Alembic-Migrationen automatisch beim Start aus.
-    Verhindert 500-Fehler durch fehlende Datenbankspalten nach Code-Updates.
+    Wartet auf PostgreSQL und führt dann ausstehende Alembic-Migrationen aus.
+    Läuft in einem Thread (via asyncio.to_thread) um den Event-Loop nicht zu blockieren.
+
+    Optimierung: Prüft zuerst per direktem SQL ob die DB bereits auf dem neuesten
+    Stand ist. Falls ja, wird die Migration übersprungen — kein Alembic-Lock nötig.
+    Nur bei tatsächlich ausstehenden Migrationen wird alembic upgrade aufgerufen.
     """
+    import time
+    import psycopg2
+
+    # Auf PostgreSQL warten — bei frischer DB dauert initdb 10–30 s
+    for attempt in range(30):
+        try:
+            conn = psycopg2.connect(settings.database_url, connect_timeout=5)
+            conn.close()
+            logger.info("✓ Datenbank erreichbar")
+            break
+        except Exception as exc:
+            logger.info("Warte auf Datenbank... (Versuch %d/30): %s", attempt + 1, exc)
+            time.sleep(2)
+    else:
+        logger.error("✗ Datenbank nach 60 s nicht erreichbar — Migration übersprungen")
+        return
+
     try:
-        from alembic import command as alembic_command
         from alembic.config import Config as AlembicConfig
+        from alembic.script import ScriptDirectory
 
         alembic_ini = Path(__file__).resolve().parent.parent / "alembic.ini"
         if not alembic_ini.exists():
@@ -51,8 +79,51 @@ def _run_migrations() -> None:
             return
 
         cfg = AlembicConfig(str(alembic_ini))
-        alembic_command.upgrade(cfg, "head")
-        logger.info("✓ Datenbank-Migrationen erfolgreich angewendet")
+        script_dir = ScriptDirectory.from_config(cfg)
+        head_rev = script_dir.get_current_head()
+
+        # Schnell-Check: aktuelle DB-Version per direktem SQL lesen (kein Alembic-Lock).
+        # statement_timeout=3s: Falls alembic_version-Tabelle selbst gesperrt ist,
+        # schlägt der Check fehl → wir versuchen die volle Migration mit Timeouts.
+        current_rev: str | None = None
+        try:
+            check_conn = psycopg2.connect(
+                settings.database_url,
+                connect_timeout=5,
+                options="-c statement_timeout=3000",  # 3s in ms
+            )
+            try:
+                with check_conn.cursor() as cur:
+                    cur.execute("SELECT version_num FROM alembic_version LIMIT 1")
+                    row = cur.fetchone()
+                    current_rev = row[0] if row else None
+            finally:
+                check_conn.close()
+        except Exception as exc:
+            logger.info("Version-Check übersprungen (%s) — Migration wird geprüft", exc)
+
+        if current_rev == head_rev:
+            logger.info("✓ Datenbank bereits aktuell (%s) — keine Migration nötig", current_rev)
+            return
+
+        logger.info("Migration ausstehend: %s → %s — starte Upgrade", current_rev, head_rev)
+
+        # Volle Migration mit Lock- und Statement-Timeouts durchführen.
+        from alembic import command as alembic_command
+        from sqlalchemy import create_engine
+
+        engine = create_engine(
+            settings.database_url,
+            connect_args={"options": "-c lock_timeout=15s -c statement_timeout=20s"},
+        )
+        alembic_conn = engine.connect()
+        cfg.attributes["connection"] = alembic_conn
+        try:
+            alembic_command.upgrade(cfg, "head")
+            logger.info("✓ Datenbank-Migrationen erfolgreich angewendet")
+        finally:
+            alembic_conn.close()
+            engine.dispose()
     except Exception as exc:
         logger.error("✗ Fehler beim Ausführen der Datenbank-Migrationen: %s", exc, exc_info=True)
 
@@ -62,16 +133,74 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("  Rechnungsanalyse Backend wird gestartet")
     logger.info("=" * 60)
-    _run_migrations()
-    # Worker-Pool starten (führt Tasks im Hintergrund aus)
-    pool = WorkerPool()
-    await pool.start()
-    app.state.worker_pool = pool
-    logger.info("Backend bereit, Worker-Pool läuft im Hintergrund")
+
+    # ── Thread-Pool explizit vergrößern ─────────────────────────────────────────
+    # asyncio.to_thread() und FastAPIs sync-Router-Handler teilen sich denselben
+    # Default-Executor. Auf NAS-Systemen mit wenigen CPUs ist der Default zu klein
+    # (min(32, cpu_count+4) → meist 5-8 Threads). Wenn 2+ Worker gleichzeitig
+    # 300s-lange KI-HTTP-Calls machen, bleiben keine Threads für FastAPI übrig
+    # → Backend erscheint "nicht erreichbar".
+    # Lösung: Default-Pool explizit auf 20 Threads setzen.
+    _thread_pool_size = max(20, (os.cpu_count() or 2) * 4)
+    asyncio.get_running_loop().set_default_executor(
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=_thread_pool_size,
+            thread_name_prefix="asyncio",
+        )
+    )
+    logger.info("✓ Thread-Pool: %d Threads (cpu_count=%s)", _thread_pool_size, os.cpu_count())
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_run_migrations), timeout=30.0)
+    except asyncio.TimeoutError:
+        logger.error("✗ Migration-Timeout nach 30 s — Backend startet trotzdem")
+    logger.info("✓ Migration bereit")
+
+    # asyncpg-Pool für den Dispatcher erstellen.
+    # JSONB-Codec registrieren: asyncpg gibt JSONB sonst als rohen JSON-String
+    # zurück (kein automatisches dict-Parsing ohne Codec-Registrierung).
+    import json as _json
+
+    async def _init_conn(conn: asyncpg.Connection) -> None:
+        await conn.set_type_codec(
+            "jsonb", schema="pg_catalog",
+            encoder=_json.dumps, decoder=_json.loads,
+        )
+        await conn.set_type_codec(
+            "json", schema="pg_catalog",
+            encoder=_json.dumps, decoder=_json.loads,
+        )
+
+    db_pool = await asyncpg.create_pool(
+        settings.database_url, min_size=2, max_size=10, init=_init_conn,
+    )
+    logger.info("✓ DB-Pool bereit")
+
+    from app.services.ai_dispatcher_client import AIDispatcherClient
+    ai_client = AIDispatcherClient()
+
+    # Dispatcher erstellen und als Background-Task starten.
+    # max_workers_cap=2: Maximal 2 parallele Dokument-Analysen, unabhängig davon
+    # wie viele Server-Slots konfiguriert sind. Verhindert, dass 5+ gleichzeitige
+    # KI-HTTP-Calls (à 300s) den Thread-Pool erschöpfen. Wert kann erhöht werden
+    # wenn die KI-Server schnell genug antworten.
+    dispatcher = Dispatcher(db_pool=db_pool, ai_client=ai_client, poll_interval=20, max_workers_cap=2)
+    dispatcher_task = asyncio.create_task(dispatcher.run())
+    app.state.dispatcher = dispatcher
+
+    logger.info("✓ Dispatcher läuft im Hintergrund (Polling alle 20s, max 2 parallele Worker)")
+    logger.info("✓ Backend bereit")
     try:
         yield
     finally:
-        await pool.stop()
+        await dispatcher.shutdown()
+        try:
+            await asyncio.wait_for(dispatcher_task, timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning("Dispatcher-Task antwortet nicht — wird abgebrochen")
+            dispatcher_task.cancel()
+        await db_pool.close()
+            
     logger.info("=" * 60)
     logger.info("  Rechnungsanalyse Backend wird beendet")
     logger.info("=" * 60)
@@ -151,18 +280,21 @@ app.add_middleware(
 
 
 # ── Router registrieren ─────────────────────────────────────────────────────
-from app.routers import ai_clients, batch, documents, logs, settings, sse, vendors
+from app.routers import ai_clients, batch, documents, logs, sse, vendors
+from app.routers import settings as settings_router
 from app.routers import imports as imports_router  # 'imports' ist ein Python-Keyword
+from app.routers import tasks
 
 app.include_router(ai_clients.router)                  # /api/ai-clients/*
 app.include_router(imports_router.router)              # /api/imports/*
 app.include_router(sse.router)                         # /api/imports/{id}/progress (SSE)
 app.include_router(documents.router)                   # /api/documents/*
-app.include_router(settings.router)                    # /api/settings/*
-app.include_router(settings.doc_types_router)          # /api/document-types
+app.include_router(settings_router.router)             # /api/settings/*
+app.include_router(settings_router.doc_types_router)   # /api/document-types
 app.include_router(logs.router)                        # /api/logs/*
 app.include_router(vendors.router)                     # /api/vendors/*
 app.include_router(batch.router)                       # /api/batch/*
+app.include_router(tasks.router)                       # /api/tasks/*
 
 
 # ── Health-Check ────────────────────────────────────────────────────────────
@@ -184,3 +316,4 @@ def health():
         "version": "0.3.0",
         "database": db_status,
     }
+
