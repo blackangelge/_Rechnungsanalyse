@@ -20,6 +20,7 @@ const SETTINGS_LINKS = [
   { href: "/settings/ai",         label: "KI-Einstellungen" },
   { href: "/settings/prompts",    label: "Systemprompts" },
   { href: "/settings/image",      label: "Bildeinstellungen" },
+  { href: "/settings/export",     label: "Export-Einstellungen" },
   { href: "/settings/backup",     label: "Backups / Wiederherstellung" },
 ];
 

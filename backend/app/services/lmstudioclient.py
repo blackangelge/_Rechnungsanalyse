@@ -17,6 +17,7 @@ Features:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -133,7 +134,6 @@ class LMStudioClient:
         access_token: Optional[str] = None,
         timeout: float = 300.0,
         response_id: Optional[str] = None,
-        store: bool = True,
     ) -> None:
         # Verbindung
         self.base_url: str = base_url.rstrip("/")
@@ -141,7 +141,6 @@ class LMStudioClient:
         self.access_token: Optional[str] = access_token
         self.timeout: float = timeout
         self.response_id: Optional[str] = response_id
-        self.store: bool = store
 
         # Input
         self._text_prompt: Optional[str] = None
@@ -154,6 +153,10 @@ class LMStudioClient:
 
         # Generation-Parameter mit den geforderten Defaults
         self.stream: bool = False
+        # store ist bewusst NICHT konfigurierbar: LM Studio benötigt store=false
+        # in jeder Anfrage. Kein Parameter dafür, damit das nie versehentlich
+        # überschrieben werden kann.
+        self.store: bool = False
         self.max_output_tokens: int = 32000
         self.reasoning: str = "off"
         self.temperature: Optional[float] = None
@@ -167,6 +170,11 @@ class LMStudioClient:
         self.is_reachable: bool = False
         self.last_status_code: Optional[int] = None
         self.last_error: Optional[str] = None
+        # "connect" | "timeout" | "http_status" | None — lässt Aufrufer zwischen
+        # Verbindungsfehlern und Timeouts unterscheiden (z.B. für Retry-Texte).
+        self.last_error_kind: Optional[str] = None
+        # Gesamtdauer der letzten send()/send_sync()-Anfrage in Sekunden.
+        self.last_duration_seconds: Optional[float] = None
         self.last_response: Optional[ChatResponse] = None
 
     # ------------------------------------------------------------------
@@ -322,7 +330,9 @@ class LMStudioClient:
         context_length: Optional[int] = None,
         stream: Optional[bool] = None,
     ) -> None:
-        """Setzt Generation-Parameter. Was None bleibt, wird nicht überschrieben."""
+        """Setzt Generation-Parameter. Was None bleibt, wird nicht überschrieben.
+
+        Kein store-Parameter: store ist fest auf False verdrahtet (siehe __init__)."""
         if max_output_tokens is not None:
             self.max_output_tokens = max_output_tokens
         if reasoning is not None:
@@ -431,52 +441,107 @@ class LMStudioClient:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return False
 
+    def _reset_request_state(self) -> None:
+        self.last_error = None
+        self.last_error_kind = None
+        self.last_status_code = None
+        self.last_duration_seconds = None
+        self.last_response = None
+
     async def send(self) -> Optional[ChatResponse]:
         """
-        Sendet den Chat-Request an POST /api/v1/chat (non-streaming).
+        Sendet den Chat-Request an POST /api/v1/chat (non-streaming), asynchron.
 
         Aktualisiert nach Aufruf:
-            - is_reachable
-            - last_status_code
-            - last_error
-            - last_response
+            - is_reachable, last_status_code, last_error, last_error_kind,
+              last_duration_seconds, last_response
 
         Returns:
-            ChatResponse-Objekt, oder None bei Verbindungsfehler / Timeout.
+            ChatResponse-Objekt, oder None bei Verbindungsfehler / Timeout
+            (last_error_kind unterscheidet dann "connect" von "timeout").
 
         Raises:
             httpx.HTTPStatusError: bei HTTP-Fehlerstatus (4xx/5xx).
         """
         url = f"{self.base_url}/api/v1/chat"
         payload = self._build_payload()
+        self._reset_request_state()
 
-        self.last_error = None
-        self.last_status_code = None
-        self.last_response = None
-
+        _t_start = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as http:
-                resp = await http.post(
-                    url,
-                    headers=self._build_headers(),
-                    json=payload,
-                )
+                resp = await http.post(url, headers=self._build_headers(), json=payload)
                 self.last_status_code = resp.status_code
                 self.is_reachable = True
 
                 if not resp.is_success:
                     self.last_error = f"HTTP {resp.status_code}: {resp.text}"
+                    self.last_error_kind = "http_status"
                     resp.raise_for_status()
 
                 self.last_response = ChatResponse.from_dict(resp.json())
                 return self.last_response
 
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-            # Server nicht erreichbar — sauber zurückmelden statt zu raisen
+        except httpx.TimeoutException as exc:
             self.is_reachable = False
+            self.last_error_kind = "timeout"
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return None
+        except httpx.ConnectError as exc:
+            self.is_reachable = False
+            self.last_error_kind = "connect"
             self.last_error = f"{type(exc).__name__}: {exc}"
             return None
         except httpx.HTTPError:
             raise
+        finally:
+            self.last_duration_seconds = time.monotonic() - _t_start
+
+    def send_sync(self) -> Optional[ChatResponse]:
+        """
+        Synchrones Pendant zu send() — nutzt httpx.Client statt httpx.AsyncClient.
+
+        Für Aufrufer, die (wie app/services/ai_service.py) bewusst synchron bleiben
+        müssen, um selbst per asyncio.to_thread() aufgerufen zu werden: die
+        JSON-Serialisierung großer Base64-Bildpayloads soll den Event-Loop nicht
+        blockieren. send() (async) würde diese Serialisierung direkt im Event-Loop
+        ausführen — send_sync() lässt das dem Aufrufer-Thread überlassen.
+
+        Verhalten (Rückgabe, Fehlerbehandlung, aktualisierte Attribute) ist
+        identisch zu send().
+        """
+        url = f"{self.base_url}/api/v1/chat"
+        payload = self._build_payload()
+        self._reset_request_state()
+
+        _t_start = time.monotonic()
+        try:
+            with httpx.Client(timeout=self.timeout) as http:
+                resp = http.post(url, headers=self._build_headers(), json=payload)
+                self.last_status_code = resp.status_code
+                self.is_reachable = True
+
+                if not resp.is_success:
+                    self.last_error = f"HTTP {resp.status_code}: {resp.text}"
+                    self.last_error_kind = "http_status"
+                    resp.raise_for_status()
+
+                self.last_response = ChatResponse.from_dict(resp.json())
+                return self.last_response
+
+        except httpx.TimeoutException as exc:
+            self.is_reachable = False
+            self.last_error_kind = "timeout"
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return None
+        except httpx.ConnectError as exc:
+            self.is_reachable = False
+            self.last_error_kind = "connect"
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return None
+        except httpx.HTTPError:
+            raise
+        finally:
+            self.last_duration_seconds = time.monotonic() - _t_start
 
 

@@ -12,8 +12,7 @@
  *   - Ordner-Sync (Checkbox, teal): Periodisch auf neue PDFs prüfen.
  *     Schließt Quelldateien-Löschen aus.
  *   - Dokumente an KI senden (Checkbox, blau): KI-Analyse nach Import starten.
- *     Nur aktiv wenn mindestens eine KI-Konfiguration und ein Extraktions-Prompt (type=1) vorhanden.
- *     Zeigt Dropdown für KI-Konfiguration und Systemprompt.
+ *     Verwendet immer die aktive Standard-KI-Konfiguration und den Standard-Prompt.
  *
  * Zeigt Pfad-Vorschau (Quelle und Ziel) unterhalb des Unterordner-Felds.
  * Nach erfolgreichem Start wird auf /imports/{id} weitergeleitet.
@@ -29,8 +28,6 @@ import {
   extractApiError,
   importsApi,
   importSettingsApi,
-  SystemPrompt,
-  systemPromptsApi,
 } from "@/lib/api";
 
 export default function ImportForm() {
@@ -51,12 +48,8 @@ export default function ImportForm() {
   const [folderSync, setFolderSync] = useState(false);
   const [analyzeAfterImport, setAnalyzeAfterImport] = useState(false);
 
-  // KI-Optionen
+  // KI-Konfigurationen (nur für canAnalyze-Prüfung)
   const [aiConfigs, setAiConfigs] = useState<AIConfig[]>([]);
-  const [selectedAiConfigId, setSelectedAiConfigId] = useState<string>("");
-  // Nur Prompts vom Typ 1 (Standard-Extraktion Eingangsrechnung) für "Dokumente an KI senden"
-  const [extractionPrompts, setExtractionPrompts] = useState<SystemPrompt[]>([]);
-  const [selectedSystemPromptId, setSelectedSystemPromptId] = useState<string>("");
 
   useEffect(() => {
     importSettingsApi.getPaths()
@@ -64,25 +57,12 @@ export default function ImportForm() {
       .catch(() => {});
 
     aiConfigsApi.list()
-      .then((configs) => {
-        setAiConfigs(configs);
-        const active = configs.find((c) => c.active);
-        if (active) setSelectedAiConfigId(String(active.id));
-      })
-      .catch(() => {});
-
-    systemPromptsApi.list()
-      .then((prompts) => {
-        // Nur Typ 1 = Standard-Extraktion (Eingangsrechnung) für KI-Analyse
-        const extraction = prompts.filter((p) => p.type === 1);
-        setExtractionPrompts(extraction);
-        if (extraction.length > 0) setSelectedSystemPromptId(String(extraction[0].id));
-      })
+      .then((configs) => setAiConfigs(configs))
       .catch(() => {});
   }, []);
 
-  // "Dokumente an KI senden" ist nur verfügbar wenn KI-Konfigurationen UND Extraction-Prompts vorhanden
-  const canAnalyze = aiConfigs.length > 0 && extractionPrompts.length > 0;
+  // "Dokumente an KI senden" ist nur verfügbar wenn mindestens eine KI-Konfiguration vorhanden ist
+  const canAnalyze = aiConfigs.length > 0;
 
   // Pfad-Vorschau
   const importFolderPreview = subfolder.trim()
@@ -117,8 +97,6 @@ export default function ImportForm() {
         subfolder: subfolder.trim() || undefined,
         folder_sync: folderSync,
         analyze_after_import: analyzeAfterImport && canAnalyze,
-        ai_config_id: analyzeAfterImport && selectedAiConfigId ? parseInt(selectedAiConfigId) : undefined,
-        system_prompt_id: analyzeAfterImport && selectedSystemPromptId ? parseInt(selectedSystemPromptId) : undefined,
         delete_source_files: deleteSourceFiles,
       });
       router.push(`/imports/${batch.id}`);
@@ -261,9 +239,7 @@ export default function ImportForm() {
             <span className="text-sm font-medium text-gray-800">Dokumente direkt an KI senden</span>
             {!canAnalyze ? (
               <p className="text-xs text-amber-600 mt-0.5">
-                {aiConfigs.length === 0
-                  ? "Keine aktive KI-Konfiguration vorhanden — bitte unter Einstellungen anlegen."
-                  : "Kein Extraktions-Systemprompt (Typ 0) vorhanden — bitte unter Einstellungen anlegen."}
+                Keine aktive KI-Konfiguration vorhanden — bitte unter Einstellungen anlegen.
               </p>
             ) : (
               <p className="text-xs text-gray-500 mt-0.5">
@@ -272,37 +248,6 @@ export default function ImportForm() {
             )}
           </div>
         </label>
-
-        {analyzeAfterImport && canAnalyze && (
-          <div className="pl-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-gray-600">KI-Konfiguration</label>
-              <select
-                value={selectedAiConfigId}
-                onChange={(e) => setSelectedAiConfigId(e.target.value)}
-                className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-              >
-                {aiConfigs.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}{c.active ? " (aktiv)" : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-gray-600">Systemprompt</label>
-              <select
-                value={selectedSystemPromptId}
-                onChange={(e) => setSelectedSystemPromptId(e.target.value)}
-                className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-              >
-                {extractionPrompts.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
       </div>
 
       <button

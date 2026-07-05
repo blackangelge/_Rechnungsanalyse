@@ -247,8 +247,6 @@ export default function BelegePage() {
   // PDF-Vorschau (Split-View)
   const [previewDocId, setPreviewDocId] = useState<number | null>(null);
 
-  // Löschen-Bestätigung
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
   // KI-Modal / Infos-Ansicht
   const [viewMode, setViewMode] = useState<"ki" | "infos" | null>(null);
@@ -257,8 +255,6 @@ export default function BelegePage() {
   const [infosDocId, setInfosDocId] = useState<number | null>(null);
   const infosContainerRef = useRef<HTMLDivElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
-  const [tableTop, setTableTop] = useState(300);
-  const NAV_HEIGHT = 60;
 
   // Analyse
   const [analyzing, setAnalyzing] = useState(false);
@@ -308,20 +304,11 @@ export default function BelegePage() {
     return () => { if (refreshTimerRef.current) { clearInterval(refreshTimerRef.current); refreshTimerRef.current = null; } };
   }, [documents, activeFilters, loadDocuments]);
 
-  // Scroll-/Resize-Listener für PDF-Panel-Position
-  useEffect(() => {
-    if (previewDocId === null) return;
-    function check() {
-      if (!tableContainerRef.current) return;
-      setTableTop(tableContainerRef.current.getBoundingClientRect().top);
-    }
-    check();
-    window.addEventListener("scroll", check, { passive: true });
-    window.addEventListener("resize", check, { passive: true });
-    return () => { window.removeEventListener("scroll", check); window.removeEventListener("resize", check); };
-  }, [previewDocId]);
-
   // ─── Filter-Logik ─────────────────────────────────────────────────────────
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") applyFilters();
+  }
 
   function buildFilters(): DocumentFilter {
     const f: DocumentFilter = {};
@@ -403,10 +390,36 @@ export default function BelegePage() {
 
   async function handleDelete(docId: number) {
     try {
+      // Wenn gerade die PDF dieses Dokuments angezeigt wird → zur nächsten/vorherigen wechseln
+      if (previewDocId === docId) {
+        const idx = documents.findIndex((d) => d.id === docId);
+        const nextPreview =
+          documents.slice(idx + 1).find((d) => !d.soft_deleted) ??
+          documents.slice(0, idx).reverse().find((d) => !d.soft_deleted) ??
+          null;
+        setPreviewDocId(nextPreview?.id ?? null);
+      }
       await documentsApi.softDelete(docId);
-      setDeleteConfirmId(null);
       setSelectedIds((prev) => { const next = new Set(prev); next.delete(docId); return next; });
       await loadDocuments(activeFilters);
+    } catch (err) {
+      setError(extractApiError(err, "Fehler beim Löschen des Belegs"));
+    }
+  }
+
+  /** Löscht das aktuell angezeigte Dokument in der Infos-Ansicht und navigiert zum nächsten/vorherigen. */
+  async function handleDeleteInInfos(docId: number) {
+    const idx = documents.findIndex((d) => d.id === docId);
+    const nextDoc = documents[idx + 1] ?? documents[idx - 1] ?? null;
+    try {
+      await documentsApi.softDelete(docId);
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(docId); return next; });
+      await loadDocuments(activeFilters);
+      if (nextDoc) {
+        await openView(nextDoc.id, "infos");
+      } else {
+        closeView();
+      }
     } catch (err) {
       setError(extractApiError(err, "Fehler beim Löschen des Belegs"));
     }
@@ -434,6 +447,9 @@ export default function BelegePage() {
     try {
       const detail = await documentsApi.get(docId);
       setViewedDoc(detail);
+      if (mode === "infos") {
+        setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }), 80);
+      }
     } catch (err) {
       console.error("Fehler beim Laden des Dokuments:", err);
     } finally {
@@ -452,7 +468,6 @@ export default function BelegePage() {
     const nextIdx = idx + delta;
     if (nextIdx < 0 || nextIdx >= documents.length) return;
     await openView(documents[nextIdx].id, "infos");
-    infosContainerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // ─── Ableitungen ──────────────────────────────────────────────────────────
@@ -475,7 +490,6 @@ export default function BelegePage() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   const showPreview = previewDocId !== null;
-  const pdfPanelTop = showPreview ? Math.max(NAV_HEIGHT, tableTop) + 25 : NAV_HEIGHT;
   const previewDoc = showPreview ? documents.find((d) => d.id === previewDocId) : null;
 
   return (
@@ -544,30 +558,35 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Beleg-ID</label>
               <input type="number" value={filterDocId} onChange={(e) => setFilterDocId(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="z.B. 42" min="1"
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Betrag von (€)</label>
               <input type="number" value={filterTotalMin} onChange={(e) => setFilterTotalMin(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="0" min="0" step="0.01"
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Betrag bis (€)</label>
               <input type="number" value={filterTotalMax} onChange={(e) => setFilterTotalMax(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="∞" min="0" step="0.01"
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Seiten von</label>
               <input type="number" value={filterPageMin} onChange={(e) => setFilterPageMin(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="1" min="1"
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-24" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Seiten bis</label>
               <input type="number" value={filterPageMax} onChange={(e) => setFilterPageMax(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="∞" min="1"
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-24" />
             </div>
@@ -638,6 +657,15 @@ export default function BelegePage() {
                   className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
                   Nächste →
                 </button>
+                {infosDocId !== null && (
+                  <button
+                    onClick={() => handleDeleteInInfos(infosDocId)}
+                    disabled={viewLoading}
+                    className="rounded border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                  >
+                    🗑 Löschen
+                  </button>
+                )}
               </div>
             </div>
 
@@ -647,7 +675,7 @@ export default function BelegePage() {
               </div>
             ) : viewedDoc ? (
               <div className="flex gap-4">
-                <div className="w-1/2 shrink-0 overflow-y-auto rounded-xl border bg-white shadow-sm" style={{ maxHeight: "calc(100vh - 14rem)" }}>
+                <div className="w-1/2 shrink-0 overflow-y-auto rounded-xl border bg-white shadow-sm" style={{ maxHeight: "calc(113vh - 14rem)" }}>
                   <div className="sticky top-0 z-10 border-b bg-white px-5 py-3">
                     <h2 className="text-sm font-semibold text-gray-900 truncate">{viewedDoc.original_filename}</h2>
                     <p className="text-xs text-gray-500">{viewedDoc.company} {viewedDoc.year} · #{viewedDoc.id}</p>
@@ -660,7 +688,7 @@ export default function BelegePage() {
                   <iframe
                     src={documentsApi.previewUrl(viewedDoc.id)}
                     className="w-full rounded-xl"
-                    style={{ height: "calc(100vh - 14rem)" }}
+                    style={{ height: "calc(113vh - 14rem)" }}
                     title={`PDF ${viewedDoc.original_filename}`}
                   />
                 </div>
@@ -719,14 +747,15 @@ export default function BelegePage() {
                   )}
                   {pagedDocs.map((doc) => {
                     const isDeleted = doc.soft_deleted;
-                    const isConfirmingDelete = deleteConfirmId === doc.id;
                     const isActivePreview = previewDocId === doc.id;
+                    const isActiveInfos = infosDocId === doc.id;
                     const docTypeName = getDocTypeName(doc.document_type);
 
                     return (
                       <tr key={doc.id}
                         className={[
                           isDeleted ? "bg-red-50 opacity-60"
+                            : isActiveInfos ? "bg-blue-100 ring-1 ring-inset ring-blue-200"
                             : isActivePreview ? "bg-blue-50"
                             : selectedIds.has(doc.id) ? "bg-blue-50"
                             : "hover:bg-gray-50",
@@ -823,19 +852,8 @@ export default function BelegePage() {
                                 className="rounded border border-green-300 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-50 transition-colors">
                                 Wiederherstellen
                               </button>
-                            ) : isConfirmingDelete ? (
-                              <>
-                                <button onClick={() => handleDelete(doc.id)}
-                                  className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700">
-                                  Ja
-                                </button>
-                                <button onClick={() => setDeleteConfirmId(null)}
-                                  className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:bg-gray-100">
-                                  Nein
-                                </button>
-                              </>
                             ) : (
-                              <button onClick={() => setDeleteConfirmId(doc.id)}
+                              <button onClick={() => handleDelete(doc.id)}
                                 className="rounded border border-red-200 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors">
                                 Löschen
                               </button>
@@ -901,7 +919,7 @@ export default function BelegePage() {
             {/* PDF-Vorschau */}
             {showPreview && createPortal(
               <div className="fixed right-0 bottom-0 z-40 flex w-1/2 flex-col border-l border-gray-200 bg-white shadow-2xl"
-                   style={{ top: `${pdfPanelTop}px` }}>
+                   style={{ top: 0 }}>
                 <div className="flex shrink-0 items-center justify-between border-b bg-white px-4 py-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm font-medium text-gray-800">
@@ -1194,6 +1212,7 @@ function InfosView({ doc }: { doc: DocumentDetail }) {
         <Row label="Rechnungsdatum" value={rechnung?.rechnungsdatum ?? ext?.invoice_date} />
         <Row label="Fälligkeit" value={rechnung?.faelligkeit ?? ext?.due_date} />
         <Row label="Kundennummer" value={rechnung?.kundennummer} />
+        <Row label="Bestellnummer" value={rechnung?.bestellnummer} />
       </Section>
 
       {/* Zahlungsinformationen */}

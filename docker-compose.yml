@@ -64,7 +64,7 @@ services:
     command: >
       sh -c "
         until [ -f /venv/.ready ]; do echo 'Warte auf Backend-venv...'; sleep 2; done &&
-        /venv/bin/uvicorn app.worker.main:app --host 0.0.0.0 --port 8000
+        /venv/bin/uvicorn app.worker.main:app --host 0.0.0.0 --port 8000 --reload
       "
 
   frontend:

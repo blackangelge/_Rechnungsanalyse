@@ -685,6 +685,7 @@ next 16.2.4, react 19, typescript 6, tailwindcss 4, axios
 
 ```
 Backend  (Python): uvicorn --reload aktiv → Dateiänderung genügt
+Worker   (Python): uvicorn --reload aktiv → Dateiänderung genügt
 Frontend (Next.js): next dev aktiv → Dateiänderung genügt
 
 Container-Neustart nur nötig bei:
@@ -692,6 +693,15 @@ Container-Neustart nur nötig bei:
   - neuen npm-Paketen (package.json)
   - Änderungen an next.config.ts (wird nicht hot-reloaded)
 ```
+
+> **Hinweis Worker-Container:** Bis zu einem bestimmten Punkt lief der `worker`-Service
+> **ohne** `--reload` — Code-Änderungen wurden dort erst nach einem manuellen Neustart
+> (`docker restart <worker-container>`) wirksam, obwohl der Backend-Container dieselben
+> Änderungen sofort übernahm. Das führte zu sehr verwirrenden Symptomen (z.B. ein bereits
+> behobener Prompt-Bug wirkte scheinbar weiterhin, weil der Worker-Prozess seit Stunden
+> lief und die alte Code-Version im Speicher hatte). Seitdem hat auch der Worker
+> `--reload` in `docker-compose.yml` — betrifft nur den lokalen Dev-Betrieb, auf dem NAS
+> läuft ohnehin kein `--reload` (dort wird bei jedem Deploy neu gestartet).
 
 > **Hinweis NAS/Turbopack:** Inotify funktioniert nicht auf SMB/Docker-Mounts. HMR (Hot Module Replacement) ist daher nicht verfügbar — Dateiänderungen wirken erst nach einem Browser-Reload (F5), nicht automatisch. Der `.next/`-Cache wird bei jedem Container-Start automatisch gelöscht (`rm -rf /app/.next` im Startup-Kommando), damit keine veralteten Client-Bundles ausgeliefert werden.
 

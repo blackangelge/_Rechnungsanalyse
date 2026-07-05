@@ -13,8 +13,9 @@ Es gibt zwei Prompt-Typen:
           Vollständige Rechnungsdaten-Extraktion für Eingangsrechnungen.
           Enthält die JSON-Struktur mit allen erwarteten Feldern.
 
-Wenn kein Prompt für einen Typ konfiguriert ist, verwendet der Service seinen
-internen DEFAULT_SYSTEM_PROMPT / DEFAULT_DOC_TYPE_SYSTEM_PROMPT als Fallback.
+Es gibt keinen Code-Fallback mehr: Ist für einen Typ kein Prompt konfiguriert,
+bricht der jeweilige ai_service-Aufruf mit einer klaren Fehlermeldung ab,
+statt einen unsichtbaren Standardtext zu verwenden.
 
 CRUD-Operationen: app/crud/system_prompt.py
   get_default()       — Gibt type=1 Prompt zurück

@@ -229,7 +229,11 @@ class AIDispatcherClient:
         if not isinstance(document_id, int):
             raise ValueError(f"Ungültige document_id im Payload: {payload!r}")
 
-        system_prompt_text: str | None = payload.get("system_prompt_text")
+        # Nur die Prompt-ID wird durch die Queue transportiert (nicht der aufgelöste
+        # Text) — der Inhalt wird in _db_analyze_read() frisch aus der DB gelesen,
+        # damit nachträgliche Prompt-Bearbeitungen auch bei bereits wartenden/
+        # erneut versuchten Tasks berücksichtigt werden.
+        system_prompt_id: int | None = payload.get("system_prompt_id")
 
         # Dokument-Status auf "processing" setzen damit das Frontend den Spinner zeigt.
         # Läuft in einem Thread damit der Event-Loop nicht blockiert wird.
@@ -247,7 +251,7 @@ class AIDispatcherClient:
             result_code = await _analyze_single(
                 document_id,
                 server.id,
-                system_prompt_text,
+                system_prompt_id,
             )
         except Exception as exc:
             log.error(

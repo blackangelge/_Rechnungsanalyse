@@ -461,23 +461,11 @@ async def analyze_documents(
                 detail="Keine aktive KI-Konfiguration vorhanden."
             )
 
-    # ── Schritt 3: Extraktions-Systemprompt bestimmen ────────────────────────
-    # Der Systemprompt steuert, wie die KI die Rechnungsdaten extrahiert.
-    # Er wird hier als reiner Text in den Background-Task übergeben,
-    # damit kein Session-Zugriff mehr im Thread nötig ist.
-    system_prompt_text: str | None = None
-    if payload.system_prompt_id:
-        # Expliziter Prompt angegeben → dessen Inhalt laden
-        sp = crud.system_prompt.get_by_id(db, payload.system_prompt_id)
-        if sp:
-            system_prompt_text = sp.content
-    else:
-        # Kein expliziter Prompt → Standard-Extraktionsprompt (type=1) verwenden
-        default_sp = crud.system_prompt.get_default(db)
-        if default_sp:
-            system_prompt_text = default_sp.content
-
-    # ── Schritt 4: Dokumente validieren und auf "processing" setzen ──────────
+    # ── Schritt 3: Dokumente validieren und auf "processing" setzen ──────────
+    # Der Systemprompt (payload.system_prompt_id) wird bewusst NICHT hier schon
+    # aufgelöst, sondern erst in _db_analyze_read() — direkt vor dem KI-Aufruf.
+    # So greift eine nachträgliche Bearbeitung des Prompt-Inhalts auch dann noch,
+    # wenn die Analyse erst mit Verzögerung (Queue, Retry) tatsächlich läuft.
     from app.models.document import Document as DocModel
     valid_ids: list[int] = []
 
@@ -505,7 +493,7 @@ async def analyze_documents(
     if not valid_ids:
         raise HTTPException(status_code=400, detail="Keine gültigen Dokumente gefunden")
 
-    # ── Schritt 5: Analyse als Background-Task starten ───────────────────────
+    # ── Schritt 4: Analyse als Background-Task starten ───────────────────────
     # ai_config.id hier sichern, BEVOR die Session (db) geschlossen wird.
     # Die Session wird nach dem Request-Ende von FastAPI geschlossen —
     # das SQLAlchemy-Objekt (ai_config) wäre danach "detached" und nicht mehr lesbar.
@@ -517,7 +505,7 @@ async def analyze_documents(
     asyncio.create_task(_run_analysis(
         document_ids=valid_ids,
         ai_config_id=ai_config_id,
-        system_prompt_text=system_prompt_text,
+        system_prompt_id=payload.system_prompt_id,
     ))
 
     return AnalyzeResponse(
@@ -554,7 +542,7 @@ _DOCUMENT_TYPE_LIST = [
 # ─── Analyse-Pipeline: DB-Phasen und Hilfsfunktionen ─────────────────────────
 
 
-def _db_analyze_read(doc_id: int, ai_config_id: int) -> dict | None:
+def _db_analyze_read(doc_id: int, ai_config_id: int, system_prompt_id: int | None) -> dict | None:
     """
     ANALYSE-SCHRITT 1: Alle benötigten Daten aus der DB lesen.
 
@@ -577,8 +565,13 @@ def _db_analyze_read(doc_id: int, ai_config_id: int) -> dict | None:
       beide Abfragen in einem JOIN, spart einen DB-Roundtrip.
 
     Args:
-        doc_id:       ID des zu analysierenden Dokuments.
-        ai_config_id: ID der KI-Konfiguration, die verwendet werden soll.
+        doc_id:           ID des zu analysierenden Dokuments.
+        ai_config_id:     ID der KI-Konfiguration, die verwendet werden soll.
+        system_prompt_id: ID des Extraktionsprompts (None = Standard-Prompt, type=1).
+                           Wird HIER, direkt vor dem KI-Aufruf, in Text aufgelöst —
+                           nicht schon beim Enqueue —, damit eine nachträgliche
+                           Bearbeitung des Prompt-Inhalts auch bei verzögerter
+                           Verarbeitung (Worker-Queue, Retry) noch greift.
 
     Returns:
         Dict mit allen Analyse-Parametern ODER None bei einem Fehler:
@@ -596,6 +589,10 @@ def _db_analyze_read(doc_id: int, ai_config_id: int) -> dict | None:
           ai_reasoning:          Reasoning-Stufe ("off"|"low"|"medium"|"high"|"on")
           ai_endpoint_type:      API-Protokoll ("openai" oder "lmstudio")
           doc_type_prompt_text:  Inhalt des Typ-Erkennungs-Prompts (None = einstufig)
+          system_prompt_text:    Inhalt des Extraktionsprompts, frisch aufgelöst aus
+                                 system_prompt_id (None = Standardprompt, type=1;
+                                 existiert keiner, bricht die Extraktion mit
+                                 Fehlermeldung ab statt eines Code-Fallbacks)
           document_types:        Liste aller bekannten Dokumententypen
           existing_document_type: Bereits gespeicherter Typ (0 = noch nicht erkannt)
     """
@@ -645,6 +642,16 @@ def _db_analyze_read(doc_id: int, ai_config_id: int) -> dict | None:
         # Wenn None → kein zweistufiger Modus → direkt Extraktion ohne Typ-Erkennung.
         doc_type_prompt = crud.system_prompt.get_doc_type_prompt(db)
 
+        # Extraktions-Systemprompt (type=1) frisch auflösen — erst hier, nicht
+        # schon beim Enqueue, damit Prompt-Bearbeitungen auch bei bereits
+        # wartenden/erneut versuchten Tasks berücksichtigt werden.
+        if system_prompt_id:
+            sp = crud.system_prompt.get_by_id(db, system_prompt_id)
+            system_prompt_text = sp.content if sp else None
+        else:
+            default_sp = crud.system_prompt.get_default(db)
+            system_prompt_text = default_sp.content if default_sp else None
+
         # API-URL aus IP + Port zusammensetzen.
         # Das Modell speichert IP und Port getrennt, damit beides einzeln änderbar ist.
         ip = ai_config.ip_address
@@ -666,6 +673,7 @@ def _db_analyze_read(doc_id: int, ai_config_id: int) -> dict | None:
             "ai_reasoning":          ai_config.reasoning or "off",
             "ai_endpoint_type":      ai_config.endpoint_type or "openai",
             "doc_type_prompt_text":  doc_type_prompt.content if doc_type_prompt else None,
+            "system_prompt_text":    system_prompt_text,
             "document_types":        _DOCUMENT_TYPE_LIST,
             # Bereits gespeicherter Typ: 0 = unbekannt/noch nicht erkannt,
             # 1 = Eingangsrechnung, 2+ = anderer Typ
@@ -991,7 +999,7 @@ def _db_analyze_write(
 async def _run_analysis(
     document_ids: list[int],
     ai_config_id: int,
-    system_prompt_text: str | None,
+    system_prompt_id: int | None,
 ) -> None:
     """
     Analysiert eine Liste von Dokumenten SEQUENZIELL (eines nach dem anderen).
@@ -1014,16 +1022,16 @@ async def _run_analysis(
       trotzdem analysiert (kein Abbruch der gesamten Liste).
 
     Args:
-        document_ids:       Liste der zu analysierenden Dokument-IDs (in Reihenfolge).
-        ai_config_id:       ID der KI-Konfiguration für alle Dokumente dieser Liste.
-        system_prompt_text: Inhalt des Extraktionsprompts (oder None für Standard).
+        document_ids:     Liste der zu analysierenden Dokument-IDs (in Reihenfolge).
+        ai_config_id:     ID der KI-Konfiguration für alle Dokumente dieser Liste.
+        system_prompt_id: ID des Extraktionsprompts (oder None für Standard).
     """
     logger.info("KI-Analyse gestartet: %d Dokument(e)", len(document_ids))
 
     for doc_id in document_ids:
         try:
             # Ein Dokument vollständig analysieren bevor das nächste startet
-            await _analyze_single(doc_id, ai_config_id, system_prompt_text)
+            await _analyze_single(doc_id, ai_config_id, system_prompt_id)
         except Exception as exc:
             # Unerwarteter Fehler außerhalb der normalen Fehlerbehandlung
             # (sollte nicht vorkommen, aber sicherheitshalber abgefangen)
@@ -1083,7 +1091,7 @@ def _is_ai_conn_error(raw: str | None) -> bool:
 async def _analyze_single(
     doc_id: int,
     ai_config_id: int,
-    system_prompt_text: str | None,
+    system_prompt_id: int | None,
 ) -> str:
     """
     Schutzschicht um _analyze_single_inner: verhindert parallele Doppelverarbeitung.
@@ -1096,9 +1104,9 @@ async def _analyze_single(
     selbst wenn _analyze_single_inner eine unbehandelte Exception wirft.
 
     Args:
-        doc_id:             ID des zu analysierenden Dokuments.
-        ai_config_id:       ID der zu verwendenden KI-Konfiguration.
-        system_prompt_text: Inhalt des Extraktionsprompts (None = Standard-Prompt).
+        doc_id:           ID des zu analysierenden Dokuments.
+        ai_config_id:     ID der zu verwendenden KI-Konfiguration.
+        system_prompt_id: ID des Extraktionsprompts (None = Standard-Prompt).
 
     Returns:
         "ok"             — Analyse abgeschlossen (auch wenn das Dokument einen Fehler hat)
@@ -1118,7 +1126,7 @@ async def _analyze_single(
     _analyzing_docs.add(doc_id)
     try:
         # Eigentliche Analyse ausführen
-        return await _analyze_single_inner(doc_id, ai_config_id, system_prompt_text)
+        return await _analyze_single_inner(doc_id, ai_config_id, system_prompt_id)
     finally:
         # Auch bei Exceptions: Dokument aus dem Schutz-Set entfernen,
         # damit es später erneut analysiert werden kann
@@ -1128,7 +1136,7 @@ async def _analyze_single(
 async def _analyze_single_inner(
     doc_id: int,
     ai_config_id: int,
-    system_prompt_text: str | None,
+    system_prompt_id: int | None,
 ) -> str:
     """
     Eigentliche KI-Analyse-Logik für ein einzelnes Dokument (nach dem Duplikat-Check).
@@ -1141,9 +1149,11 @@ async def _analyze_single_inner(
       • Gibt es einen Dokumententyp-Prompt in der DB?
 
     Args:
-        doc_id:             ID des zu analysierenden Dokuments.
-        ai_config_id:       ID der zu verwendenden KI-Konfiguration.
-        system_prompt_text: Inhalt des Extraktionsprompts (None = kein Prompt).
+        doc_id:           ID des zu analysierenden Dokuments.
+        ai_config_id:     ID der zu verwendenden KI-Konfiguration.
+        system_prompt_id: ID des Extraktionsprompts (None = Standard-Prompt).
+                           Wird erst in _db_analyze_read() in Text aufgelöst,
+                           nicht schon vom Aufrufer — siehe dortige Begründung.
 
     Returns:
         "ok"             — Analyse abgeschlossen (Dokument ist jetzt done oder error)
@@ -1154,7 +1164,7 @@ async def _analyze_single_inner(
     # ═══════════════════════════════════════════════════════════════════════════
     # asyncio.to_thread führt die synchrone _db_analyze_read-Funktion in einem
     # separaten Thread aus, ohne den Event-Loop zu blockieren.
-    data = await asyncio.to_thread(_db_analyze_read, doc_id, ai_config_id)
+    data = await asyncio.to_thread(_db_analyze_read, doc_id, ai_config_id, system_prompt_id)
 
     if data is None:
         # _db_analyze_read hat bereits den Status auf "error" gesetzt und geloggt
@@ -1165,6 +1175,7 @@ async def _analyze_single_inner(
     original_filename: str = data["original_filename"]
     batch_id: int | None = data["batch_id"]
     doc_type_prompt_text: str | None = data["doc_type_prompt_text"]
+    system_prompt_text: str | None = data["system_prompt_text"]
     document_types: list[dict] = data["document_types"]
 
     # ═══════════════════════════════════════════════════════════════════════════

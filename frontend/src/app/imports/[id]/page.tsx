@@ -99,7 +99,7 @@ export default function ImportDetailPage() {
     }
   }, []);
 
-  /** Polling starten: prüft alle 4 s den Batch-Status als SSE-Fallback */
+  /** Polling starten: prüft alle 3 s den Batch-Status (immer aktiv während Import läuft) */
   const startPolling = useCallback(() => {
     if (pollTimerRef.current) return; // läuft bereits
     pollTimerRef.current = setInterval(async () => {
@@ -112,9 +112,9 @@ export default function ImportDetailPage() {
           loadDocuments();
         }
       } catch {
-        // Netzwerkfehler ignorieren — nächster Poll-Versuch in 4 s
+        // Netzwerkfehler ignorieren — nächster Poll-Versuch in 3 s
       }
-    }, 4000);
+    }, 3000);
   }, [batchId, loadDocuments, loadKiStats, stopPolling]);
 
   // Initialer Ladevorgang
@@ -126,7 +126,7 @@ export default function ImportDetailPage() {
         // Import bereits abgeschlossen → Dokumente sofort laden
         loadDocuments();
       } else {
-        // Import läuft → Polling als Fallback starten (SSE kann ausfallen)
+        // Import läuft → Polling starten (aktualisiert initialTotal/initialProcessed in ProgressPanel)
         startPolling();
       }
     });
@@ -187,6 +187,8 @@ export default function ImportDetailPage() {
       <ProgressPanel
         batchId={batchId}
         initialStatus={batch.status}
+        initialTotal={batch.total_documents ?? 0}
+        initialProcessed={batch.status === "done" ? (batch.total_documents ?? 0) : 0}
         kiStats={kiStats}
         onDone={handleImportDone}
       />

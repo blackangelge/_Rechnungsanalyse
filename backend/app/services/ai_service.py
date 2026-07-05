@@ -23,90 +23,89 @@ from typing import Any
 import httpx
 
 from app.models.ai_clients import AIClients
+from app.services.lmstudioclient import LMStudioClient
 
 logger = logging.getLogger(__name__)
-
-# Standard-System-Prompt: weist die KI an, strukturiertes JSON zurückzugeben.
-# Alle Felder sind optional — fehlende Werte sollen null sein, nicht weggelassen.
-DEFAULT_SYSTEM_PROMPT = """Du bist ein präziser Dokumentenanalyst für Rechnungen.
-Analysiere die bereitgestellten Rechnungsbilder und extrahiere alle Daten.
-
-Antworte AUSSCHLIESSLICH mit einem gültigen JSON-Objekt — ohne Markdown, ohne Erklärungen.
-Nicht gefundene Werte setzt du auf null.
-
-JSON-Struktur:
-{
-  "lieferant": {
-    "name": "Vollständige Bezeichnung des Lieferanten",
-    "anschrift": {
-      "strasse": "Straße und Hausnummer",
-      "plz": "PLZ",
-      "ort": "Ort",
-      "land": "Land (falls angegeben)"
-    },
-    "hrb_nummer": "HRB-Nummer des Handelsregisters",
-    "steuernummer": "Steuernummer des Lieferanten",
-    "ust_id_nr": "USt-IdNr. des Lieferanten",
-    "bankverbindung": {
-      "bank_name": "Name der Bank",
-      "iban": "IBAN-Nummer",
-      "bic": "BIC-Nummer"
-    }
-  },
-  "rechnungsdaten": {
-    "rechnungsnummer": "Rechnungsnummer",
-    "rechnungsdatum": "YYYY-MM-DD",
-    "faelligkeit": "YYYY-MM-DD",
-    "kundennummer": "Kundennummer des Rechnungsempfängers"
-  },
-  "positionen": [
-    {
-      "position_nr": 1,
-      "artikelbezeichnung": "Vollständige Produkt-/Artikelbezeichnung",
-      "artikelnummer_lieferant": "Artikelnummer des Lieferanten",
-      "menge": 0,
-      "mengeneinheit": "Stück/kg/Liter/Palette/etc.",
-      "einzelpreis": 0.00,
-      "gesamtpreis": 0.00,
-      "waehrung": "EUR",
-      "steuersatz": 19.0,
-      "preisnachlass": {
-        "betrag": 0.00,
-        "prozent": null,
-        "bezeichnung": "Art des Nachlasses, z.B. Rabatt, Mengenrabatt"
-      }
-    }
-  ],
-  "zahlungsinformationen": {
-    "gesamtbetrag_netto": 0.00,
-    "umsatzsteuer_zusammenfassung": [
-      {
-        "steuersatz": 19.0,
-        "nettobetrag": 0.00,
-        "steuerbetrag": 0.00
-      }
-    ],
-    "gesamtbetrag_brutto": 0.00,
-    "waehrung": "EUR",
-    "skonto": {
-      "prozent": null,
-      "betrag": null,
-      "frist_tage": null
-    },
-    "zahlungsbedingungen": "Freitextfeld mit den vollständigen Zahlungsbedingungen"
-  }
-}"""
 
 # Timeout für einen einzelnen KI-API-Aufruf in Sekunden.
 # Lokale Modelle können bei langen PDFs länger brauchen.
 REQUEST_TIMEOUT_SECONDS = 900
 
-# Standard-System-Prompt für Dokumententyp-Erkennung.
-DEFAULT_DOC_TYPE_SYSTEM_PROMPT = """Du bist ein Dokumentenklassifikations-Assistent.
-Analysiere das bereitgestellte Dokument und bestimme seinen Typ.
-Antworte AUSSCHLIESSLICH mit einem gültigen JSON-Objekt — ohne Markdown, ohne Erklärungen.
 
-Beispiel: {"dokumententyp_id": 1, "dokumententyp_name": "Eingangsrechnung"}"""
+def _send_via_lmstudio(
+    images_b64: list[str],
+    config: AIClients,
+    system_prompt_text: str,
+    user_text: str,
+) -> tuple[str, dict, str | None]:
+    """
+    Sendet eine Anfrage über LMStudioClient (native LM Studio /api/v1/chat API).
+
+    Zentraler Ersatz für den früheren, hier inline gebauten httpx-Request —
+    wird von extract_invoice_data() und detect_document_type() gemeinsam
+    genutzt, damit die LM-Studio-Logik nur an einer Stelle existiert.
+
+    Läuft SYNCHRON (LMStudioClient.send_sync(), kein asyncio) — die
+    aufrufenden Funktionen sind absichtlich synchron und werden selbst per
+    asyncio.to_thread() aufgerufen (siehe Docstring von extract_invoice_data).
+
+    Returns:
+        (raw_text, ki_stats, error) — ist error nicht None, MUSS der Aufrufer
+        sofort mit dem Fehlertext zurückkehren (raw_text/ki_stats sind dann
+        leer/bedeutungslos). Die Fehlertext-Präfixe ("KI überlastet:",
+        "KI-Timeout", "KI-Verbindungsfehler:", "KI-Fehler:") entsprechen den
+        bestehenden Konventionen, die documents.py::_is_ai_conn_error() prüft.
+    """
+    client = LMStudioClient(
+        base_url=config.api_url,
+        model=config.model_name,
+        access_token=config.api_key or None,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    reasoning = getattr(config, "reasoning", "off") or "off"
+    reasoning_value = "high" if reasoning == "on" else reasoning
+    client.set_generation_params(
+        max_output_tokens=config.max_tokens,
+        reasoning=reasoning_value,
+        temperature=config.temperature,
+    )
+    client.set_system_prompt(system_prompt_text)
+    client.set_multipart_prompt(user_text)
+    for data_url in images_b64:
+        client.add_image_base64(data_url)
+
+    try:
+        response = client.send_sync()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (429, 502, 503, 504):
+            logger.warning("LM Studio überlastet (HTTP %d)", status)
+            return "", {}, f"KI überlastet: HTTP {status}"
+        logger.error("LM Studio Fehlerstatus (HTTP %d)", status)
+        return "", {}, f"KI-Fehler: HTTP {status}"
+
+    if response is None:
+        if client.last_error_kind == "timeout":
+            logger.error("LM Studio Timeout: %s", client.last_error)
+            return "", {}, f"KI-Timeout nach {REQUEST_TIMEOUT_SECONDS}s: {client.last_error}"
+        logger.error("LM Studio Verbindungsfehler: %s", client.last_error)
+        return "", {}, f"KI-Verbindungsfehler: {client.last_error}"
+
+    stats = response.stats
+    ki_stats = {
+        "input_tokens":        stats.input_tokens if stats else None,
+        "output_tokens":       stats.total_output_tokens if stats else None,
+        "reasoning_tokens":    stats.reasoning_output_tokens if stats else None,
+        "tokens_per_second":   stats.tokens_per_second if stats else None,
+        "time_to_first_token": stats.time_to_first_token_seconds if stats else None,
+        "total_duration":      client.last_duration_seconds,
+    }
+    logger.info(
+        "LM Studio Stats: %s In, %s Out, %s Reasoning, %.1f tok/s",
+        ki_stats["input_tokens"], ki_stats["output_tokens"],
+        ki_stats["reasoning_tokens"], ki_stats["tokens_per_second"] or 0,
+    )
+    return response.get_text(), ki_stats, None
 
 
 def extract_invoice_data(
@@ -125,7 +124,11 @@ def extract_invoice_data(
     Args:
         images_b64: Liste von Base64-kodierten PNG-Bildern (eine pro Seite).
         config: KI-Konfiguration mit API-URL, Modell-Name und Authentifizierung.
-        system_prompt_text: Optionaler System-Prompt-Text.
+        system_prompt_text: Inhalt des Extraktionsprompts aus der system_prompts-
+                             Tabelle. Es gibt KEINEN Code-Fallback mehr — fehlt
+                             der Prompt, bricht die Funktion mit einer klaren
+                             Fehlermeldung ab, statt einen unsichtbaren
+                             Standardtext zu verwenden.
 
     Returns:
         Tuple: (extracted_fields, order_positions, raw_response, ki_stats)
@@ -136,49 +139,46 @@ def extract_invoice_data(
         "Starte KI-Extraktion: Modell='%s', Seiten=%d", config.model_name, len(images_b64)
     )
 
-    active_system_prompt = system_prompt_text if system_prompt_text else DEFAULT_SYSTEM_PROMPT
+    if not system_prompt_text:
+        msg = (
+            "Kein Extraktionsprompt konfiguriert — bitte unter Einstellungen → "
+            "Systemprompts einen Prompt vom Typ 'Standard-Extraktion' anlegen."
+        )
+        logger.error(msg)
+        return {}, [], msg, {}
+
+    active_system_prompt = system_prompt_text
     endpoint_type = getattr(config, "endpoint_type", "openai") or "openai"
     base = config.api_url.rstrip("/")
     reasoning = getattr(config, "reasoning", "off") or "off"
     reasoning_value = "high" if reasoning == "on" else reasoning
 
-    headers = {"Content-Type": "application/json"}
-    if config.api_key:
-        headers["Authorization"] = f"Bearer {config.api_key}"
+    user_text = (
+        f"Die folgende Rechnung besteht aus {len(images_b64)} Seite(n). "
+        "Analysiere alle Seiten und extrahiere die Daten gemäß der Anweisung."
+    )
 
-    # ─── Request je nach Endpunkt-Typ aufbauen ───────────────────────────────
+    logger.info("Sende Anfrage an: %s (Typ: %s)", base, endpoint_type)
+
+    raw_text = ""
+    ki_stats: dict = {}
+
+    # ─── LM Studio: über LMStudioClient (siehe _send_via_lmstudio oben) ─────────
     if endpoint_type == "lmstudio":
-        endpoint = base + "/api/v1/chat"
-        input_parts: list[dict] = []
-        for idx, data_url in enumerate(images_b64):
-            input_parts.append({"type": "image", "data_url": data_url})
-            logger.debug("  Seite %d/%d eingebettet", idx + 1, len(images_b64))
-        input_parts.append({
-            "type": "text",
-            "content": (
-                f"Die folgende Rechnung besteht aus {len(images_b64)} Seite(n). "
-                "Analysiere alle Seiten und extrahiere die Daten gemäß der Anweisung."
-            ),
-        })
-        request_body: dict = {
-            "model": config.model_name,
-            "input": input_parts,
-            "system_prompt": active_system_prompt,
-            "temperature": config.temperature,
-            "max_output_tokens": config.max_tokens,
-            "reasoning": reasoning_value,
-            "stream": False,
-        }
-        del input_parts
+        raw_text, ki_stats, error = _send_via_lmstudio(
+            images_b64, config, active_system_prompt, user_text
+        )
+        if error:
+            return {}, [], error, {}
+
+    # ─── OpenAI-kompatibel: weiterhin Inline-httpx (kein Client für dieses Format) ─
     else:
         endpoint = base + "/v1/chat/completions"
-        content_parts: list[dict] = [{
-            "type": "text",
-            "text": (
-                f"Die folgende Rechnung besteht aus {len(images_b64)} Seite(n). "
-                "Analysiere alle Seiten und extrahiere die Daten gemäß der Anweisung."
-            ),
-        }]
+        headers = {"Content-Type": "application/json"}
+        if config.api_key:
+            headers["Authorization"] = f"Bearer {config.api_key}"
+
+        content_parts: list[dict] = [{"type": "text", "text": user_text}]
         for idx, data_url in enumerate(images_b64):
             content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
             logger.debug("  Seite %d/%d eingebettet", idx + 1, len(images_b64))
@@ -195,65 +195,36 @@ def extract_invoice_data(
         }
         del content_parts
 
-    logger.info("Sende Anfrage an: %s (Typ: %s)", endpoint, endpoint_type)
-
-    # ─── Synchroner HTTP-Request (läuft im Thread, blockiert nie den Event-Loop) ─
-    raw_text = ""
-    ki_stats: dict = {}
-
-    try:
-        # JSON-Serialisierung: kann bei großen Bilddaten mehrere Sekunden dauern
-        serialized_body = json.dumps(request_body).encode("utf-8")
-        request_body.clear()  # Bilddaten sofort freigeben
-
-        _t_start = time.monotonic()
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = client.post(endpoint, content=serialized_body, headers=headers)
-        _total_duration = time.monotonic() - _t_start
-        del serialized_body
-
-        status_code = response.status_code
-        if status_code == 200:
-            pass
-        elif status_code in (429, 503, 502, 504):
-            raw_text = f"KI überlastet: HTTP {status_code}"
-            logger.warning("KI-API überlastet (HTTP %d)", status_code)
-            return {}, [], raw_text, {}
-        elif status_code == 500:
-            raw_text = "KI-Fehler: HTTP 500"
-            logger.error("KI-API interner Fehler (HTTP 500)")
-            return {}, [], raw_text, {}
-        else:
-            raw_text = f"KI-Fehler: HTTP {status_code}"
-            logger.error("KI-API unerwarteter Status (HTTP %d)", status_code)
-            return {}, [], raw_text, {}
-
-        # ─── Response-Parsing ────────────────────────────────────────────────
         try:
-            response_data = json.loads(response.content)
-            if endpoint_type == "lmstudio":
-                output_items = response_data.get("output") or []
-                # item.get("content", "") reicht nicht — content kann explizit null sein
-                raw_text = next(
-                    (item.get("content") or ""
-                     for item in output_items if item.get("type") in ("text", "message")),
-                    "",
-                )
-                s = response_data.get("stats") or {}
-                ki_stats = {
-                    "input_tokens":        s.get("input_tokens"),
-                    "output_tokens":       s.get("total_output_tokens"),
-                    "reasoning_tokens":    s.get("reasoning_output_tokens"),
-                    "tokens_per_second":   s.get("tokens_per_second"),
-                    "time_to_first_token": s.get("time_to_first_token_seconds"),
-                    "total_duration":      _total_duration,
-                }
-                logger.info(
-                    "LM Studio Stats: %s In, %s Out, %s Reasoning, %.1f tok/s",
-                    ki_stats["input_tokens"], ki_stats["output_tokens"],
-                    ki_stats["reasoning_tokens"], ki_stats["tokens_per_second"] or 0,
-                )
+            # JSON-Serialisierung: kann bei großen Bilddaten mehrere Sekunden dauern
+            serialized_body = json.dumps(request_body).encode("utf-8")
+            request_body.clear()  # Bilddaten sofort freigeben
+
+            _t_start = time.monotonic()
+            with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+                response = client.post(endpoint, content=serialized_body, headers=headers)
+            _total_duration = time.monotonic() - _t_start
+            del serialized_body
+
+            status_code = response.status_code
+            if status_code == 200:
+                pass
+            elif status_code in (429, 503, 502, 504):
+                raw_text = f"KI überlastet: HTTP {status_code}"
+                logger.warning("KI-API überlastet (HTTP %d)", status_code)
+                return {}, [], raw_text, {}
+            elif status_code == 500:
+                raw_text = "KI-Fehler: HTTP 500"
+                logger.error("KI-API interner Fehler (HTTP 500)")
+                return {}, [], raw_text, {}
             else:
+                raw_text = f"KI-Fehler: HTTP {status_code}"
+                logger.error("KI-API unerwarteter Status (HTTP %d)", status_code)
+                return {}, [], raw_text, {}
+
+            # ─── Response-Parsing ────────────────────────────────────────────
+            try:
+                response_data = json.loads(response.content)
                 raw_text = (
                     response_data.get("choices", [{}])[0]
                     .get("message", {})
@@ -269,25 +240,25 @@ def extract_invoice_data(
                     "time_to_first_token": None,
                     "total_duration":      _total_duration,
                 }
-        except Exception as parse_exc:
-            raw_text = f"Antwort-Parse-Fehler: {parse_exc}"
-            logger.error("Fehler beim Parsen der API-Antwort: %s", parse_exc)
+            except Exception as parse_exc:
+                raw_text = f"Antwort-Parse-Fehler: {parse_exc}"
+                logger.error("Fehler beim Parsen der API-Antwort: %s", parse_exc)
+                return {}, [], raw_text, {}
+
+        except httpx.TimeoutException as exc:
+            raw_text = f"KI-Timeout nach {REQUEST_TIMEOUT_SECONDS}s: {exc}"
+            logger.error("KI-API Timeout: %s", exc)
+            return {}, [], raw_text, {}
+        except httpx.ConnectError as exc:
+            raw_text = f"KI-Verbindungsfehler: {exc}"
+            logger.error("KI-API Verbindungsfehler: %s", exc)
+            return {}, [], raw_text, {}
+        except Exception as exc:
+            raw_text = f"Unerwarteter KI-Fehler: {exc}"
+            logger.exception("Unerwarteter Fehler bei KI-API-Aufruf: %s", exc)
             return {}, [], raw_text, {}
 
-        logger.debug("KI-Antwort (erste 300 Zeichen): %s", raw_text[:300])
-
-    except httpx.TimeoutException as exc:
-        raw_text = f"KI-Timeout nach {REQUEST_TIMEOUT_SECONDS}s: {exc}"
-        logger.error("KI-API Timeout: %s", exc)
-        return {}, [], raw_text, {}
-    except httpx.ConnectError as exc:
-        raw_text = f"KI-Verbindungsfehler: {exc}"
-        logger.error("KI-API Verbindungsfehler: %s", exc)
-        return {}, [], raw_text, {}
-    except Exception as exc:
-        raw_text = f"Unerwarteter KI-Fehler: {exc}"
-        logger.exception("Unerwarteter Fehler bei KI-API-Aufruf: %s", exc)
-        return {}, [], raw_text, {}
+    logger.debug("KI-Antwort (erste 300 Zeichen): %s", raw_text[:300])
 
     # ─── JSON-Parsing + Normalisierung ───────────────────────────────────────
     try:
@@ -332,7 +303,10 @@ def detect_document_type(
         images_b64: Base64-kodierte PNG-Bilder (eine pro Seite).
         config: KI-Konfiguration.
         document_types: Liste von Dicts [{"id": 1, "name": "Eingangsrechnung"}, ...].
-        system_prompt_text: Optionaler System-Prompt-Text (sonst Default).
+        system_prompt_text: Inhalt des Dokumententyp-Erkennungsprompts aus der
+                             system_prompts-Tabelle. Es gibt KEINEN Code-Fallback
+                             mehr — fehlt der Prompt, bricht die Funktion mit
+                             einer klaren Fehlermeldung ab.
 
     Returns:
         (type_id, type_name, raw_response, ki_stats)
@@ -343,15 +317,20 @@ def detect_document_type(
         config.model_name, len(images_b64),
     )
 
-    active_system_prompt = system_prompt_text if system_prompt_text else DEFAULT_DOC_TYPE_SYSTEM_PROMPT
+    if not system_prompt_text:
+        msg = (
+            "Kein Dokumententyp-Erkennungsprompt konfiguriert — bitte unter "
+            "Einstellungen → Systemprompts einen Prompt vom Typ "
+            "'Dokumententyp-Erkennung' anlegen."
+        )
+        logger.error(msg)
+        return None, None, msg, {}
+
+    active_system_prompt = system_prompt_text
     endpoint_type = getattr(config, "endpoint_type", "openai") or "openai"
     base = config.api_url.rstrip("/")
     reasoning = getattr(config, "reasoning", "off") or "off"
     reasoning_value = "high" if reasoning == "on" else reasoning
-
-    headers = {"Content-Type": "application/json"}
-    if config.api_key:
-        headers["Authorization"] = f"Bearer {config.api_key}"
 
     # Typliste als Text aufbauen
     type_list_text = "\n".join(f"{dt['id']}: {dt['name']}" for dt in document_types)
@@ -362,25 +341,26 @@ def detect_document_type(
         f'{{\"dokumententyp_id\": <Zahl>, \"dokumententyp_name\": \"<Name>\"}}'
     )
 
-    # Request je nach Endpunkt-Typ aufbauen
+    logger.info("Sende Dokumententyp-Anfrage an: %s (Typ: %s)", base, endpoint_type)
+
+    raw_text = ""
+    ki_stats: dict = {}
+
+    # ─── LM Studio: über LMStudioClient (siehe _send_via_lmstudio oben) ─────────
     if endpoint_type == "lmstudio":
-        endpoint = base + "/api/v1/chat"
-        input_parts: list[dict] = []
-        for data_url in images_b64:
-            input_parts.append({"type": "image", "data_url": data_url})
-        input_parts.append({"type": "text", "content": user_text})
-        request_body: dict = {
-            "model": config.model_name,
-            "input": input_parts,
-            "system_prompt": active_system_prompt,
-            "temperature": config.temperature,
-            "max_output_tokens": config.max_tokens,
-            "reasoning": reasoning_value,
-            "stream": False,
-        }
-        del input_parts
+        raw_text, ki_stats, error = _send_via_lmstudio(
+            images_b64, config, active_system_prompt, user_text
+        )
+        if error:
+            return None, None, error, {}
+
+    # ─── OpenAI-kompatibel: weiterhin Inline-httpx (kein Client für dieses Format) ─
     else:
         endpoint = base + "/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if config.api_key:
+            headers["Authorization"] = f"Bearer {config.api_key}"
+
         content_parts: list[dict] = [{"type": "text", "text": user_text}]
         for data_url in images_b64:
             content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
@@ -397,45 +377,23 @@ def detect_document_type(
         }
         del content_parts
 
-    logger.info("Sende Dokumententyp-Anfrage an: %s (Typ: %s)", endpoint, endpoint_type)
-
-    raw_text = ""
-    ki_stats: dict = {}
-
-    try:
-        serialized_body = json.dumps(request_body).encode("utf-8")
-        request_body.clear()
-
-        _t_start = time.monotonic()
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = client.post(endpoint, content=serialized_body, headers=headers)
-        _total_duration = time.monotonic() - _t_start
-        del serialized_body
-
-        if response.status_code != 200:
-            raw_text = f"KI-Fehler: HTTP {response.status_code}"
-            logger.error("Dokumententyp-API Fehler (HTTP %d)", response.status_code)
-            return None, None, raw_text, {}
-
         try:
-            response_data = json.loads(response.content)
-            if endpoint_type == "lmstudio":
-                output_items = response_data.get("output") or []
-                raw_text = next(
-                    (item.get("content") or ""
-                     for item in output_items if item.get("type") in ("text", "message")),
-                    "",
-                )
-                s = response_data.get("stats") or {}
-                ki_stats = {
-                    "input_tokens":        s.get("input_tokens"),
-                    "output_tokens":       s.get("total_output_tokens"),
-                    "reasoning_tokens":    s.get("reasoning_output_tokens"),
-                    "tokens_per_second":   s.get("tokens_per_second"),
-                    "time_to_first_token": s.get("time_to_first_token_seconds"),
-                    "total_duration":      _total_duration,
-                }
-            else:
+            serialized_body = json.dumps(request_body).encode("utf-8")
+            request_body.clear()
+
+            _t_start = time.monotonic()
+            with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+                response = client.post(endpoint, content=serialized_body, headers=headers)
+            _total_duration = time.monotonic() - _t_start
+            del serialized_body
+
+            if response.status_code != 200:
+                raw_text = f"KI-Fehler: HTTP {response.status_code}"
+                logger.error("Dokumententyp-API Fehler (HTTP %d)", response.status_code)
+                return None, None, raw_text, {}
+
+            try:
+                response_data = json.loads(response.content)
                 raw_text = (
                     response_data.get("choices", [{}])[0]
                     .get("message", {})
@@ -451,23 +409,23 @@ def detect_document_type(
                     "time_to_first_token": None,
                     "total_duration":      _total_duration,
                 }
-        except Exception as parse_exc:
-            raw_text = f"Antwort-Parse-Fehler: {parse_exc}"
-            logger.error("Fehler beim Parsen der Dokumententyp-Antwort: %s", parse_exc)
-            return None, None, raw_text, {}
+            except Exception as parse_exc:
+                raw_text = f"Antwort-Parse-Fehler: {parse_exc}"
+                logger.error("Fehler beim Parsen der Dokumententyp-Antwort: %s", parse_exc)
+                return None, None, raw_text, {}
 
-    except httpx.TimeoutException as exc:
-        raw_text = f"KI-Timeout: {exc}"
-        logger.error("Dokumententyp-API Timeout: %s", exc)
-        return None, None, raw_text, {}
-    except httpx.ConnectError as exc:
-        raw_text = f"KI-Verbindungsfehler: {exc}"
-        logger.error("Dokumententyp-API Verbindungsfehler: %s", exc)
-        return None, None, raw_text, {}
-    except Exception as exc:
-        raw_text = f"Unerwarteter KI-Fehler: {exc}"
-        logger.exception("Unerwarteter Fehler bei Dokumententyp-Erkennung: %s", exc)
-        return None, None, raw_text, {}
+        except httpx.TimeoutException as exc:
+            raw_text = f"KI-Timeout: {exc}"
+            logger.error("Dokumententyp-API Timeout: %s", exc)
+            return None, None, raw_text, {}
+        except httpx.ConnectError as exc:
+            raw_text = f"KI-Verbindungsfehler: {exc}"
+            logger.error("Dokumententyp-API Verbindungsfehler: %s", exc)
+            return None, None, raw_text, {}
+        except Exception as exc:
+            raw_text = f"Unerwarteter KI-Fehler: {exc}"
+            logger.exception("Unerwarteter Fehler bei Dokumententyp-Erkennung: %s", exc)
+            return None, None, raw_text, {}
 
     # JSON parsen
     try:
@@ -645,6 +603,7 @@ def _map_new_format(data: dict) -> tuple[dict, list[dict]]:
         "supplier_zip":       _str(anschrift.get("plz")),
         "supplier_city":      _str(anschrift.get("ort")),
         "customer_number":    _str(rechnung.get("kundennummer")),
+        "order_number":       _str(rechnung.get("bestellnummer")),
         "invoice_number":     _str(rechnung.get("rechnungsnummer")),
         "invoice_date":       _date(rechnung.get("rechnungsdatum")),
         "due_date":           _date(rechnung.get("faelligkeit")),

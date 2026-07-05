@@ -63,11 +63,15 @@ def _db_get_source_filenames(batch_id: int) -> list[str]:
 def _db_get_analyze_setup(
     batch_id: int,
     ai_config_id: int | None,
-    system_prompt_id: int | None,
 ) -> dict | None:
     """
-    Löst KI-Config, Systemprompt und Dokument-IDs für die KI-Analyse auf.
+    Löst KI-Config und Dokument-IDs für die KI-Analyse auf.
     Gibt None zurück, wenn keine KI-Konfiguration gefunden wurde.
+
+    Löst absichtlich NICHT den Systemprompt-Inhalt auf — der Prompt wird nur als
+    system_prompt_id (nicht als aufgelöster Text) in die Task-Payload geschrieben
+    und erst von _db_analyze_read() im Worker frisch aus der DB gelesen. So greift
+    eine nachträgliche Bearbeitung des Prompts auch bei bereits wartenden Tasks.
     """
     db = SessionLocal()
     try:
@@ -83,30 +87,25 @@ def _db_get_analyze_setup(
             )
             return None
 
-        if system_prompt_id:
-            sp = crud.system_prompt.get_by_id(db, system_prompt_id)
-            system_prompt_text = sp.content if sp else None
-        else:
-            default_sp = crud.system_prompt.get_default(db)
-            system_prompt_text = default_sp.content if default_sp else None
-
         batch = crud.import_batch.get_by_id(db, batch_id)
         doc_ids = [d.id for d in (batch.documents if batch else []) if d.stored_filename]
 
         return {
             "ai_config_id": resolved_config.id,
-            "system_prompt_text": system_prompt_text,
             "doc_ids": doc_ids,
         }
     finally:
         db.close()
 
 
-def _db_enqueue_for_analysis(doc_ids: list[int]) -> int:
+def _db_enqueue_for_analysis(doc_ids: list[int], system_prompt_id: int | None) -> int:
     """
     Reiht Dokumente zur KI-Analyse in die Worker-Queue ein.
     Verhindert Duplikate: Dokumente mit bereits laufendem/wartendem Task werden übersprungen.
     Gibt die Anzahl neu eingereihter Dokumente zurück.
+
+    system_prompt_id wird unverändert in die Task-Payload geschrieben (keine
+    Text-Auflösung hier) — siehe _db_get_analyze_setup().
     """
     import uuid
     from sqlalchemy import text as _text
@@ -128,7 +127,11 @@ def _db_enqueue_for_analysis(doc_ids: list[int]) -> int:
                 continue
             task = WorkflowTask(
                 workflow_id=str(uuid.uuid4()),
-                payload={"kind": "process_document", "document_id": doc_id},
+                payload={
+                    "kind": "process_document",
+                    "document_id": doc_id,
+                    "system_prompt_id": system_prompt_id,
+                },
                 status="pending",
             )
             db.add(task)
@@ -234,7 +237,7 @@ async def _import_then_analyze(
             await _delete_source_files(batch_id, import_folder)
 
         # 3. Dokument-IDs für diesen Batch ermitteln (im Thread)
-        setup = await asyncio.to_thread(_db_get_analyze_setup, batch_id, ai_config_id, system_prompt_id)
+        setup = await asyncio.to_thread(_db_get_analyze_setup, batch_id, ai_config_id)
         if setup is None:
             return
 
@@ -245,7 +248,7 @@ async def _import_then_analyze(
 
         # 4. Dokumente in Worker-Queue einreihen (statt direkter Analyse)
         #    Verhindert Duplikate falls Dokumente bereits in der Queue sind.
-        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, doc_ids)
+        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, doc_ids, system_prompt_id)
         logger.info(
             "Batch #%d: %d/%d Dokument(e) zur KI-Analyse in Worker-Queue eingereiht",
             batch_id, enqueued, len(doc_ids),
@@ -292,13 +295,14 @@ async def start_import(payload: ImportBatchCreate, db: Session = Depends(get_db)
     folder_path = f"{base}/{subfolder}" if subfolder else base
     payload = payload.model_copy(update={"folder_path": folder_path})
 
+    import functools
     try:
-        validated_path = validate_import_path(folder_path)
+        validated_path = await asyncio.to_thread(validate_import_path, folder_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     # ── PDF-Prüfung ────────────────────────────────────────────────────────
-    pdf_files = list_pdf_files(validated_path)
+    pdf_files = await asyncio.to_thread(list_pdf_files, validated_path)
     if not pdf_files:
         raise HTTPException(
             status_code=400,
@@ -334,12 +338,23 @@ def get_import_status(batch_id: int, db: Session = Depends(get_db)):
     """
     Gibt nur den Status eines Import-Batches zurück — OHNE Dokumentliste.
     Für leichtgewichtiges Polling während eines laufenden Imports.
+    Enthält total_documents für die Fortschrittsanzeige.
     """
     from app.models.import_batch import ImportBatch as ImportBatchModel
+    from app.models.document import Document
+    from sqlalchemy import func, select as sa_select
+
     obj = db.get(ImportBatchModel, batch_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
-    return obj
+
+    total_docs: int = db.execute(
+        sa_select(func.count()).where(Document.batch_id == batch_id)
+    ).scalar_one()
+
+    result = ImportBatchRead.model_validate(obj)
+    result.total_documents = total_docs
+    return result
 
 
 @router.get("/{batch_id}/ki-stats")
@@ -433,11 +448,18 @@ def export_batch_excel(batch_id: int, db: Session = Depends(get_db)):
 
     Sheet 1 „Rechnungen": Rechnungsdaten pro Dokument (Lieferant, Beträge, Daten …)
     Sheet 2 „Positionen": Alle Bestellpositionen aller Dokumente des Batches
+
+    Welche Spalten erscheinen, wird durch die ExportConfig (Singleton id=1) gesteuert.
+    Fehlt der Eintrag, werden alle Felder ausgegeben.
     """
     from sqlalchemy.orm import joinedload as _jl
     from app.models.document import Document as _Doc
     from app.models.import_batch import ImportBatch as _Batch
-    from app.models.invoice_extraction import InvoiceExtraction as _Ext
+    from app.models.export_config import (
+        ExportConfig as _ExportConfig,
+        INVOICE_FIELDS_DEFAULT,
+        POSITION_FIELDS_DEFAULT,
+    )
 
     batch = db.get(_Batch, batch_id)
     if batch is None:
@@ -454,7 +476,11 @@ def export_batch_excel(batch_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
-    excel_bytes = _build_export_excel(batch, docs)
+    cfg = db.get(_ExportConfig, 1)
+    invoice_fields  = list(cfg.invoice_fields)  if cfg and cfg.invoice_fields  else list(INVOICE_FIELDS_DEFAULT)
+    position_fields = list(cfg.position_fields) if cfg and cfg.position_fields else list(POSITION_FIELDS_DEFAULT)
+
+    excel_bytes = _build_export_excel(batch, docs, invoice_fields, position_fields)
     safe = f"{batch.company_name}_{batch.year}".replace(" ", "_")
     filename = f"Export_{safe}.xlsx"
 
@@ -465,15 +491,17 @@ def export_batch_excel(batch_id: int, db: Session = Depends(get_db)):
     )
 
 
-def _build_export_excel(batch, docs) -> bytes:
+def _build_export_excel(
+    batch,
+    docs,
+    invoice_fields: list[str],
+    position_fields: list[str],
+) -> bytes:
     """
-    Erstellt eine formatierte Excel-Datei mit zwei Sheets:
-    - „Rechnungen": alle Rechnungsfelder pro Dokument inkl. Adresse (Straße/PLZ/Ort)
-                    und Skonto-Details (Betrag, Prozent, Frist)
-    - „Positionen": alle Bestellpositionen inkl. Steuersatz
+    Erstellt eine formatierte Excel-Datei mit zwei Sheets.
 
-    Adress-Einzelfelder kommen aus dem verknüpften Supplier-Datensatz.
-    Steuersatz und Skonto-Details werden aus raw_response geparst.
+    invoice_fields / position_fields: geordnete Liste aktiver Feld-Schlüssel aus
+    ExportConfig — nur diese Spalten werden ausgegeben.
     """
     import json as _json
 
@@ -512,183 +540,141 @@ def _build_export_excel(batch, docs) -> bytes:
         return fill_a if row_idx % 2 == 0 else fill_b
 
     def _f(val):
-        """Decimal / int → float, None bleibt None."""
         return float(val) if val is not None else None
 
     def _dt(val):
-        """Timezone-aware datetime → naive (openpyxl verträgt keine tz-aware Objekte)."""
         return val.replace(tzinfo=None) if val and getattr(val, "tzinfo", None) else val
 
-    def _parse_raw(raw_response: str | None) -> dict:
-        """Parst raw_response sicher als Dict. Gibt {} bei Fehler zurück."""
+    def _parse_raw(raw_response) -> dict:
         if not raw_response:
             return {}
         try:
+            if isinstance(raw_response, dict):
+                return raw_response
             result = _json.loads(raw_response)
             return result if isinstance(result, dict) else {}
         except (_json.JSONDecodeError, TypeError):
             return {}
 
-    # ── Sheet 1: Rechnungen ───────────────────────────────────────────────────
-    # Spalten (26 = A..Z):
-    # 1  Beleg-Nr.        9  Straße           17 Gesamtbetrag (€)   23 Skonto Frist
-    # 2  Dateiname        10 PLZ              18 Rabatt (€)          24 Zahlungsbedingungen
-    # 3  Status           11 Ort              19 Skonto (€)          25 Kommentar
-    # 4  Seiten           12 USt-IdNr.        20 Skonto (%)          26 Importiert am
-    # 5  Rechnungsnr.     13 Steuernr.        21 Skonto Frist (Tage)
-    # 6  Rechnungsdatum   14 HRB-Nr.
-    # 7  Fälligkeit       15 Kundennr.
-    # 8  Lieferant        16 Bank / IBAN / BIC → 16, 17(IBAN), 18(BIC) … warte,
-    #    neu gezählt:
-    # 8  Lieferant        14 HRB-Nr.          20 Skonto (%)
-    # 9  Straße           15 Kundennr.        21 Skonto Frist (Tage)
-    # 10 PLZ              16 Bank             22 Zahlungsbedingungen
-    # 11 Ort              17 IBAN             23 Kommentar
-    # 12 USt-IdNr.        18 BIC              24 Importiert am
-    # 13 Steuernr.        19 Gesamtbetrag (€)
-    #                     20 Rabatt (€)
-    #                     21 Skonto (€)
-    #                     22 Skonto (%)
-    #                     23 Skonto Frist (Tage)
-    #                     24 Zahlungsbedingungen
-    #                     25 Kommentar
-    #                     26 Importiert am
-    NUM_COLS_WS1 = 26
+    def _nested(d: dict, *keys) -> dict:
+        """Läuft eine Kette verschachtelter dict-Keys sicher ab, z.B.
+        _nested(raw, "lieferant", "anschrift") → {} falls ein Zwischenschritt fehlt."""
+        for k in keys:
+            d = (d or {}).get(k) or {}
+        return d
 
+    # ── Feld-Definitionen: (schlüssel, header, value_fn, format, breite) ─────
+    # format: None | "eur" | "pct" | "date" | "datetime" | "center"
+
+    # Rechnungen-Sheet
+    INVOICE_DEFS = [
+        ("beleg_nr",            "Beleg-Nr.",             lambda d, e, sk: d.id,                                        "center",    10),
+        ("dateiname",           "Dateiname",              lambda d, e, sk: d.original_filename,                         None,        36),
+        ("status",              "Status",                 lambda d, e, sk: d.status,                                    None,        12),
+        ("seiten",              "Seiten",                 lambda d, e, sk: d.page_count or None,                        "center",     8),
+        ("rechnungsnr",         "Rechnungsnr.",           lambda d, e, sk: e.invoice_number if e else None,             None,        22),
+        ("rechnungsdatum",      "Rechnungsdatum",         lambda d, e, sk: e.invoice_date if e else None,               "date",      14),
+        ("faelligkeit",         "Fälligkeit",             lambda d, e, sk: e.due_date if e else None,                   "date",      14),
+        ("lieferant",           "Lieferant",              lambda d, e, raw: e.vendor_id if e else None,                 None,        30),
+        ("strasse",             "Straße",                 lambda d, e, raw: _nested(raw, "lieferant", "anschrift").get("strasse"),  None,        28),
+        ("plz",                 "PLZ",                    lambda d, e, raw: _nested(raw, "lieferant", "anschrift").get("plz"),      None,         8),
+        ("ort",                 "Ort",                    lambda d, e, raw: _nested(raw, "lieferant", "anschrift").get("ort"),      None,        20),
+        ("ust_id",              "USt-IdNr.",              lambda d, e, raw: _nested(raw, "lieferant").get("ust_id_nr"),             None,        18),
+        ("steuernr",            "Steuernr.",              lambda d, e, raw: _nested(raw, "lieferant").get("steuernummer"),          None,        16),
+        ("hrb_nr",              "HRB-Nr.",                lambda d, e, raw: _nested(raw, "lieferant").get("hrb_nummer"),            None,        14),
+        ("kundennr",            "Kundennr.",              lambda d, e, raw: _nested(raw, "rechnungsdaten").get("kundennummer"),     None,        14),
+        ("bestellnr",           "Bestellnr.",             lambda d, e, raw: _nested(raw, "rechnungsdaten").get("bestellnummer"),    None,        16),
+        ("bank",                "Bank",                   lambda d, e, raw: _nested(raw, "lieferant", "bankverbindung").get("bank_name"), None,   24),
+        ("iban",                "IBAN",                   lambda d, e, raw: _nested(raw, "lieferant", "bankverbindung").get("iban"),      None,   26),
+        ("bic",                 "BIC",                    lambda d, e, raw: _nested(raw, "lieferant", "bankverbindung").get("bic"),       None,   12),
+        ("gesamtbetrag",        "Gesamtbetrag (€)",       lambda d, e, raw: _f(e.total_amount_brutto) if e else None,   "eur",       17),
+        ("rabatt",              "Rabatt (€)",             lambda d, e, raw: _f(e.discount_amount) if e else None,       "eur",       13),
+        ("skonto_betrag",       "Skonto (€)",             lambda d, e, raw: _f(e.cash_discount_amount) if e else None,  "eur",       13),
+        ("skonto_prozent",      "Skonto (%)",             lambda d, e, raw: _f(_nested(raw, "zahlungsinformationen", "skonto").get("prozent")), "pct", 10),
+        ("skonto_frist",        "Skonto Frist (Tage)",    lambda d, e, raw: (
+            lambda sk: (
+                int(sk["frist_tage"]) if isinstance(sk.get("frist_tage"), float) and sk["frist_tage"] == int(sk["frist_tage"])
+                else sk.get("frist_tage")
+            )
+        )(_nested(raw, "zahlungsinformationen", "skonto")),                                                                                       None,        12),
+        ("zahlungsbedingungen", "Zahlungsbedingungen",    lambda d, e, raw: e.payment_terms if e else None,             None,        42),
+        ("kommentar",           "Kommentar",              lambda d, e, raw: d.comment,                                  None,        30),
+        ("importiert_am",       "Importiert am",          lambda d, e, raw: _dt(d.created_at),                          "datetime",  18),
+    ]
+
+    # Positionen-Sheet
+    POSITION_DEFS = [
+        ("beleg_nr",            "Beleg-Nr.",              lambda d, e, p, tm: d.id,                                         "center",  10),
+        ("rechnungsnr",         "Rechnungsnr.",           lambda d, e, p, tm: e.invoice_number if e else None,              None,      22),
+        ("lieferant",           "Lieferant",              lambda d, e, p, tm: e.vendor_id if e else None,                   None,      30),
+        ("pos_nr",              "Pos.",                   lambda d, e, p, tm: p.position_index + 1,                         "center",   8),
+        ("artikelbezeichnung",  "Artikelbezeichnung",     lambda d, e, p, tm: p.product_name or p.product_description,      None,      52),
+        ("artikelnummer",       "Artikelnummer",          lambda d, e, p, tm: p.article_number,                             None,      20),
+        ("menge",               "Menge",                  lambda d, e, p, tm: _f(p.quantity),                               None,      12),
+        ("einheit",             "Einheit",                lambda d, e, p, tm: p.unit,                                       None,      12),
+        ("einzelpreis",         "EP Netto (€)",           lambda d, e, p, tm: _f(p.unit_price_netto),                       "eur",     17),
+        ("gesamtpreis",         "EP Brutto (€)",          lambda d, e, p, tm: _f(p.unit_price_brutto),                      "eur",     17),
+        ("steuersatz",          "Steuersatz (%)",         lambda d, e, p, tm: tm.get(p.position_index),                     "pct",     14),
+        ("nachlass",            "Nachlass",               lambda d, e, p, tm: p.discount,                                   None,      22),
+    ]
+
+    # Nur aktive Felder in der konfigurierten Reihenfolge
+    inv_defs  = [d for d in INVOICE_DEFS  if d[0] in invoice_fields]
+    pos_defs  = [d for d in POSITION_DEFS if d[0] in position_fields]
+
+    # ── Sheet 1: Rechnungen ───────────────────────────────────────────────────
     ws1 = wb.active
     ws1.title = "Rechnungen"
 
-    ws1.merge_cells(f"A1:{get_column_letter(NUM_COLS_WS1)}1")
+    num_cols = max(len(inv_defs), 1)
+    ws1.merge_cells(f"A1:{get_column_letter(num_cols)}1")
     ws1["A1"] = f"Export: {batch.company_name} {batch.year}"
     ws1["A1"].font = Font(name="Arial", size=13, bold=True)
     ws1["A1"].alignment = Alignment(vertical="center")
     ws1.row_dimensions[1].height = 24
 
-    _header_row(ws1, [
-        "Beleg-Nr.", "Dateiname", "Status", "Seiten",
-        "Rechnungsnr.", "Rechnungsdatum", "Fälligkeit",
-        "Lieferant", "Straße", "PLZ", "Ort",
-        "USt-IdNr.", "Steuernr.", "HRB-Nr.", "Kundennr.",
-        "Bank", "IBAN", "BIC",
-        "Gesamtbetrag (€)", "Rabatt (€)",
-        "Skonto (€)", "Skonto (%)", "Skonto Frist (Tage)",
-        "Zahlungsbedingungen", "Kommentar", "Importiert am",
-    ], row=2)
+    _header_row(ws1, [d[1] for d in inv_defs], row=2)
 
     for r, doc in enumerate(docs, start=3):
         ex   = doc.extraction
         fill = _row_fill(r)
+        raw  = _parse_raw(ex.raw_response if ex else None)
 
-        # Skonto-Details aus raw_response
-        raw      = _parse_raw(ex.raw_response if ex else None)
-        skonto   = (raw.get("zahlungsinformationen") or {}).get("skonto") or {}
-        skonto_p = _f(skonto.get("prozent"))
-        skonto_t = skonto.get("frist_tage")
-        if isinstance(skonto_t, float) and skonto_t.is_integer():
-            skonto_t = int(skonto_t)
-
-        row_vals = [
-            doc.id,
-            doc.original_filename,
-            doc.status,
-            doc.page_count or None,
-            ex.invoice_number              if ex else None,
-            ex.invoice_date                if ex else None,
-            ex.due_date                    if ex else None,
-            ex.vendor_id                   if ex else None,  # Lieferant (Freitext)
-            None,  # Straße (kein Vendor-FK mehr)
-            None,  # PLZ
-            None,  # Ort
-            None,  # USt-IdNr. (jetzt in vendor-Tabelle)
-            None,  # Steuernr.
-            None,  # HRB-Nr.
-            None,  # Kundennr.
-            None,  # Bank
-            None,  # IBAN
-            None,  # BIC
-            _f(ex.total_amount_brutto)     if ex else None,
-            _f(ex.discount_amount)         if ex else None,
-            _f(ex.cash_discount_amount)    if ex else None,
-            skonto_p,
-            skonto_t,
-            ex.payment_terms               if ex else None,
-            doc.comment,
-            _dt(doc.created_at),
-        ]
-
-        for c, val in enumerate(row_vals, 1):
+        for c, (key, header, val_fn, fmt, width) in enumerate(inv_defs, 1):
+            val  = val_fn(doc, ex, raw)
             cell = ws1.cell(row=r, column=c, value=val)
             cell.font = data_font
             cell.fill = fill
-            if c in (19, 20, 21):           # Beträge
-                cell.number_format = fmt_eur
-            elif c == 22:                    # Skonto %
-                cell.number_format = fmt_pct
-            elif c in (6, 7):               # Datumsfelder
-                cell.number_format = fmt_date
-            elif c == 26:                   # Importiert am
-                cell.number_format = fmt_dt
-            elif c == 4:                    # Seiten — zentriert
-                cell.alignment = center
+            if fmt == "eur":          cell.number_format = fmt_eur
+            elif fmt == "pct":        cell.number_format = fmt_pct
+            elif fmt == "date":       cell.number_format = fmt_date
+            elif fmt == "datetime":   cell.number_format = fmt_dt
+            elif fmt == "center":     cell.alignment = center
 
-    _set_widths(ws1, [
-        10, 36, 12, 8,          # Beleg, Dateiname, Status, Seiten
-        22, 14, 14,             # Rechnungsnr., Datum, Fälligkeit
-        30, 28, 8, 20,          # Lieferant, Straße, PLZ, Ort
-        18, 16, 14, 14,         # USt-IdNr., Steuernr., HRB, Kundennr.
-        24, 26, 12,             # Bank, IBAN, BIC
-        17, 13, 13, 10, 12,     # Gesamtbetrag, Rabatt, Skonto€, Skonto%, Frist
-        42, 30, 18,             # Zahlungsbedingungen, Kommentar, Importiert am
-    ])
+    _set_widths(ws1, [d[4] for d in inv_defs])
     ws1.freeze_panes = "A3"
 
     # ── Sheet 2: Positionen ───────────────────────────────────────────────────
-    # Steuersatz wird aus raw_response geparst (nicht im ORM-Modell)
     ws2 = wb.create_sheet("Positionen")
-
-    _header_row(ws2, [
-        "Beleg-Nr.", "Rechnungsnr.", "Lieferant", "Pos.",
-        "Artikelbezeichnung", "Artikelnummer",
-        "Menge", "Einheit",
-        "EP Netto (€)", "EP Brutto (€)", "Steuersatz (%)", "Nachlass",
-    ])
+    _header_row(ws2, [d[1] for d in pos_defs])
 
     r = 2
     for doc in docs:
-        ex = doc.extraction
-
-        # Steuersätze aus raw_response: positionen[i].steuersatz
+        ex  = doc.extraction
         raw = _parse_raw(ex.raw_response if ex else None)
         raw_pos_list = raw.get("positionen") or []
-        # Mapping: position_index → steuersatz
         tax_map = {i: _f(p.get("steuersatz")) for i, p in enumerate(raw_pos_list)}
 
         for pos in doc.order_positions:
             fill = _row_fill(r)
-            row_vals = [
-                doc.id,
-                ex.invoice_number    if ex else None,
-                ex.vendor_id         if ex else None,
-                pos.position_index + 1,
-                pos.product_name or pos.product_description,
-                pos.article_number,
-                _f(pos.quantity),
-                pos.unit,
-                _f(pos.unit_price_netto),
-                _f(pos.unit_price_brutto),
-                tax_map.get(pos.position_index),
-                pos.discount,
-            ]
-            for c, val in enumerate(row_vals, 1):
+            for c, (key, header, val_fn, fmt, width) in enumerate(pos_defs, 1):
+                val  = val_fn(doc, ex, pos, tax_map)
                 cell = ws2.cell(row=r, column=c, value=val)
                 cell.font = data_font
                 cell.fill = fill
-                if c in (9, 10):
-                    cell.number_format = fmt_eur
-                elif c == 11:               # Steuersatz %
-                    cell.number_format = fmt_pct
-                elif c == 4:
-                    cell.alignment = center
+                if fmt == "eur":      cell.number_format = fmt_eur
+                elif fmt == "pct":    cell.number_format = fmt_pct
+                elif fmt == "center": cell.alignment = center
             r += 1
 
     if r == 2:
@@ -696,7 +682,7 @@ def _build_export_excel(batch, docs) -> bytes:
             name="Arial", size=10, color="888888", italic=True
         )
 
-    _set_widths(ws2, [10, 22, 30, 8, 52, 20, 12, 12, 17, 17, 14, 22])
+    _set_widths(ws2, [d[4] for d in pos_defs])
     ws2.freeze_panes = "A2"
 
     # ── Bytes zurückgeben ─────────────────────────────────────────────────────

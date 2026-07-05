@@ -107,7 +107,7 @@ export default function SystemPromptsPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">Systemprompts</h1>

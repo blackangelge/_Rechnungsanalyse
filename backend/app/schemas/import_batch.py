@@ -49,6 +49,7 @@ class ImportBatchRead(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+    total_documents: int = 0   # Anzahl der Dokumente in diesem Batch
 
     model_config = ConfigDict(from_attributes=True)
 

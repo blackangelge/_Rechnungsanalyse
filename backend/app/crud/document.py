@@ -248,6 +248,20 @@ def save_extraction(
     # DocumentTokenCount wird NICHT gelöscht — jeder Analyse-Durchlauf bekommt
     # einen eigenen Eintrag, damit die Historie aller Durchläufe erhalten bleibt.
 
+    # Vendor-Daten vor dem Filtern sichern (werden für find_or_create benötigt)
+    _vendor_data = {
+        "name":         extracted_data.get("supplier_name"),
+        "street":       extracted_data.get("supplier_street"),
+        "postal_code":  extracted_data.get("supplier_zip"),
+        "city":         extracted_data.get("supplier_city"),
+        "hrb_number":   extracted_data.get("hrb_number"),
+        "tax_number":   extracted_data.get("tax_number"),
+        "vat_id":       extracted_data.get("vat_id"),
+        "bank_name":    extracted_data.get("bank_name"),
+        "iban":         extracted_data.get("iban"),
+        "bic":          extracted_data.get("bic"),
+    }
+
     # Mapping alter Feldnamen → neue InvoiceExtraction-Felder
     _FIELD_MAP = {
         "supplier_name": "vendor_id",
@@ -256,7 +270,7 @@ def save_extraction(
     # Felder die nicht in InvoiceExtraction existieren
     _SKIP_KEYS = {
         "supplier_address", "hrb_number", "tax_number", "vat_id",
-        "bank_name", "iban", "bic", "customer_number",
+        "bank_name", "iban", "bic", "customer_number", "order_number",
         "supplier_street", "supplier_zip", "supplier_city",
     }
     mapped = {}
@@ -301,6 +315,14 @@ def save_extraction(
         return db.query(InvoiceExtraction).filter(
             InvoiceExtraction.document_id == doc_id
         ).first()
+
+    # Lieferant in vendor-Tabelle anlegen / aktualisieren (Deduplication)
+    if _vendor_data.get("name"):
+        try:
+            from app.crud import vendor as _vendor_crud
+            _vendor_crud.find_or_create(db, **_vendor_data)
+        except Exception as exc:
+            logger.warning("Vendor find_or_create fehlgeschlagen (nicht kritisch): %s", exc)
 
     # KI-Stats in DocumentTokenCount speichern
     if ki_stats:

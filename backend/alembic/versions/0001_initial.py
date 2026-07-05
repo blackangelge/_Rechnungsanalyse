@@ -26,6 +26,7 @@ database_name_vendor_bank_accounts = "vendor_bank_accounts"
 database_name_system_prompts = "system_prompts"
 database_name_workflow_tasks = "workflow_tasks"
 database_name_documents_token_counts = "documents_token_counts"
+database_name_export_config= "export_config"
 
 def upgrade() -> None:
     # AI Clients Table
@@ -247,6 +248,16 @@ def upgrade() -> None:
     )
     op.create_index(op.f(f"ix_{database_name_documents_token_counts}_id"), database_name_documents_token_counts, ["id"], unique=False)
 
+    op.create_table(
+        database_name_export_config,
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("invoice_fields", postgresql.JSONB(), nullable=False, server_default="[]"), # Liste der Felder, die im Rechnungen-Sheet des Excel-Exports enthalten sein sollen, um die Flexibilität des Exports zu erhöhen und es den Benutzern zu ermöglichen, nur die für sie relevanten Informationen zu exportieren
+        sa.Column("position_fields", postgresql.JSONB(), nullable=False, server_default="[] "), # Liste der Felder, die im Positionen-Sheet des Excel-Exports enthalten sein sollen, um die Flexibilität des Exports zu erhöhen und es den Benutzern zu ermöglichen, nur die für sie relevanten Informationen zu exportieren
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sa.CheckConstraint("id = 1", name=f"ck_{database_name_export_config}_singleton"), # Sicherstellen, dass nur ein Eintrag existiert
+    )
+
 def downgrade() -> None:
     op.drop_index(op.f(f"ix_{database_name_ai_clients}_id"), table_name=database_name_ai_clients)
     op.drop_table(database_name_ai_clients)
@@ -284,3 +295,6 @@ def downgrade() -> None:
 
     op.drop_index(op.f(f"ix_{database_name_documents_token_counts}_id"), table_name=database_name_documents_token_counts)
     op.drop_table(database_name_documents_token_counts)
+
+    op.drop_index(op.f(f"ix_{database_name_export_config}_id"), table_name=database_name_export_config)
+    op.drop_table(database_name_export_config)

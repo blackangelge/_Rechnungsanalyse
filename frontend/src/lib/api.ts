@@ -134,6 +134,7 @@ export interface ImportBatch {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+  total_documents?: number;
 }
 
 export interface ImportBatchWithDocuments extends ImportBatch {
@@ -581,4 +582,23 @@ export const tasksApi = {
         params: { status },
       })
       .then((r) => r.data),
+
+  restart: (taskId: number) =>
+    apiClient.post<{ task_id: number; status: string }>(`/api/tasks/${taskId}/restart/`).then((r) => r.data),
+};
+
+// ─── Excel-Export-Einstellungen ────────────────────────────────────────────────
+export interface ExportConfig {
+  invoice_fields: string[];
+  position_fields: string[];
+  invoice_field_labels: Record<string, string>;
+  position_field_labels: Record<string, string>;
+  invoice_fields_all: string[];
+  position_fields_all: string[];
+}
+
+export const exportSettingsApi = {
+  get: () => apiClient.get<ExportConfig>("/api/settings/export/").then((r) => r.data),
+  update: (data: { invoice_fields: string[]; position_fields: string[] }) =>
+    apiClient.put<ExportConfig>("/api/settings/export/", data).then((r) => r.data),
 };

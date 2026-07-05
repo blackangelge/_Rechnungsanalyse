@@ -32,6 +32,7 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [offset, setOffset]       = useState(0);
   const [deleting, setDeleting]   = useState<number | null>(null);
+  const [restarting, setRestarting] = useState<number | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [workerStatus, setWorkerStatus] = useState<DispatcherStatus | null>(null);
@@ -106,6 +107,20 @@ export default function TasksPage() {
       setActionMsg(`Fehler: ${extractApiError(err)}`);
     } finally {
       setDeleting(null);
+      setTimeout(() => setActionMsg(null), 3000);
+    }
+  };
+
+  const handleRestart = async (taskId: number) => {
+    setRestarting(taskId);
+    try {
+      await tasksApi.restart(taskId);
+      setActionMsg(`Task #${taskId} wurde neu gestartet.`);
+      load();
+    } catch (err) {
+      setActionMsg(`Fehler: ${extractApiError(err)}`);
+    } finally {
+      setRestarting(null);
       setTimeout(() => setActionMsg(null), 3000);
     }
   };
@@ -306,14 +321,26 @@ export default function TasksPage() {
                     {fmtDate(task.updated_at)}
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => handleDeleteOne(task.id)}
-                      disabled={deleting === task.id}
-                      title="Task löschen"
-                      className="rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
-                    >
-                      {deleting === task.id ? "..." : "✕"}
-                    </button>
+                    <div className="flex items-center gap-1">
+                      {(task.status === "completed" || task.status === "failed") && (
+                        <button
+                          onClick={() => handleRestart(task.id)}
+                          disabled={restarting === task.id}
+                          title="Task neu starten"
+                          className="rounded p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-40 transition-colors"
+                        >
+                          {restarting === task.id ? "..." : "↻"}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteOne(task.id)}
+                        disabled={deleting === task.id}
+                        title="Task löschen"
+                        className="rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                      >
+                        {deleting === task.id ? "..." : "✕"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

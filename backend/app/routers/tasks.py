@@ -5,6 +5,7 @@ API-Endpunkte für Workflow-Tasks und Worker-Status.
     GET  /api/tasks/workers     — Worker-Status: Anzahl + Server (Proxy zum Worker-Container)
     POST /api/tasks/pause       — Worker pausieren (Proxy)
     POST /api/tasks/resume      — Worker fortsetzen (Proxy)
+    POST /api/tasks/{id}/restart — Task zurücksetzen auf pending (inkl. Dokument)
     DELETE /api/tasks/{id}      — Einzelnen Task löschen
     DELETE /api/tasks           — Tasks nach Status löschen (bulk)
 
@@ -120,6 +121,40 @@ def list_tasks(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/{task_id}/restart", status_code=200)
+def restart_task(task_id: int, db: Session = Depends(get_db)):
+    """
+    Setzt einen abgeschlossenen oder fehlgeschlagenen Task zurück auf 'pending'.
+    Setzt auch das verknüpfte Dokument zurück auf 'pending'.
+    """
+    task = db.get(WorkflowTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task #{task_id} nicht gefunden")
+    if task.status not in ("completed", "failed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task #{task_id} kann nicht neugestartet werden (Status: {task.status})"
+        )
+
+    # Task zurücksetzen
+    task.status = "pending"
+    task.attempts = 0
+    task.worker_id = None
+    task.locked_at = None
+    task.error = None
+
+    # Verknüpftes Dokument zurücksetzen
+    doc_id = task.payload.get("document_id") if task.payload else None
+    if doc_id is not None:
+        from app.models.document import Document
+        doc = db.get(Document, int(doc_id))
+        if doc is not None:
+            doc.status = "pending"
+
+    db.commit()
+    return {"task_id": task_id, "status": "pending"}
 
 
 @router.delete("/{task_id}", status_code=204)

@@ -23,8 +23,33 @@ router = APIRouter(prefix="/api/vendors", tags=["Lieferanten"])
 
 @router.get("", response_model=list[VendorRead])
 def list_vendors(db: Session = Depends(get_db)):
-    """Gibt alle Lieferanten zurück, nach ID sortiert."""
-    return crud.vendor.get_all(db)
+    """
+    Gibt alle Lieferanten zurück, nach Name sortiert.
+
+    Falls die vendor-Tabelle leer ist (z.B. nach Migration von einer älteren Version),
+    werden Lieferantennamen aus invoice_extractions automatisch in die vendor-Tabelle
+    übertragen (Einmal-Backfill).
+    """
+    from sqlalchemy import distinct as _distinct
+    from app.models.invoice_extraction import InvoiceExtraction as _Ext
+
+    vendors = crud.vendor.get_all(db)
+
+    if not vendors:
+        # Backfill: alle eindeutigen Lieferantennamen aus invoice_extractions übernehmen
+        names = (
+            db.query(_distinct(_Ext.vendor_id))
+            .filter(_Ext.vendor_id.isnot(None), _Ext.vendor_id != "")
+            .all()
+        )
+        for (name,) in names:
+            try:
+                crud.vendor.find_or_create(db, name=name)
+            except Exception:
+                pass
+        vendors = crud.vendor.get_all(db)
+
+    return sorted(vendors, key=lambda v: (v.name or "").lower())
 
 
 @router.get("/{vendor_id}", response_model=VendorRead)
