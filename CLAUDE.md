@@ -8,8 +8,15 @@ Läuft auf einem Synology NAS via Docker Compose (Container Manager GUI — kein
 ```
 Frontend  (Next.js 16, React 19, TypeScript, Tailwind 4)  → Port 3100
 Backend   (FastAPI, Python 3.12, SQLAlchemy 2, Alembic)   → Port 8100
+Worker    (FastAPI, Python 3.12 — KI-Dispatcher)          → intern (Port 8000, kein Host-Zugriff)
 Datenbank (PostgreSQL 16)                                  → intern
 ```
+
+Backend und Worker sind **zwei separate Container** (Docker-Compose-Services `backend` und
+`worker`), teilen sich aber dieselbe Codebasis (`backend/`-Ordner) und dieselbe Python-venv.
+Kommunikation ausschließlich über die gemeinsame Postgres-DB (`workflow_tasks`, `ai_clients`)
+sowie über die Status-/Steuerungs-API des Workers, die das Backend intern per HTTP abfragt
+(`http://worker:8000/...`). Details siehe Abschnitt „Worker-Container" weiter unten.
 
 ### Datenpfade (auf dem NAS-Host)
 
@@ -112,6 +119,49 @@ alembic/
                             # doc_ki_input_tokens, doc_ki_output_tokens, doc_ki_total_duration
                             # auf documents (Fallback-Stats für Nicht-Eingangsrechnungen)
 ```
+
+### Worker-Container (`app/worker/`)
+
+Der KI-Dispatcher läuft **nicht** im Backend-Prozess, sondern in einem eigenen
+Docker-Compose-Service `worker` (siehe `docker-compose.yml`). Beide Container teilen sich
+dieselbe Codebasis (`backend/`-Ordner + venv) — nur der Startbefehl unterscheidet sich.
+
+```
+app/worker/
+├── worker.py            # Dispatcher/Worker/ServerPool/AIServer (Poll-Loop, asyncio.Queue,
+│                        # FOR UPDATE SKIP LOCKED auf workflow_tasks)
+│                        # Dispatcher.paused: bool — wenn True, werden in run() keine neuen
+│                        # Tasks mehr geladen (bereits laufende Tasks werden fertig verarbeitet)
+│                        # build_server_url(ip, port) — freie Funktion, auch von den
+│                        # Status-Routen ohne AIServer-Instanz nutzbar
+├── main.py              # Eigene FastAPI-Instanz für den Worker-Container (uvicorn-Entrypoint:
+│                        # `uvicorn app.worker.main:app --host 0.0.0.0 --port 8000`)
+│                        # lifespan: Thread-Pool-Vergrößerung, wait_for_db(), asyncpg-Pool,
+│                        # AIDispatcherClient, Dispatcher als Hintergrund-Task
+│                        # KEINE Alembic-Migrationen — bleibt Aufgabe des Backend-Containers
+└── routers/
+    └── status.py        # GET /health, GET /status (worker_count, queue_size, servers[],
+                         # paused), POST /pause, POST /resume — intern vom Backend abgefragt
+```
+
+`app/db_wait.py::wait_for_db(database_url)` — gemeinsamer Helfer für die "Warte auf
+PostgreSQL"-Schleife, genutzt von `main.py::_run_migrations` (Backend) und `worker/main.py`
+(Worker), damit beide Container dieselbe Logik verwenden.
+
+**Backend als Proxy:** Das Frontend fragt weiterhin nur das Backend ab
+(`GET /api/logs/worker-stats`, `GET /api/tasks/workers`, `POST /api/tasks/pause`,
+`POST /api/tasks/resume`). Das Backend ruft dafür intern per `httpx` den Worker unter
+`settings.worker_api_url` (Default `http://worker:8000`, Docker-interner Service-Name) auf.
+Ist der Worker-Container gerade nicht erreichbar (Neustart, Deploy), liefern diese Endpunkte
+einen DB-Fallback (`worker_count: 0`, Queue-Länge weiterhin aus `workflow_tasks`) statt eines
+Fehlers, plus `worker_online: false` zur Unterscheidung im Frontend.
+
+**`.ready`-Marker (docker-compose.yml):** Backend und Worker nutzen dieselbe gemountete venv
+(`PYTHON_ENV_PATH`). Damit nicht beide Container beim allerersten Start gleichzeitig
+`python -m venv` / `pip install` gegen denselben Ordner ausführen (Race Condition), erstellt
+das Backend nach erfolgreichem `pip install` die Datei `/venv/.ready`. Der Worker-Container
+wartet in seinem Startbefehl auf diese Datei, bevor er `uvicorn` startet, und installiert
+selbst keine Pakete.
 
 ### Import-Ablauf
 
@@ -618,6 +668,8 @@ Behandelt sowohl `number` als auch Strings wie `"719,99 €"`:
 - **`.next/`-Cache überlebt Container-Neustart (NAS-spezifisch)**: Da `frontend:/app` als Docker-Volume gemountet ist, liegt der Turbopack-Cache unter `frontend/.next/` auf dem NAS-Host und überlebt Neustarts. Inotify funktioniert auf SMB/NFS-Mounts nicht → Turbopack erkennt keine Dateiänderungen → alte Client-Bundles werden weiterhin ausgeliefert. Lösung: `rm -rf /app/.next` am Anfang des Start-Kommandos in `docker-compose.yml` (bereits eingebaut).
 - **HMR WebSocket blockiert (NAS-Hostname)**: Next.js 16 blockiert cross-origin Anfragen zu `/_next/webpack-hmr` wenn der Zugriff über einen Hostnamen erfolgt (z.B. `http://nas:3100`). Symptom im Container-Log: `⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "nas"`. Lösung: `allowedDevOrigins: ["nas", "NAS-IP"]` in `next.config.ts` eintragen (bereits konfiguriert).
 - **Frontend startet nicht nach `&&`-Kette in docker-compose**: Wenn ein Schritt in `cmd1 && cmd2 && cmd3` fehlschlägt, werden alle nachfolgenden Schritte übersprungen. Startup-Kommando verwendet daher `;` als Trenner — jeder Schritt läuft unabhängig. `npm install` Fehler blockieren nicht mehr `npm run dev`.
+- **Worker-Container zeigt kurzzeitig `worker_online: false`**: Normal beim ersten Start oder nach einem Neustart des `worker`-Containers, solange dieser noch hochfährt (asyncpg-Pool aufbauen, `wait_for_db`). Backend liefert in der Zwischenzeit den DB-Fallback (Queue-Länge weiterhin korrekt, `worker_count: 0`). Kein Fehler, kein Eingreifen nötig.
+- **Dispatcher loggt SQL-Fehler direkt nach dem allerersten Start**: Backend und Worker starten parallel; der Worker wartet zwar auf `/venv/.ready` (Pakete installiert), aber nicht auf `alembic upgrade head` (Migrationen). Falls der Dispatcher pollt bevor die Migration durchgelaufen ist, schlägt `_load_servers`/`_load_tasks` kurzzeitig fehl — wird von `Dispatcher.run()` abgefangen und geloggt, kein Crash. Nach der ersten erfolgreichen Migration verschwindet die Meldung von selbst.
 
 ### Wichtige Abhängigkeiten
 

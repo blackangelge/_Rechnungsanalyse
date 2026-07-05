@@ -145,6 +145,15 @@ export default function LogsPage() {
           </div>
         )}
 
+        {/* Warnung: Worker-Container nicht erreichbar */}
+        {workerStats && !workerStats.worker_online && (
+          <div className="mb-4 rounded-lg border border-gray-300 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+            <span className="font-semibold">⚠ Worker-Container nicht erreichbar!</span>{" "}
+            Die Anzeige zu aktiven Workern kann veraltet sein. Warteschlange und
+            Konfigurationen werden weiterhin korrekt aus der Datenbank angezeigt.
+          </div>
+        )}
+
         {/* Warnung: keine KI verfügbar */}
         {noAI && (
           <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  DispatcherStatus,
   WorkflowTask,
   WorkflowTaskListResponse,
   extractApiError,
@@ -33,8 +34,18 @@ export default function TasksPage() {
   const [deleting, setDeleting]   = useState<number | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<DispatcherStatus | null>(null);
+  const [pauseToggling, setPauseToggling] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadWorkerStatus = useCallback(async () => {
+    try {
+      setWorkerStatus(await tasksApi.getDispatcherStatus());
+    } catch {
+      // Worker-Status ist nur ein Zusatzinfo-Panel — Fehler hier nicht als Seitenfehler zeigen.
+    }
+  }, []);
 
   const load = useCallback(async (currentOffset = offset, currentStatus = statusFilter) => {
     setLoading(true);
@@ -55,9 +66,24 @@ export default function TasksPage() {
 
   useEffect(() => {
     load();
-    intervalRef.current = setInterval(() => load(), 10_000);
+    loadWorkerStatus();
+    intervalRef.current = setInterval(() => { load(); loadWorkerStatus(); }, 10_000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [load]);
+  }, [load, loadWorkerStatus]);
+
+  const handleTogglePause = async () => {
+    setPauseToggling(true);
+    try {
+      const result = workerStatus?.paused ? await tasksApi.resume() : await tasksApi.pause();
+      setWorkerStatus(result);
+      setActionMsg(result.paused ? "Worker pausiert." : "Worker fortgesetzt.");
+    } catch (err) {
+      setActionMsg(`Fehler: ${extractApiError(err)}`);
+    } finally {
+      setPauseToggling(false);
+      setTimeout(() => setActionMsg(null), 3000);
+    }
+  };
 
   const handleStatusChange = (s: string) => {
     setStatusFilter(s);
@@ -122,6 +148,32 @@ export default function TasksPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-gray-900">Workflow-Tasks</h1>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Worker-Status */}
+          {workerStatus && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                !workerStatus.worker_online
+                  ? "bg-gray-200 text-gray-600"
+                  : workerStatus.paused
+                  ? "bg-orange-100 text-orange-700"
+                  : "bg-green-100 text-green-700"
+              }`}
+              title={`${workerStatus.worker_count} Worker aktiv, ${workerStatus.queue_size} in Warteschlange`}
+            >
+              {!workerStatus.worker_online
+                ? "Worker offline"
+                : workerStatus.paused
+                ? "Worker pausiert"
+                : `${workerStatus.worker_count} Worker aktiv`}
+            </span>
+          )}
+          <button
+            onClick={handleTogglePause}
+            disabled={pauseToggling || !workerStatus?.worker_online}
+            className="rounded border border-orange-300 px-3 py-1.5 text-sm font-medium text-orange-700 hover:bg-orange-50 disabled:opacity-50 transition-colors"
+          >
+            {workerStatus?.paused ? "▶ Fortsetzen" : "⏸ Pausieren"}
+          </button>
           {/* Bulk-Delete */}
           <button
             onClick={() => handleBulkDelete("completed")}

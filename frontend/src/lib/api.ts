@@ -507,6 +507,7 @@ export interface WorkerStats {
   in_progress: number;
   failed_tasks: number;
   no_ai_available: boolean;
+  worker_online: boolean;
   ai_configs: WorkerAIConfig[];
 }
 
@@ -552,6 +553,8 @@ export interface DispatcherStatus {
   worker_count: number;
   queue_size: number;
   servers: DispatcherServer[];
+  paused: boolean | null;
+  worker_online: boolean;
 }
 
 export const tasksApi = {
@@ -562,6 +565,12 @@ export const tasksApi = {
 
   getDispatcherStatus: () =>
     apiClient.get<DispatcherStatus>("/api/tasks/workers/").then((r) => r.data),
+
+  pause: () =>
+    apiClient.post<DispatcherStatus>("/api/tasks/pause/").then((r) => r.data),
+
+  resume: () =>
+    apiClient.post<DispatcherStatus>("/api/tasks/resume/").then((r) => r.data),
 
   deleteOne: (taskId: number) =>
     apiClient.delete(`/api/tasks/${taskId}/`),

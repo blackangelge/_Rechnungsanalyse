@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Ordner, in dem importierte PDFs dauerhaft gespeichert werden (Ziel)
     storage_path: str = "/storage"
 
+    # Basis-URL des Worker-Containers (Docker-interner Service-Name), den das
+    # Backend für Status-/Pause-/Resume-Proxy-Endpunkte anfragt
+    worker_api_url: str = "http://worker:8000"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

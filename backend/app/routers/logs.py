@@ -4,17 +4,25 @@ Router für Log- und Statistik-Endpunkte.
 Endpunkte:
   GET /api/logs/ki-stats      — aggregierte KI-Tokenstatistiken über alle Analysen
   GET /api/logs/worker-stats  — aktueller Worker-Pool-Status und Queue-Länge
+
+worker-stats fragt worker_count/max_capacity per HTTP beim Worker-Container ab
+(settings.worker_api_url) — der Dispatcher läuft dort, nicht mehr im Backend-Prozess.
 """
 
+import logging
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, Request
+import httpx
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 
 router = APIRouter(prefix="/api/logs", tags=["Logs"])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/ki-stats")
@@ -50,7 +58,7 @@ def get_ki_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/worker-stats")
-def get_worker_stats(request: Request, db: Session = Depends(get_db)):
+async def get_worker_stats(db: Session = Depends(get_db)):
     """
     Liefert den aktuellen Status des Worker-Pools:
     - Anzahl gestarteter Worker
@@ -61,10 +69,24 @@ def get_worker_stats(request: Request, db: Session = Depends(get_db)):
     from app import crud
     from app.models.ai_clients import AIClients
 
-    # Dispatcher-Infos aus app.state
-    dispatcher = getattr(request.app.state, "dispatcher", None)
-    worker_count = len(dispatcher.workers) if dispatcher else 0
-    max_capacity = dispatcher.pool.total_capacity() if dispatcher else 0
+    # Live-Status per HTTP vom Worker-Container abfragen (Dispatcher läuft dort).
+    worker_count = 0
+    max_capacity = 0
+    worker_online = False
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{settings.worker_api_url}/status")
+            resp.raise_for_status()
+            data = resp.json()
+            worker_count = data.get("worker_count", 0)
+            max_capacity = sum(
+                s.get("parallel_request", 0)
+                for s in data.get("servers", [])
+                if s.get("active") and not s.get("is_down")
+            )
+            worker_online = True
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Worker-Container nicht erreichbar (/status): %s", exc)
 
     # Warteschlange
     queue_length = db.execute(
@@ -111,5 +133,6 @@ def get_worker_stats(request: Request, db: Session = Depends(get_db)):
         "in_progress":        int(in_progress),
         "failed_tasks":       int(failed),
         "no_ai_available":    no_ai_available,
+        "worker_online":      worker_online,
         "ai_configs":         configs,
     }
