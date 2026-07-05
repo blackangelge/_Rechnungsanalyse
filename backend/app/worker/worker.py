@@ -84,6 +84,25 @@ class AIClient(Protocol):
 # ══════════════════════════════════════════════════════════════════════════════
 #  DATENKLASSEN
 # ══════════════════════════════════════════════════════════════════════════════
+def build_server_url(ip_address: str, port: str) -> str:
+    """Setzt die Basis-URL aus IP + Port zusammen.
+
+    Falls ``ip_address`` bereits ein Schema enthält (z. B.
+    ``https://api.openai.com``), wird der Port nicht angehängt,
+    sofern er nicht schon Teil der Adresse ist.
+
+    Freistehende Funktion (statt Methode), damit sie auch ohne
+    ``AIServer``-Instanz genutzt werden kann (z. B. von den
+    Status-Routen des Worker-Containers).
+    """
+    if ip_address.startswith(("http://", "https://")):
+        base = ip_address.rstrip("/")
+        if port and ":" not in base.split("//", 1)[1]:
+            base = f"{base}:{port}"
+        return base
+    return f"http://{ip_address}:{port}"
+
+
 @dataclass
 class AIServer:
     """Spiegelt einen Eintrag aus der ``ai_servers``-Tabelle.
@@ -113,18 +132,8 @@ class AIServer:
 
     @property
     def url(self) -> str:
-        """Setzt die Basis-URL aus IP + Port zusammen.
-
-        Falls ``ip_address`` bereits ein Schema enthält (z. B.
-        ``https://api.openai.com``), wird der Port nicht angehängt,
-        sofern er nicht schon Teil der Adresse ist.
-        """
-        if self.ip_address.startswith(("http://", "https://")):
-            base = self.ip_address.rstrip("/")
-            if self.port and ":" not in base.split("//", 1)[1]:
-                base = f"{base}:{self.port}"
-            return base
-        return f"http://{self.ip_address}:{self.port}"
+        """Setzt die Basis-URL aus IP + Port zusammen (siehe ``build_server_url``)."""
+        return build_server_url(self.ip_address, self.port)
 
     @property
     def is_down(self) -> bool:
@@ -468,6 +477,11 @@ class Dispatcher:
         self.workers: list[Worker] = []
         self._counter = 0
 
+        #: Wenn True, werden keine neuen Tasks aus der DB geladen (siehe ``run()``).
+        #: Bereits geladene/in Bearbeitung befindliche Tasks laufen weiter — Pause
+        #: heißt "keine neue Arbeit annehmen", kein hartes Stoppen laufender Worker.
+        self.paused: bool = False
+
     # ──────────────────────────────────────────────────────────────────
     async def _load_servers(self) -> list[AIServer]:
         """Lädt alle aktiven Server aus der DB.
@@ -622,17 +636,18 @@ class Dispatcher:
                 # 2. Worker-Anzahl an Kapazität anpassen
                 await self._scale_workers(self.pool.total_capacity())
 
-                # 3. Neue Tasks in Queue legen
-                tasks = await self._load_tasks()
-                for t in tasks:
-                    await self.queue.put(t)
+                # 3. Neue Tasks in Queue legen (übersprungen wenn pausiert)
+                if not self.paused:
+                    tasks = await self._load_tasks()
+                    for t in tasks:
+                        await self.queue.put(t)
 
-                if tasks:
-                    log.info(
-                        f"{len(tasks)} neue Tasks, "
-                        f"{len(self.workers)} Worker, "
-                        f"Queue: {self.queue.qsize()}"
-                    )
+                    if tasks:
+                        log.info(
+                            f"{len(tasks)} neue Tasks, "
+                            f"{len(self.workers)} Worker, "
+                            f"Queue: {self.queue.qsize()}"
+                        )
 
             except Exception:
                 log.exception("Fehler im Dispatcher-Loop")

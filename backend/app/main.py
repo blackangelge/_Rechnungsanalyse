@@ -13,18 +13,16 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import asyncpg
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.db_wait import wait_for_db
 from app.routers import ai_clients
 
-#WorkerPool importieren, damit er beim Starten des Containers automatisch startet
-#from app.worker.runner import WorkerPool
-
-from app.worker.worker import Dispatcher
+# Der KI-Dispatcher (app.worker.worker.Dispatcher) läuft seit der Container-Trennung
+# im eigenständigen Worker-Container (app/worker/main.py) — nicht mehr hier.
 
 # ── Logging konfigurieren ────────────────────────────────────────────────────
 # Einheitliches Format für Container Manager Protokoll-Ansicht
@@ -52,20 +50,10 @@ def _run_migrations() -> None:
     Stand ist. Falls ja, wird die Migration übersprungen — kein Alembic-Lock nötig.
     Nur bei tatsächlich ausstehenden Migrationen wird alembic upgrade aufgerufen.
     """
-    import time
     import psycopg2
 
     # Auf PostgreSQL warten — bei frischer DB dauert initdb 10–30 s
-    for attempt in range(30):
-        try:
-            conn = psycopg2.connect(settings.database_url, connect_timeout=5)
-            conn.close()
-            logger.info("✓ Datenbank erreichbar")
-            break
-        except Exception as exc:
-            logger.info("Warte auf Datenbank... (Versuch %d/30): %s", attempt + 1, exc)
-            time.sleep(2)
-    else:
+    if not wait_for_db(settings.database_url):
         logger.error("✗ Datenbank nach 60 s nicht erreichbar — Migration übersprungen")
         return
 
@@ -155,52 +143,8 @@ async def lifespan(app: FastAPI):
     except asyncio.TimeoutError:
         logger.error("✗ Migration-Timeout nach 30 s — Backend startet trotzdem")
     logger.info("✓ Migration bereit")
-
-    # asyncpg-Pool für den Dispatcher erstellen.
-    # JSONB-Codec registrieren: asyncpg gibt JSONB sonst als rohen JSON-String
-    # zurück (kein automatisches dict-Parsing ohne Codec-Registrierung).
-    import json as _json
-
-    async def _init_conn(conn: asyncpg.Connection) -> None:
-        await conn.set_type_codec(
-            "jsonb", schema="pg_catalog",
-            encoder=_json.dumps, decoder=_json.loads,
-        )
-        await conn.set_type_codec(
-            "json", schema="pg_catalog",
-            encoder=_json.dumps, decoder=_json.loads,
-        )
-
-    db_pool = await asyncpg.create_pool(
-        settings.database_url, min_size=2, max_size=10, init=_init_conn,
-    )
-    logger.info("✓ DB-Pool bereit")
-
-    from app.services.ai_dispatcher_client import AIDispatcherClient
-    ai_client = AIDispatcherClient()
-
-    # Dispatcher erstellen und als Background-Task starten.
-    # max_workers_cap=2: Maximal 2 parallele Dokument-Analysen, unabhängig davon
-    # wie viele Server-Slots konfiguriert sind. Verhindert, dass 5+ gleichzeitige
-    # KI-HTTP-Calls (à 300s) den Thread-Pool erschöpfen. Wert kann erhöht werden
-    # wenn die KI-Server schnell genug antworten.
-    dispatcher = Dispatcher(db_pool=db_pool, ai_client=ai_client, poll_interval=20, max_workers_cap=2)
-    dispatcher_task = asyncio.create_task(dispatcher.run())
-    app.state.dispatcher = dispatcher
-
-    logger.info("✓ Dispatcher läuft im Hintergrund (Polling alle 20s, max 2 parallele Worker)")
     logger.info("✓ Backend bereit")
-    try:
-        yield
-    finally:
-        await dispatcher.shutdown()
-        try:
-            await asyncio.wait_for(dispatcher_task, timeout=15.0)
-        except asyncio.TimeoutError:
-            logger.warning("Dispatcher-Task antwortet nicht — wird abgebrochen")
-            dispatcher_task.cancel()
-        await db_pool.close()
-            
+    yield
     logger.info("=" * 60)
     logger.info("  Rechnungsanalyse Backend wird beendet")
     logger.info("=" * 60)
