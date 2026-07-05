@@ -11,7 +11,9 @@ Endpunkte:
 import asyncio
 import io
 import logging
+from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -19,7 +21,12 @@ from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import SessionLocal, get_db
-from app.schemas.import_batch import ImportBatchCreate, ImportBatchRead, ImportBatchWithDocuments
+from app.schemas.import_batch import (
+    ImportBatchAutomationUpdate,
+    ImportBatchCreate,
+    ImportBatchRead,
+    ImportBatchWithDocuments,
+)
 from app.services.import_service import (
     _run_import_io,
     list_pdf_files,
@@ -153,7 +160,13 @@ def _sync_delete_source_files(import_folder: str, original_names: list[str]) -> 
     """
     Sync: Löscht Quelldateien aus dem Import-Ordner.
     Gibt (deleted, failed) zurück.
+
+    Ist der Import-Unterordner danach leer, wird er ebenfalls entfernt (analog zum
+    Verhalten beim Batch-Löschen in delete_import()) — außer es handelt sich um
+    IMPORT_BASE_PATH selbst (kein Unterordner angegeben), das bleibt immer erhalten.
     """
+    from app.config import settings as _settings
+
     folder = Path(import_folder)
     deleted, failed = 0, 0
     logger.info(
@@ -170,6 +183,17 @@ def _sync_delete_source_files(import_folder: str, original_names: list[str]) -> 
         except Exception as exc:
             failed += 1
             logger.error("Konnte Quelldatei nicht löschen %s: %s", src, exc)
+
+    # Leeren Import-Unterordner entfernen (nie IMPORT_BASE_PATH selbst löschen)
+    try:
+        base = Path(_settings.import_base_path).resolve()
+        resolved = folder.resolve()
+        if resolved != base and resolved.exists() and not any(resolved.iterdir()):
+            resolved.rmdir()
+            logger.info("Leerer Import-Ordner gelöscht: %s", resolved)
+    except Exception as exc:
+        logger.warning("Konnte leeren Import-Ordner nicht löschen %s: %s", folder, exc)
+
     return deleted, failed
 
 
@@ -357,6 +381,36 @@ def get_import_status(batch_id: int, db: Session = Depends(get_db)):
     return result
 
 
+@router.patch("/{batch_id}/automation", response_model=ImportBatchRead)
+def update_import_automation(
+    batch_id: int,
+    payload: ImportBatchAutomationUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    Aktiviert/deaktiviert Ordner-Sync und automatischen Export nachträglich für einen
+    bestehenden Import-Batch (bei der Erstellung gesetzte Werte sind kein Dauerzustand).
+    Nur übergebene Felder werden geändert (None = unverändert lassen).
+    """
+    from app.models.import_batch import ImportBatch as _Batch
+
+    batch = db.get(_Batch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
+
+    if payload.folder_sync is not None:
+        batch.folder_sync = payload.folder_sync
+    if payload.auto_export is not None:
+        batch.auto_export = payload.auto_export
+
+    db.commit()
+    db.refresh(batch)
+
+    result = ImportBatchRead.model_validate(batch)
+    result.total_documents = len(batch.documents)
+    return result
+
+
 @router.get("/{batch_id}/ki-stats")
 def get_batch_ki_stats(batch_id: int, db: Session = Depends(get_db)):
     """Aggregierte KI-Statistiken für alle Dokumente eines Import-Batches."""
@@ -366,7 +420,7 @@ def get_batch_ki_stats(batch_id: int, db: Session = Depends(get_db)):
 
     row = (
         db.query(
-            sqlfunc.sum(_TC.token_count).label("total_tokens"),
+            sqlfunc.sum(_TC.input_token_count + _TC.output_token_count).label("total_tokens"),
             sqlfunc.sum(_TC.time_spent_seconds).label("total_duration_seconds"),
         )
         .join(_Doc, _TC.document_id == _Doc.id)
@@ -441,8 +495,53 @@ def delete_import(batch_id: int, db: Session = Depends(get_db)):
 
 # ─── GET /api/imports/{batch_id}/export ──────────────────────────────────────
 
+def _get_export_config_fields(db: Session) -> tuple[list[str], list[str]]:
+    """Liest die aktive Spaltenkonfiguration (ExportConfig, Singleton id=1)."""
+    from app.models.export_config import (
+        ExportConfig as _ExportConfig,
+        INVOICE_FIELDS_DEFAULT,
+        POSITION_FIELDS_DEFAULT,
+    )
+
+    cfg = db.get(_ExportConfig, 1)
+    invoice_fields  = list(cfg.invoice_fields)  if cfg and cfg.invoice_fields  else list(INVOICE_FIELDS_DEFAULT)
+    position_fields = list(cfg.position_fields) if cfg and cfg.position_fields else list(POSITION_FIELDS_DEFAULT)
+    return invoice_fields, position_fields
+
+
+def _query_batch_documents(db: Session, batch_id: int, since=None) -> list:
+    """
+    Lädt alle nicht-gelöschten Dokumente eines Batches (inkl. Extraktion + Positionen).
+
+    since: falls gesetzt, werden nur abgeschlossene Dokumente zurückgegeben, die NACH
+    diesem Zeitpunkt zuletzt geändert wurden (document.updated_at > since) — Basis für
+    den inkrementellen Export ("/export/new" und den automatischen Wochen-Export).
+    """
+    from sqlalchemy.orm import joinedload as _jl
+    from app.models.document import Document as _Doc
+
+    query = (
+        db.query(_Doc)
+        .options(_jl(_Doc.extraction), _jl(_Doc.order_positions))
+        .filter(_Doc.batch_id == batch_id, _Doc.soft_deleted == False)  # noqa: E712
+    )
+    if since is not None:
+        query = query.filter(_Doc.status == "done", _Doc.updated_at > since)
+    return query.order_by(_Doc.id).all()
+
+
 @router.get("/{batch_id}/export")
-def export_batch_excel(batch_id: int, db: Session = Depends(get_db)):
+def export_batch_excel(
+    batch_id: int,
+    date_from: date | None = Query(None, description="Nur Dokumente mit Datum >= date_from (ISO YYYY-MM-DD)"),
+    date_to: date | None = Query(None, description="Nur Dokumente mit Datum <= date_to (ISO YYYY-MM-DD)"),
+    date_field: Literal["invoice_date", "import_date"] = Query(
+        "invoice_date",
+        description="Welches Datum für date_from/date_to verwendet wird: "
+                     "'invoice_date' (Rechnungsdatum) oder 'import_date' (Importdatum)",
+    ),
+    db: Session = Depends(get_db),
+):
     """
     Exportiert alle nicht-gelöschten Dokumente eines Import-Batches als Excel-Datei.
 
@@ -451,38 +550,86 @@ def export_batch_excel(batch_id: int, db: Session = Depends(get_db)):
 
     Welche Spalten erscheinen, wird durch die ExportConfig (Singleton id=1) gesteuert.
     Fehlt der Eintrag, werden alle Felder ausgegeben.
+
+    Optionale Filter date_from/date_to schränken die Dokumente ein. date_field legt fest,
+    welches Datum geprüft wird:
+      - "invoice_date" (Standard): Rechnungsdatum (InvoiceExtraction.invoice_date).
+        Dokumente ohne Rechnungsdatum (z.B. Nicht-Eingangsrechnungen) werden dann
+        ausgeschlossen, da ihr Datum nicht bestimmbar ist.
+      - "import_date": Importdatum (Document.created_at, in lokaler Zeitzone).
     """
-    from sqlalchemy.orm import joinedload as _jl
-    from app.models.document import Document as _Doc
+    from zoneinfo import ZoneInfo
+
+    from app.config import settings as _settings
     from app.models.import_batch import ImportBatch as _Batch
-    from app.models.export_config import (
-        ExportConfig as _ExportConfig,
-        INVOICE_FIELDS_DEFAULT,
-        POSITION_FIELDS_DEFAULT,
-    )
 
     batch = db.get(_Batch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
 
-    docs = (
-        db.query(_Doc)
-        .options(
-            _jl(_Doc.extraction),
-            _jl(_Doc.order_positions),
-        )
-        .filter(_Doc.batch_id == batch_id, _Doc.soft_deleted == False)  # noqa: E712
-        .order_by(_Doc.id)
-        .all()
-    )
+    docs = _query_batch_documents(db, batch_id)
 
-    cfg = db.get(_ExportConfig, 1)
-    invoice_fields  = list(cfg.invoice_fields)  if cfg and cfg.invoice_fields  else list(INVOICE_FIELDS_DEFAULT)
-    position_fields = list(cfg.position_fields) if cfg and cfg.position_fields else list(POSITION_FIELDS_DEFAULT)
+    if date_from or date_to:
+        local_tz = ZoneInfo(_settings.timezone)
 
+        def _doc_date(doc) -> date | None:
+            if date_field == "import_date":
+                return doc.created_at.astimezone(local_tz).date() if doc.created_at else None
+            return doc.extraction.invoice_date if doc.extraction else None
+
+        def _in_date_range(doc) -> bool:
+            d = _doc_date(doc)
+            if d is None:
+                return False
+            if date_from and d < date_from:
+                return False
+            if date_to and d > date_to:
+                return False
+            return True
+        docs = [d for d in docs if _in_date_range(d)]
+
+    invoice_fields, position_fields = _get_export_config_fields(db)
     excel_bytes = _build_export_excel(batch, docs, invoice_fields, position_fields)
     safe = f"{batch.company_name}_{batch.year}".replace(" ", "_")
+    if date_from or date_to:
+        safe += f"_{date_from or 'anfang'}_bis_{date_to or 'ende'}"
     filename = f"Export_{safe}.xlsx"
+
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{batch_id}/export/new")
+def export_batch_excel_incremental(batch_id: int, db: Session = Depends(get_db)):
+    """
+    Exportiert nur Dokumente, die seit dem letzten Abruf fertig analysiert wurden.
+
+    Teilt sich last_exported_at mit dem automatischen Wochen-Export
+    (app/worker/export_schedule.py) — ein gemeinsamer Zähler, egal ob manuell oder
+    automatisch ausgelöst. Noch nie exportiert (last_exported_at ist None) → alle
+    abgeschlossenen Dokumente gelten als neu. Aktualisiert last_exported_at danach,
+    auch wenn keine neuen Dokumente gefunden wurden (leere Excel mit nur Kopfzeilen).
+    """
+    from datetime import datetime, timezone
+
+    from app.models.import_batch import ImportBatch as _Batch
+
+    batch = db.get(_Batch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
+
+    docs = _query_batch_documents(db, batch_id, since=batch.last_exported_at)
+    invoice_fields, position_fields = _get_export_config_fields(db)
+    excel_bytes = _build_export_excel(batch, docs, invoice_fields, position_fields)
+
+    batch.last_exported_at = datetime.now(timezone.utc)
+    db.commit()
+
+    safe = f"{batch.company_name}_{batch.year}".replace(" ", "_")
+    filename = f"Export_{safe}_neu.xlsx"
 
     return StreamingResponse(
         io.BytesIO(excel_bytes),
@@ -504,10 +651,15 @@ def _build_export_excel(
     ExportConfig — nur diese Spalten werden ausgegeben.
     """
     import json as _json
+    from zoneinfo import ZoneInfo
 
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
+
+    from app.config import settings as _settings
+
+    _local_tz = ZoneInfo(_settings.timezone)
 
     wb = Workbook()
 
@@ -543,7 +695,13 @@ def _build_export_excel(
         return float(val) if val is not None else None
 
     def _dt(val):
-        return val.replace(tzinfo=None) if val and getattr(val, "tzinfo", None) else val
+        """Wandelt einen UTC-Zeitstempel in lokale Zeit um (für Excel-Anzeige ohne tzinfo)."""
+        if val is None:
+            return None
+        if getattr(val, "tzinfo", None):
+            val = val.astimezone(_local_tz)
+            return val.replace(tzinfo=None)
+        return val
 
     def _parse_raw(raw_response) -> dict:
         if not raw_response:

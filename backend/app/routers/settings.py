@@ -5,6 +5,8 @@ Endpunkte unter /api/settings:
   GET  /api/settings/paths               — Import- und Speicherpfade anzeigen
   GET  /api/settings/image-conversion    — Bildkonvertierungseinstellungen abrufen
   PUT  /api/settings/image-conversion    — Bildkonvertierungseinstellungen aktualisieren
+  GET  /api/settings/automation          — Ordner-Sync-Intervall + Export-Zeitplan abrufen
+  PUT  /api/settings/automation          — Ordner-Sync-Intervall + Export-Zeitplan aktualisieren
   GET  /api/settings/system-prompts      — alle Systemprompts auflisten
   POST /api/settings/system-prompts      — neuen Systemprompt anlegen
   PUT  /api/settings/system-prompts/{id} — Systemprompt aktualisieren
@@ -23,6 +25,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.config import settings
 from app.database import get_db
+from app.schemas.automation_settings import AutomationSettingsRead, AutomationSettingsUpdate
 from app.schemas.image_settings import ImageSettingsRead, ImageSettingsUpdate
 from app.schemas.system_prompt import SystemPromptCreate, SystemPromptRead, SystemPromptUpdate
 
@@ -74,6 +77,23 @@ def get_image_settings(db: Session = Depends(get_db)):
 def update_image_settings(payload: ImageSettingsUpdate, db: Session = Depends(get_db)):
     """Aktualisiert die Bildkonvertierungseinstellungen (DPI, Format, Qualität, Graustufen)."""
     return crud.image_settings.update(db, payload)
+
+
+@router.get("/automation", response_model=AutomationSettingsRead)
+def get_automation_settings(db: Session = Depends(get_db)):
+    """
+    Gibt die aktuellen Automatisierungseinstellungen zurück (erstellt Singleton
+    falls nicht vorhanden). Steuert app/worker/folder_sync.py und
+    app/worker/export_schedule.py — Änderungen wirken beim nächsten Prüfzyklus
+    des Worker-Containers, ohne Neustart nötig.
+    """
+    return crud.automation_settings.get_or_create(db)
+
+
+@router.put("/automation", response_model=AutomationSettingsRead)
+def update_automation_settings(payload: AutomationSettingsUpdate, db: Session = Depends(get_db)):
+    """Aktualisiert Ordner-Sync-Intervall und Export-Zeitplan (Wochentag/Uhrzeit)."""
+    return crud.automation_settings.update(db, payload)
 
 
 # ── Systemprompts ─────────────────────────────────────────────────────────────

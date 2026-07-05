@@ -21,6 +21,7 @@ const SETTINGS_LINKS = [
   { href: "/settings/prompts",    label: "Systemprompts" },
   { href: "/settings/image",      label: "Bildeinstellungen" },
   { href: "/settings/export",     label: "Export-Einstellungen" },
+  { href: "/settings/automation", label: "Automatisierung" },
   { href: "/settings/backup",     label: "Backups / Wiederherstellung" },
 ];
 

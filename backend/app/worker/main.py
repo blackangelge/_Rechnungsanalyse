@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.db_wait import wait_for_db
 from app.services.ai_dispatcher_client import AIDispatcherClient
+from app.worker import export_schedule, folder_sync
 from app.worker.worker import Dispatcher
 
 logging.basicConfig(
@@ -78,7 +79,19 @@ async def lifespan(app: FastAPI):
     dispatcher_task = asyncio.create_task(dispatcher.run())
     app.state.dispatcher = dispatcher
 
+    # Ordner-Sync + Export-Zeitplan: eigene Hintergrund-Loops, unabhängig vom
+    # Dispatcher (siehe app/worker/folder_sync.py, app/worker/export_schedule.py).
+    # Eigene stop_events statt Task-Cancel für sauberes, sofortiges Beenden ohne
+    # das volle Poll-Intervall abzuwarten.
+    folder_sync_stop = asyncio.Event()
+    folder_sync_task = asyncio.create_task(folder_sync.run(folder_sync_stop))
+
+    export_schedule_stop = asyncio.Event()
+    export_schedule_task = asyncio.create_task(export_schedule.run(export_schedule_stop))
+
     logger.info("✓ Dispatcher läuft (Polling alle 20s, max 2 parallele Worker)")
+    logger.info("✓ Ordner-Sync-Loop gestartet")
+    logger.info("✓ Export-Zeitplan-Loop gestartet")
     logger.info("✓ Worker bereit")
     try:
         yield
@@ -89,6 +102,21 @@ async def lifespan(app: FastAPI):
         except asyncio.TimeoutError:
             logger.warning("Dispatcher-Task antwortet nicht — wird abgebrochen")
             dispatcher_task.cancel()
+
+        folder_sync_stop.set()
+        try:
+            await asyncio.wait_for(folder_sync_task, timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning("Ordner-Sync-Task antwortet nicht — wird abgebrochen")
+            folder_sync_task.cancel()
+
+        export_schedule_stop.set()
+        try:
+            await asyncio.wait_for(export_schedule_task, timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning("Export-Zeitplan-Task antwortet nicht — wird abgebrochen")
+            export_schedule_task.cancel()
+
         await db_pool.close()
 
     logger.info("=" * 60)

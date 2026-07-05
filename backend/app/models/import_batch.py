@@ -39,6 +39,13 @@ class ImportBatch(Base):
     # pending | running | done | error
     status: Mapped[str] = mapped_column(String(50), default="pending", server_default="pending", nullable=False)
     folder_sync: Mapped[bool | None] = mapped_column(Boolean, default=False, server_default="false", nullable=True)  # Ordner-Sync aktiv
+    # Zeitstempel der letzten Ordner-Sync-Prüfung (app/worker/folder_sync.py). None = noch nie geprüft.
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Opt-in: wöchentlicher automatischer Excel-Export für diesen Batch (app/worker/export_schedule.py)
+    auto_export: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # Gemeinsamer Zähler für manuellen ("/export/new") und automatischen Export.
+    # None = noch nie exportiert → beim nächsten inkrementellen Export gelten alle Dokumente als neu.
+    last_exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)   # Zeitstempel Import-Start
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Zeitstempel Import-Ende
     created_at: Mapped[datetime] = mapped_column(

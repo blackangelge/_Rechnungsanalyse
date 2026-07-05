@@ -58,11 +58,17 @@ class Document(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Zeitpunkt der letzten Änderung (v.a. Status-Übergänge wie processing→done).
+    # Wichtig für inkrementelle Exports: created_at ist der Import-Zeitpunkt, nicht
+    # der Zeitpunkt, an dem die KI-Analyse abgeschlossen wurde.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
     # ── Relationen ────────────────────────────────────────────────────────────
     batch: Mapped["ImportBatch"] = relationship("ImportBatch", back_populates="documents")  # noqa: F821
     extraction: Mapped["InvoiceExtraction | None"] = relationship(  # noqa: F821
-        "InvoiceExtraction", back_populates="document", uselist=False
+        "InvoiceExtraction", back_populates="document", uselist=False, cascade="all, delete-orphan"
     )
     order_positions: Mapped[list["OrderPosition"]] = relationship(  # noqa: F821
         "OrderPosition", back_populates="document", cascade="all, delete-orphan"

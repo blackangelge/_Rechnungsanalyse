@@ -47,6 +47,7 @@ export default function ImportForm() {
   const [deleteSourceFiles, setDeleteSourceFiles] = useState(false);
   const [folderSync, setFolderSync] = useState(false);
   const [analyzeAfterImport, setAnalyzeAfterImport] = useState(false);
+  const [autoExport, setAutoExport] = useState(false);
 
   // KI-Konfigurationen (nur für canAnalyze-Prüfung)
   const [aiConfigs, setAiConfigs] = useState<AIConfig[]>([]);
@@ -98,6 +99,7 @@ export default function ImportForm() {
         folder_sync: folderSync,
         analyze_after_import: analyzeAfterImport && canAnalyze,
         delete_source_files: deleteSourceFiles,
+        auto_export: autoExport,
       });
       router.push(`/imports/${batch.id}`);
     } catch (err: unknown) {
@@ -246,6 +248,23 @@ export default function ImportForm() {
                 Nach dem Import wird automatisch die KI-Analyse für alle Dokumente gestartet.
               </p>
             )}
+          </div>
+        </label>
+
+        {/* Automatischer Export (unabhängig von Ordner-Sync) */}
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={autoExport}
+            onChange={(e) => setAutoExport(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+          />
+          <div>
+            <span className="text-sm font-medium text-gray-800">Automatischer Export</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Erzeugt wöchentlich (Zeitplan unter Einstellungen → Automatisierung) automatisch
+              eine Excel-Datei mit den seit dem letzten Export neu verarbeiteten Belegen.
+            </p>
           </div>
         </label>
       </div>

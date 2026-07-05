@@ -39,6 +39,11 @@ export default function ImportDetailPage() {
   // Polling-Timer
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Datumsfilter für den Excel-Export (von/bis, optional) + welches Datum geprüft wird
+  const [exportDateFrom, setExportDateFrom] = useState("");
+  const [exportDateTo, setExportDateTo] = useState("");
+  const [exportDateField, setExportDateField] = useState<"invoice_date" | "import_date">("invoice_date");
+
   /** Nur Batch-Metadaten laden (schnell, kein JOIN über alle Dokumente) */
   const loadMeta = useCallback(async () => {
     try {
@@ -146,6 +151,19 @@ export default function ImportDetailPage() {
     loadDocuments();
   }, [loadDocuments]);
 
+  /** Ordner-Sync bzw. automatischen Export nachträglich umschalten */
+  const handleToggleAutomation = useCallback(
+    async (field: "folder_sync" | "auto_export", value: boolean) => {
+      try {
+        const updated = await importsApi.updateAutomation(batchId, { [field]: value });
+        setBatch(updated);
+      } catch {
+        setError("Einstellung konnte nicht gespeichert werden");
+      }
+    },
+    [batchId]
+  );
+
   if (metaLoading) {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-gray-500">
@@ -162,6 +180,12 @@ export default function ImportDetailPage() {
 
   const isActive = batch.status === "running" || batch.status === "pending";
 
+  const exportParams = new URLSearchParams();
+  if (exportDateFrom) exportParams.set("date_from", exportDateFrom);
+  if (exportDateTo) exportParams.set("date_to", exportDateTo);
+  if (exportDateFrom || exportDateTo) exportParams.set("date_field", exportDateField);
+  const exportHref = `/api/imports/${batchId}/export/${exportParams.toString() ? `?${exportParams.toString()}` : ""}`;
+
   return (
     <div className="space-y-6">
       {/* Kopfzeile */}
@@ -175,6 +199,34 @@ export default function ImportDetailPage() {
             <> · <span className="italic">{batch.comment}</span></>
           )}
         </p>
+        <div className="mt-2 flex flex-wrap items-center gap-4 text-sm">
+          <label className="flex items-center gap-1.5 text-gray-600">
+            <input
+              type="checkbox"
+              checked={!!batch.folder_sync}
+              onChange={(e) => handleToggleAutomation("folder_sync", e.target.checked)}
+            />
+            Ordner-Sync
+            {batch.folder_sync && batch.last_synced_at && (
+              <span className="text-xs text-gray-400">
+                (zuletzt geprüft: {new Date(batch.last_synced_at).toLocaleString("de-DE")})
+              </span>
+            )}
+          </label>
+          <label className="flex items-center gap-1.5 text-gray-600">
+            <input
+              type="checkbox"
+              checked={!!batch.auto_export}
+              onChange={(e) => handleToggleAutomation("auto_export", e.target.checked)}
+            />
+            Automatischer Export
+            {batch.auto_export && batch.last_exported_at && (
+              <span className="text-xs text-gray-400">
+                (zuletzt exportiert: {new Date(batch.last_exported_at).toLocaleString("de-DE")})
+              </span>
+            )}
+          </label>
+        </div>
       </div>
 
       {error && (
@@ -213,12 +265,44 @@ export default function ImportDetailPage() {
             >
               {docsLoading ? "Lade…" : "↻ Aktualisieren"}
             </button>
+            <div className="flex items-center gap-1 text-xs text-gray-500">
+              <select
+                value={exportDateField}
+                onChange={(e) => setExportDateField(e.target.value as "invoice_date" | "import_date")}
+                className="rounded border border-gray-300 px-2 py-1"
+              >
+                <option value="invoice_date">Rechnungsdatum</option>
+                <option value="import_date">Importdatum</option>
+              </select>
+              <input
+                id="export-date-from"
+                type="date"
+                value={exportDateFrom}
+                onChange={(e) => setExportDateFrom(e.target.value)}
+                className="rounded border border-gray-300 px-2 py-1"
+              />
+              <span>bis</span>
+              <input
+                type="date"
+                value={exportDateTo}
+                onChange={(e) => setExportDateTo(e.target.value)}
+                className="rounded border border-gray-300 px-2 py-1"
+              />
+            </div>
             <a
-              href={`/api/imports/${batchId}/export/`}
+              href={exportHref}
               download
               className="rounded border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
             >
               ↓ Excel exportieren
+            </a>
+            <a
+              href={`/api/imports/${batchId}/export/new/`}
+              download
+              title="Nur Belege, die seit dem letzten Abruf (manuell oder automatisch) fertig analysiert wurden"
+              className="rounded border border-purple-600 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100"
+            >
+              ↓ Neue Belege exportieren
             </a>
           </div>
 

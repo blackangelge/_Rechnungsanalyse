@@ -233,7 +233,10 @@ async def run_import(batch_id: int) -> None:
         return
 
     storage_dir = Path(storage_folder_path)
-    await _run_import_io(storage_dir.mkdir, True, True)
+    # Lambda statt positionaler mkdir-Argumente: Path.mkdir(mode, parents, exist_ok)
+    # ist positionsabhängig — mkdir(True, True) würde mode=True, parents=True setzen,
+    # exist_ok bliebe False. Keyword-Args über Lambda vermeiden diese Falle.
+    await _run_import_io(lambda: storage_dir.mkdir(parents=True, exist_ok=True))
 
     logger.info("Batch #%d: %d PDFs gefunden", batch_id, len(pdf_files))
 
@@ -248,14 +251,14 @@ async def run_import(batch_id: int) -> None:
     async def process_with_semaphore(pdf_path: Path) -> None:
         nonlocal processed_count, error_count
         async with semaphore:
-            success = await _process_single_document(
+            doc_id = await _process_single_document(
                 batch_id=batch_id,
                 pdf_path=pdf_path,
                 storage_dir=storage_dir,
             )
             async with lock:
                 processed_count += 1
-                if not success:
+                if doc_id is None:
                     error_count += 1
 
     await asyncio.gather(*[process_with_semaphore(p) for p in pdf_files])
@@ -269,14 +272,16 @@ async def _process_single_document(
     batch_id: int,
     pdf_path: Path,
     storage_dir: Path,
-) -> bool:
+) -> int | None:
     """
     Verarbeitet ein einzelnes PDF:
       1. DB-Eintrag anlegen (original_filename, file_size, status=pending)
       2. PDF nach storage_dir/{id}.pdf kopieren
       3. DB aktualisieren (stored_filename, status=done)
 
-    Gibt True zurück bei Erfolg, False bei Fehler.
+    Gibt die neue Dokument-ID zurück bei Erfolg, None bei Fehler (auch von
+    app/worker/folder_sync.py genutzt, das die ID braucht um das Dokument
+    anschließend zur KI-Analyse einzureihen).
     page_count wird als 0 gespeichert — die KI-Analyse setzt den echten Wert später.
     """
     try:
@@ -286,7 +291,7 @@ async def _process_single_document(
 
     doc_id = await asyncio.to_thread(_db_doc_create, batch_id, pdf_path.name, file_size)
     if doc_id is None:
-        return False
+        return None
 
     stored_filename = f"{doc_id}.pdf"
     dest_path = storage_dir / stored_filename
@@ -297,8 +302,8 @@ async def _process_single_document(
         logger.error("Kopierfehler für '%s': %s", pdf_path.name, exc)
         await asyncio.to_thread(_db_doc_error, doc_id, batch_id,
                                 f"Kopierfehler: {exc}", pdf_path.name)
-        return False
+        return None
 
     await asyncio.to_thread(_db_doc_finish, doc_id, stored_filename, 0)
     logger.debug("Dokument #%d importiert: %s", doc_id, pdf_path.name)
-    return True
+    return doc_id

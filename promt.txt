@@ -5,21 +5,24 @@ Analysiere das übergebene Rechnungsdokument und extrahiere alle unten aufgefüh
 
 ## Regeln
 1. Antworte AUSSCHLIESSLICH mit einem validen JSON-Objekt.
-2. Wenn ein Feld auf der Rechnung nicht vorhanden oder nicht erkennbar ist, setze den Wert auf null.
-3. Geldbeträge werden als String mit zwei Dezimalstellen angegeben. Als Dezimaltrennzeichen ist sowohl Punkt als auch Komma zulässig, z.B. "1234.56" oder "1234,56". Übernimm das Trennzeichen so, wie es auf der Rechnung steht.
-4. Datumsangaben im Format DD.MM.YYYY, z.B. "15.03.2025".
+2. Das JSON muss IMMER alle Felder aus der unten stehenden Struktur enthalten – auch wenn ein Feld auf der Rechnung nicht vorhanden oder nicht erkennbar ist. Fehlt ein Wert, setze ihn auf null. Lass niemals ein Feld komplett weg.
+3. Geldbeträge werden als reine Zahl (JSON number) mit Punkt als Dezimaltrennzeichen angegeben, z.B. 1234.56 — NICHT als String, NICHT mit Komma. Übernimm ausschließlich den Zahlenwert, nicht die Schreibweise der Rechnung.
+4. Datumsangaben ausschließlich im ISO-Format YYYY-MM-DD, z.B. "2025-03-15" (auch wenn auf der Rechnung ein anderes Format wie 15.03.2025 steht — immer nach YYYY-MM-DD umrechnen).
 5. Mengen als numerischer Wert.
 6. Bei mehreren Bestellpositionen enthält "positionen" ein Array mit einem Objekt pro Position.
-7. Extrahiere die Daten exakt so, wie sie auf der Rechnung stehen. Interpretiere oder berechne keine fehlenden Werte.
+7. Extrahiere die Daten exakt so, wie sie auf der Rechnung stehen. Interpretiere oder berechne keine fehlenden Werte — Ausnahme: IBAN und USt-IdNr. IMMER ohne Leerzeichen ausgeben (nur die reine Zeichenfolge), unabhängig davon, wie sie auf der Rechnung formatiert sind. Das ist wichtig für die automatische Lieferantenerkennung — dieselbe IBAN muss immer identisch aussehen.
 8. Prozentwerte für Skonto oder Rabatt als Zahl ohne Prozentzeichen, z.B. 2.0 für 2 %.
 9. Währung wird als ISO-4217-Code angegeben, z.B. EUR, USD, CHF.
 10. Der Steuersatz pro Position wird als Prozentwert ohne Prozentzeichen angegeben, z.B. 19.0 oder 7.0. Wenn auf der Rechnung kein positionsbezogener Steuersatz erkennbar ist, versuche ihn aus der Steuerzusammenfassung der Rechnung zuzuordnen. Falls keine Zuordnung möglich ist, setze den Wert auf null.
+11. "lieferant" ist IMMER die Firma, die die Rechnung gestellt hat (Absender/Verkäufer) — NICHT der Rechnungsempfänger/Kunde, an den die Rechnung adressiert ist. Diese beiden Adressen stehen oft nah beieinander (Absender oben, Empfänger im Anschriftenfeld) — verwechsle sie nicht.
+12. Falls das Dokument mehrere Seiten hat, beziehe Informationen von ALLEN Seiten mit ein. Bankverbindung, Steuernummer oder Kontaktdaten stehen häufig nur im Fußbereich der letzten Seite, während Positionen sich über mehrere Seiten erstrecken können.
+13. Prüfe rechnerisch, ob gesamtbetrag_netto + steuerbetrag (aus umsatzsteuer_zusammenfassung) in Summe gesamtbetrag_brutto ergibt. Weichen deine erkannten Werte davon ab, prüfe die entsprechende Stelle auf der Rechnung noch einmal, bevor du antwortest.
 
 ## JSON-Ausgabestruktur
-Antworte exakt in der folgenden Struktur:
+Antworte exakt in der folgenden Struktur (alle Felder immer vorhanden, unbekannte Werte als null):
 {
   "lieferant": {
-    "name": "Vollständige Bezeichnung des Lieferanten",
+    "name": "Vollständige Bezeichnung des Lieferanten (Absender/Verkäufer, NICHT der Rechnungsempfänger)",
     "anschrift": {
       "strasse": "Straße und Hausnummer",
       "plz": "PLZ",
@@ -28,17 +31,18 @@ Antworte exakt in der folgenden Struktur:
     },
     "hrb_nummer": "HRB-Nummer des Handelsregisters",
     "steuernummer": "Steuernummer des Lieferanten",
-    "ust_id_nr": "USt-IdNr. des Lieferanten",
+    "ust_id_nr": "USt-IdNr. des Lieferanten, ohne Leerzeichen",
     "bankverbindung": {
       "bank_name": "Name der Bank",
-      "iban": "IBAN-Nummer",
+      "iban": "IBAN-Nummer, ohne Leerzeichen",
       "bic": "BIC-Nummer"
     }
   },
   "rechnungsdaten": {
+    "bestellnummer": "Bestellnummer/Auftragsnummer des Kunden. Wird auf der Rechnung häufig als 'Ihre Bestellnummer', 'Bestellnr.', 'Auftrags-Nr.' oder 'PO-Nummer' bezeichnet. null falls nicht vorhanden.",
     "rechnungsnummer": "Rechnungsnummer",
-    "rechnungsdatum": "DD.MM.YYYY",
-    "faelligkeit": "DD.MM.YYYY",
+    "rechnungsdatum": "YYYY-MM-DD",
+    "faelligkeit": "YYYY-MM-DD",
     "kundennummer": "Kundennummer des Rechnungsempfängers"
   },
   "positionen": [
@@ -48,8 +52,8 @@ Antworte exakt in der folgenden Struktur:
       "artikelnummer_lieferant": "Artikelnummer des Lieferanten",
       "menge": 0,
       "mengeneinheit": "Stück/kg/Liter/Palette/etc.",
-      "einzelpreis": "0,00",
-      "gesamtpreis": "0,00",
+      "einzelpreis": 0.00,
+      "gesamtpreis": 0.00,
       "waehrung": "EUR",
       "steuersatz": 19.0,
       "preisnachlass": {
@@ -60,15 +64,15 @@ Antworte exakt in der folgenden Struktur:
     }
   ],
   "zahlungsinformationen": {
-    "gesamtbetrag_netto": "0,00",
+    "gesamtbetrag_netto": 0.00,
     "umsatzsteuer_zusammenfassung": [
       {
         "steuersatz": 19.0,
-        "nettobetrag": "0,00",
-        "steuerbetrag": "0,00"
+        "nettobetrag": 0.00,
+        "steuerbetrag": 0.00
       }
     ],
-    "gesamtbetrag_brutto": "0,00",
+    "gesamtbetrag_brutto": 0.00,
     "waehrung": "EUR",
     "skonto": {
       "prozent": null,

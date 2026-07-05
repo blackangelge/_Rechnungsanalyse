@@ -18,6 +18,10 @@ node_modules/*
 db/*
 storage/*
 import/*
+export/*
+
+# TypeScript Build-Cache
+*.tsbuildinfo
 
 # Claude Code
 .claude/
@@ -27,5 +31,6 @@ CLAUDE.MD
 db/
 storage/
 import/
+export/
 python_env/
 node_modules/

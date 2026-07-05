@@ -29,6 +29,7 @@ services:
       - ${PROJECT_BASE_PATH}/${PYTHON_ENV_PATH}:/venv
       - ${PROJECT_BASE_PATH}${IMPORT_BASE_PATH}:${IMPORT_BASE_PATH}
       - ${PROJECT_BASE_PATH}${STORAGE_PATH}:${STORAGE_PATH}
+      - ${PROJECT_BASE_PATH}${EXPORT_BASE_PATH}:${EXPORT_BASE_PATH}
     ports:
       - "${BACKEND_PORT}:8000"
     depends_on:
@@ -56,6 +57,7 @@ services:
       - ${PROJECT_BASE_PATH}/${PYTHON_ENV_PATH}:/venv
       - ${PROJECT_BASE_PATH}${IMPORT_BASE_PATH}:${IMPORT_BASE_PATH}
       - ${PROJECT_BASE_PATH}${STORAGE_PATH}:${STORAGE_PATH}
+      - ${PROJECT_BASE_PATH}${EXPORT_BASE_PATH}:${EXPORT_BASE_PATH}
     expose:
       - "8000"
     depends_on:
@@ -71,9 +73,7 @@ services:
     image: node:22-alpine
     restart: unless-stopped
     working_dir: /app
-    environment:
-      NEXT_PUBLIC_API_URL: http://backend:8000
-      ALLOWED_DEV_ORIGINS: ${ALLOWED_DEV_ORIGINS}
+    env_file: ${PROJECT_BASE_PATH}/.env
     volumes:
       - ${PROJECT_BASE_PATH}/${FRONTEND_BASE_PATH}:/app
       - ${PROJECT_BASE_PATH}/${NODE_MODULES_PATH}:/app/node_modules

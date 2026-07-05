@@ -131,6 +131,9 @@ export interface ImportBatch {
   comment: string | null;
   status: "pending" | "running" | "done" | "error";
   folder_sync: boolean | null;
+  last_synced_at: string | null;
+  auto_export: boolean;
+  last_exported_at: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -152,6 +155,7 @@ export interface ImportBatchCreate {
   analyze_after_import?: boolean;
   delete_source_files?: boolean;
   folder_sync?: boolean;
+  auto_export?: boolean;
 }
 
 export interface BatchKiStats {
@@ -170,6 +174,8 @@ export const importsApi = {
     apiClient.get<ImportBatch>(`/api/imports/${id}/status`).then((r) => r.data),
   kiStats: (id: number) =>
     apiClient.get<BatchKiStats>(`/api/imports/${id}/ki-stats`).then((r) => r.data),
+  updateAutomation: (id: number, data: { folder_sync?: boolean; auto_export?: boolean }) =>
+    apiClient.patch<ImportBatch>(`/api/imports/${id}/automation/`, data).then((r) => r.data),
   delete: (id: number) => apiClient.delete(`/api/imports/${id}`),
 };
 
@@ -332,6 +338,30 @@ export const imageSettingsApi = {
   get: () => apiClient.get<ImageSettings>("/api/settings/image-conversion/").then((r) => r.data),
   update: (data: ImageSettingsUpdate) =>
     apiClient.put<ImageSettings>("/api/settings/image-conversion/", data).then((r) => r.data),
+};
+
+// ─── Typen: Automatisierungseinstellungen (Ordner-Sync-Intervall, Export-Zeitplan) ──
+
+export interface AutomationSettings {
+  id: number;
+  folder_sync_interval_minutes: number;
+  /** 0=Montag … 6=Sonntag */
+  export_weekday: number;
+  export_hour: number;
+  export_minute: number;
+}
+
+export interface AutomationSettingsUpdate {
+  folder_sync_interval_minutes: number;
+  export_weekday: number;
+  export_hour: number;
+  export_minute: number;
+}
+
+export const automationSettingsApi = {
+  get: () => apiClient.get<AutomationSettings>("/api/settings/automation/").then((r) => r.data),
+  update: (data: AutomationSettingsUpdate) =>
+    apiClient.put<AutomationSettings>("/api/settings/automation/", data).then((r) => r.data),
 };
 
 export const importSettingsApi = {

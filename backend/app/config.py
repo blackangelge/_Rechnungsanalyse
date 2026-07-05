@@ -35,9 +35,18 @@ class Settings(BaseSettings):
     # Ordner, in dem importierte PDFs dauerhaft gespeichert werden (Ziel)
     storage_path: str = "/storage"
 
+    # Basis-Ordner für automatisch geschriebene Excel-Exports
+    # (app/worker/export_schedule.py) — eigener Pfad, unabhängig von Import/Storage.
+    export_base_path: str = "/export"
+
     # Basis-URL des Worker-Containers (Docker-interner Service-Name), den das
     # Backend für Status-/Pause-/Resume-Proxy-Endpunkte anfragt
     worker_api_url: str = "http://worker:8000"
+
+    # Zeitzone für alle nutzerseitig sichtbaren Zeitstempel (Excel-Export-Spalten,
+    # automatische Export-Dateinamen). Container laufen intern auf UTC — ohne
+    # explizite Umrechnung würden Zeitstempel fälschlich als UTC angezeigt.
+    timezone: str = "Europe/Berlin"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

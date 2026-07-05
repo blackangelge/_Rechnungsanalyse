@@ -2,13 +2,16 @@
  * Echtzeit-Fortschrittsanzeige für einen laufenden Import.
  *
  * Verbindet sich via SSE mit dem Backend und zeigt live:
- * - Fortschrittsbalken (Prozent)
- * - Verarbeitete / Gesamt-Dokumente
- * - Vergangene Zeit
- * - Verarbeitungsgeschwindigkeit (Dokumente/Minute)
- * - Aktueller Status
+ * - Kopierte / Gesamt-Dokumente (reiner Datei-Kopiervorgang — die KI-Analyse läuft
+ *   asynchron über die Worker-Queue und wird hier NICHT mitgezählt)
+ * - Aggregierte KI-Token-Statistiken (Tokens gesamt, KI-Zeit) der bereits analysierten Belege
+ * - Geschätzte Restzeit, aktueller Status
  *
- * Ruft onDone() auf, sobald der Import abgeschlossen ist (done oder error).
+ * Kein Fortschrittsbalken: Da der Datei-Kopiervorgang meist in Sekunden abgeschlossen ist,
+ * würde ein Balken sofort 100% anzeigen, obwohl die eigentliche KI-Analyse noch läuft —
+ * das wirkte wie ein hängender/defekter Fortschritt.
+ *
+ * Ruft onDone() auf, sobald der Import (Kopiervorgang) abgeschlossen ist (done oder error).
  */
 
 "use client";
@@ -70,7 +73,6 @@ export default function ProgressPanel({
 
   const total = data?.total ?? initialTotal;
   const processed = data?.processed ?? initialProcessed;
-  const percent = data?.percent ?? (total > 0 ? Math.round(initialProcessed / initialTotal * 100) : 0);
   const elapsed = data?.elapsed_seconds ?? 0;
   const speed = data?.docs_per_minute ?? 0;
 
@@ -101,23 +103,9 @@ export default function ProgressPanel({
         <p className="mb-3 text-sm text-red-500">{error}</p>
       )}
 
-      {/* Fortschrittsbalken */}
-      <div className="mb-4">
-        <div className="mb-1 flex justify-between text-xs text-gray-500">
-          <span>
-            {processed.toLocaleString("de-DE")} / {total.toLocaleString("de-DE")} Dokumente
-          </span>
-          <span className="font-medium">{percent}%</span>
-        </div>
-        <div className="h-3 w-full overflow-hidden rounded-full bg-gray-100">
-          <div
-            className={[
-              "h-3 rounded-full transition-all duration-700",
-              isDone ? "bg-green-500" : isError ? "bg-red-400" : "bg-blue-500",
-            ].join(" ")}
-            style={{ width: `${percent}%` }}
-          />
-        </div>
+      {/* Dokumentenzähler (Datei-Kopiervorgang — die KI-Analyse läuft separat im Hintergrund) */}
+      <div className="mb-4 text-xs text-gray-500">
+        {processed.toLocaleString("de-DE")} / {total.toLocaleString("de-DE")} Dokumente kopiert
       </div>
 
       {/* KI-Token-Statistiken */}
@@ -148,11 +136,6 @@ export default function ProgressPanel({
       )}
 
       {/* Abschluss-Meldung */}
-      {isDone && (
-        <p className="mt-4 rounded bg-green-50 px-3 py-2 text-sm text-green-700">
-          Import erfolgreich abgeschlossen — {total.toLocaleString("de-DE")} Dokumente verarbeitet.
-        </p>
-      )}
       {isError && (
         <p className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
           Import mit Fehlern abgeschlossen. Fehlerdokumente sind unten markiert.

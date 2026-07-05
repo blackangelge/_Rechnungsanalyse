@@ -3,6 +3,7 @@ Importiert alle ORM-Modelle, damit Alembic Base.metadata vollständig liest.
 """
 
 from app.models.ai_clients import AIClients  # noqa: F401
+from app.models.automation_settings import AutomationSettings  # noqa: F401
 from app.models.image_settings import ImageSettings  # noqa: F401
 from app.models.import_batch import ImportBatch  # noqa: F401
 from app.models.document import Document  # noqa: F401

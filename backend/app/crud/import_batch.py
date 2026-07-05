@@ -67,6 +67,7 @@ def create(
         year=year,
         comment=data.comment,
         folder_sync=data.folder_sync,
+        auto_export=data.auto_export,
         status="pending",
     )
     db.add(obj)

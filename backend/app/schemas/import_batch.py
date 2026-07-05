@@ -33,6 +33,17 @@ class ImportBatchCreate(BaseModel):
     analyze_after_import: bool = False
     delete_source_files: bool = False
     folder_sync: bool = False    # Ordner-Sync aktivieren (nicht mit delete_source_files kombinierbar)
+    auto_export: bool = False    # Wöchentlichen automatischen Excel-Export aktivieren (unabhängig von folder_sync)
+
+
+class ImportBatchAutomationUpdate(BaseModel):
+    """
+    Payload für PATCH /api/imports/{id}/automation — Ordner-Sync und automatischen
+    Export nachträglich für einen bestehenden Batch umschalten. None = unverändert lassen.
+    """
+
+    folder_sync: bool | None = None
+    auto_export: bool | None = None
 
 
 class ImportBatchRead(BaseModel):
@@ -46,6 +57,9 @@ class ImportBatchRead(BaseModel):
     comment: str | None
     status: str           # pending | running | done | error
     folder_sync: bool | None = False
+    last_synced_at: datetime | None = None    # Letzte Ordner-Sync-Prüfung
+    auto_export: bool = False
+    last_exported_at: datetime | None = None  # Gemeinsamer Zähler für manuellen + automatischen Export
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
