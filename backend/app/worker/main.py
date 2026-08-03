@@ -75,7 +75,17 @@ async def lifespan(app: FastAPI):
     logger.info("✓ DB-Pool bereit")
 
     ai_client = AIDispatcherClient()
-    dispatcher = Dispatcher(db_pool=db_pool, ai_client=ai_client, poll_interval=20, max_workers_cap=2)
+    # poll_interval/max_workers_cap/lock_timeout_minutes sind hier nur die
+    # Anfangswerte, bevor der erste DB-Zyklus gelaufen ist — Dispatcher.run()
+    # liest die tatsächlichen, über die Website änderbaren Werte danach live aus
+    # automation_settings (siehe Dispatcher._load_worker_settings()).
+    dispatcher = Dispatcher(
+        db_pool=db_pool,
+        ai_client=ai_client,
+        poll_interval=round(settings.worker_poll_interval),
+        max_workers_cap=settings.worker_concurrency,
+        lock_timeout_minutes=settings.worker_lock_timeout_minutes,
+    )
     dispatcher_task = asyncio.create_task(dispatcher.run())
     app.state.dispatcher = dispatcher
 
@@ -89,7 +99,11 @@ async def lifespan(app: FastAPI):
     export_schedule_stop = asyncio.Event()
     export_schedule_task = asyncio.create_task(export_schedule.run(export_schedule_stop))
 
-    logger.info("✓ Dispatcher läuft (Polling alle 20s, max 2 parallele Worker)")
+    logger.info(
+        "✓ Dispatcher läuft (Anfangswerte: Polling alle %.0fs, max %d parallele Worker — "
+        "danach live über Einstellungen → Automatisierung änderbar)",
+        settings.worker_poll_interval, settings.worker_concurrency,
+    )
     logger.info("✓ Ordner-Sync-Loop gestartet")
     logger.info("✓ Export-Zeitplan-Loop gestartet")
     logger.info("✓ Worker bereit")

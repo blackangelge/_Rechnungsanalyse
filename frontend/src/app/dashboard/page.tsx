@@ -68,9 +68,19 @@ export default function DashboardPage() {
             </p>
           )}
         </div>
-        <button onClick={load} className="text-xs text-blue-600 hover:underline">
-          Aktualisieren
-        </button>
+        <div className="flex items-center gap-4">
+          {workerStats && (
+            <span className="text-sm text-gray-500">
+              <span className="font-semibold text-gray-700">
+                {workerStats.documents_processed_total.toLocaleString("de-DE")}
+              </span>{" "}
+              Dokumente insgesamt von der KI verarbeitet
+            </span>
+          )}
+          <button onClick={load} className="text-xs text-blue-600 hover:underline">
+            Aktualisieren
+          </button>
+        </div>
       </div>
 
       {/* KI-Warnung: keine aktive KI */}

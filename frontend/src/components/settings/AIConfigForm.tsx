@@ -32,7 +32,9 @@ interface Props {
 export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) {
   const [name, setName] = useState(initialData?.name ?? "");
   const [ipAddress, setIpAddress] = useState(initialData?.ip_address ?? "");
-  const [port, setPort] = useState(initialData?.port ?? "1234");
+  // Bei bestehender Config den echten (evtl. leeren) Port anzeigen; bei neuer
+  // Config "1234" als freundlichen Vorschlag (LM-Studio-Standardport).
+  const [port, setPort] = useState(initialData ? (initialData.port ?? "") : "1234");
   const [apiKey, setApiKey] = useState(initialData?.api_key ?? "");
   const [modelName, setModelName] = useState(initialData?.model_name ?? "");
   const [endpointType, setEndpointType] = useState<EndpointType>(initialData?.endpoint_type ?? "openai");
@@ -43,6 +45,9 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
   const [chatResponse, setChatResponse] = useState(initialData?.chat_response ?? false);
   const [active, setActive] = useState(initialData?.active ?? false);
   const [parallelRequest, setParallelRequest] = useState(initialData?.parallel_request ?? 1);
+  const [maxContextTokens, setMaxContextTokens] = useState<number | "">(
+    initialData?.max_context_tokens ?? ""
+  );
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +60,7 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
     const data: AIConfigCreate = {
       name,
       ip_address: ipAddress,
-      port,
+      port: port.trim() || null,
       api_key: apiKey || null,
       model_name: modelName,
       endpoint_type: endpointType,
@@ -66,6 +71,7 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
       chat_response: chatResponse,
       active,
       parallel_request: parallelRequest,
+      max_context_tokens: maxContextTokens === "" ? null : maxContextTokens,
     };
 
     try {
@@ -110,26 +116,29 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2">
           <label className="mb-1 block text-sm font-medium text-gray-700">
-            IP-Adresse / Hostname <span className="text-red-500">*</span>
+            IP-Adresse / Hostname / URL <span className="text-red-500">*</span>
           </label>
           <input
             className="input"
-            placeholder="192.168.1.100"
+            placeholder="192.168.1.100 oder https://api.anbieter.com"
             value={ipAddress}
             onChange={(e) => setIpAddress(e.target.value)}
             required
           />
+          <p className="mt-1 text-xs text-gray-400">
+            Für reine HTTPS-Anbieter (z.B. OpenRouter, OpenAI) vollständige URL mit
+            https:// eintragen, sonst wird fälschlich Klartext-HTTP verwendet.
+          </p>
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">
-            Port <span className="text-red-500">*</span>
+            Port <span className="text-xs font-normal text-gray-400">(optional)</span>
           </label>
           <input
             className="input"
-            placeholder="1234"
+            placeholder="leer = kein Port in der URL"
             value={port}
             onChange={(e) => setPort(e.target.value)}
-            required
           />
         </div>
       </div>
@@ -260,6 +269,27 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
         />
         <p className="mt-1 text-xs text-gray-400">
           Maximale Anzahl gleichzeitiger Anfragen an diesen KI-Client.
+        </p>
+      </div>
+
+      {/* max_context_tokens */}
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">
+          max_context_tokens{" "}
+          <span className="text-xs font-normal text-gray-400">(optional)</span>
+        </label>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          placeholder="leer = unbeschränkt"
+          value={maxContextTokens}
+          onChange={(e) => setMaxContextTokens(e.target.value === "" ? "" : parseInt(e.target.value))}
+        />
+        <p className="mt-1 text-xs text-gray-400">
+          Kontext-Kapazität dieser KI (z.B. Kontextfenster des Modells). Dokumente
+          mit mehr als ca. {maxContextTokens ? Math.max(1, Math.floor(Number(maxContextTokens) / 4500)) : "∞"}{" "}
+          Seiten (≈4500 Token/Seite) werden nicht an diese KI gesendet. Leer lassen für unbeschränkt.
         </p>
       </div>
 

@@ -1,11 +1,17 @@
 /**
  * Seite: Automatisierungseinstellungen (/settings/automation)
  *
- * Steuert zwei unabhängige Hintergrund-Loops im Worker-Container:
+ * Steuert mehrere unabhängige Hintergrund-Loops im Worker-Container:
  * - Ordner-Sync-Intervall: wie oft (in Minuten) Import-Batches mit aktiviertem
  *   "Ordner-Sync" auf neue PDFs geprüft werden.
  * - Export-Zeitplan: fester Wochentag + Uhrzeit, zu dem der automatische
  *   Excel-Export für Batches mit "Automatischer Export" geschrieben wird.
+ * - KI-Task-Dispatcher: maximale gleichzeitige Worker, Poll-Intervall, Lock-Timeout.
+ *   Anfangswerte kommen aus den ENV-Variablen WORKER_CONCURRENCY/WORKER_POLL_INTERVAL/
+ *   WORKER_LOCK_TIMEOUT_MINUTES, danach ist ausschließlich diese Seite maßgeblich.
+ *
+ * Alle Werte wirken live ohne Container-Neustart (Worker liest sie bei jedem
+ * Poll-Zyklus frisch aus der Datenbank).
  */
 
 "use client";
@@ -33,6 +39,9 @@ export default function AutomationSettingsPage() {
   const [weekday, setWeekday] = useState(0);
   const [hour, setHour] = useState(6);
   const [minute, setMinute] = useState(0);
+  const [workerConcurrency, setWorkerConcurrency] = useState(5);
+  const [workerPollInterval, setWorkerPollInterval] = useState(20);
+  const [workerLockTimeout, setWorkerLockTimeout] = useState(30);
 
   async function load() {
     try {
@@ -42,6 +51,9 @@ export default function AutomationSettingsPage() {
       setWeekday(data.export_weekday);
       setHour(data.export_hour);
       setMinute(data.export_minute);
+      setWorkerConcurrency(data.worker_concurrency);
+      setWorkerPollInterval(data.worker_poll_interval_seconds);
+      setWorkerLockTimeout(data.worker_lock_timeout_minutes);
     } catch {
       console.warn("Automatisierungseinstellungen konnten nicht geladen werden, Standardwerte werden verwendet.");
     } finally {
@@ -64,6 +76,9 @@ export default function AutomationSettingsPage() {
         export_weekday: weekday,
         export_hour: hour,
         export_minute: minute,
+        worker_concurrency: workerConcurrency,
+        worker_poll_interval_seconds: workerPollInterval,
+        worker_lock_timeout_minutes: workerLockTimeout,
       });
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
@@ -157,6 +172,80 @@ export default function AutomationSettingsPage() {
             (nur Belege seit dem letzten Export). Der Worker prüft alle 15 Minuten, ob der
             Termin erreicht ist.
           </p>
+        </div>
+
+        {/* Worker-Einstellungen */}
+        <div className="border-t pt-6">
+          <h2 className="mb-4 text-sm font-semibold text-gray-800">
+            KI-Task-Dispatcher (Worker-Container)
+          </h2>
+
+          <div className="space-y-4">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Maximale gleichzeitige Worker
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={workerConcurrency}
+                  onChange={(e) => setWorkerConcurrency(parseInt(e.target.value) || 1)}
+                  className="input w-28"
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-400">
+                Obergrenze unabhängig von der Summe aus parallel_request über alle
+                aktiven KI-Configs — verhindert Thread-Pool-Erschöpfung auf Systemen mit
+                wenigen CPUs.
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Poll-Intervall
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={workerPollInterval}
+                  onChange={(e) => setWorkerPollInterval(parseInt(e.target.value) || 1)}
+                  className="input w-28"
+                />
+                <span className="text-sm text-gray-500">Sekunden</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-400">
+                Wie oft der Dispatcher die Datenbank auf neue Tasks und geänderte
+                KI-Configs prüft.
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Lock-Timeout
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={workerLockTimeout}
+                  onChange={(e) => setWorkerLockTimeout(parseInt(e.target.value) || 1)}
+                  className="input w-28"
+                />
+                <span className="text-sm text-gray-500">Minuten</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-400">
+                Nach dieser Zeit ohne Fortschritt gilt ein Beleg als &quot;hängengeblieben&quot;
+                (z.B. Worker abgestürzt) und wird automatisch erneut versucht. Sollte
+                deutlich über der längsten erwarteten KI-Antwortzeit liegen — zu niedrig
+                eingestellt können noch laufende Analysen fälschlich unterbrochen werden.
+              </p>
+            </div>
+          </div>
         </div>
 
         <button

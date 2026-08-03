@@ -7,14 +7,16 @@ Ablauf für einen Import-Batch:
   3. Pro Datei parallel (Semaphore, max 4 gleichzeitig):
      a. DB-Eintrag anlegen (documents, status=pending)
      b. PDF in den Storage-Ordner kopieren ({id}.pdf)
-     c. DB-Eintrag aktualisieren (stored_filename, status=done)
+     c. Seitenanzahl ermitteln (pypdf, kein Rendering)
+     d. DB-Eintrag aktualisieren (stored_filename, page_count, status=done)
   4. Batch-Status → 'done' setzen (DB)
 
 Parallelität:
   - Datei-I/O läuft im dedizierten _IMPORT_IO_EXECUTOR (ThreadPoolExecutor)
   - DB-Operationen laufen via asyncio.to_thread (Standard-Pool)
   - Semaphore begrenzt gleichzeitige Kopier-Operationen auf 4 (NAS-verträglich)
-  - KEINE Seitenanzahl beim Import — wird erst bei der KI-Analyse gesetzt
+  - Seitenanzahl wird bereits beim Import ermittelt (Basis für die KI-Kapazitäts-
+    prüfung im Worker) — die KI-Analyse überschreibt sie ggf. später erneut
 
 Sicherheit:
   - validate_import_path() prüft dass der Pfad unter IMPORT_BASE_PATH liegt
@@ -282,7 +284,12 @@ async def _process_single_document(
     Gibt die neue Dokument-ID zurück bei Erfolg, None bei Fehler (auch von
     app/worker/folder_sync.py genutzt, das die ID braucht um das Dokument
     anschließend zur KI-Analyse einzureihen).
-    page_count wird als 0 gespeichert — die KI-Analyse setzt den echten Wert später.
+
+    page_count wird direkt nach dem Kopieren ermittelt (pypdf, kein Rendering —
+    schnell) und gespeichert. Grundlage für die KI-Kapazitätsprüfung im Worker
+    (siehe app/worker/worker.py::TOKENS_PER_PAGE_ESTIMATE), noch bevor überhaupt
+    eine KI-Analyse läuft. Die KI-Analyse selbst überschreibt page_count später
+    ggf. erneut mit dem tatsächlich gerenderten Wert (Sicherheitsnetz).
     """
     try:
         file_size = await _run_import_io(lambda: pdf_path.stat().st_size)
@@ -304,6 +311,13 @@ async def _process_single_document(
                                 f"Kopierfehler: {exc}", pdf_path.name)
         return None
 
-    await asyncio.to_thread(_db_doc_finish, doc_id, stored_filename, 0)
-    logger.debug("Dokument #%d importiert: %s", doc_id, pdf_path.name)
+    try:
+        from app.services.pdf_service import get_page_count
+        page_count = await _run_import_io(get_page_count, dest_path)
+    except Exception as exc:
+        logger.warning("Konnte Seitenanzahl nicht ermitteln für '%s': %s", pdf_path.name, exc)
+        page_count = 0
+
+    await asyncio.to_thread(_db_doc_finish, doc_id, stored_filename, page_count)
+    logger.debug("Dokument #%d importiert: %s (%d Seiten)", doc_id, pdf_path.name, page_count)
     return doc_id

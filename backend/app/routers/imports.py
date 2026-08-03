@@ -434,6 +434,107 @@ def get_batch_ki_stats(batch_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/{batch_id}/queue-status")
+def get_batch_queue_status(batch_id: int, db: Session = Depends(get_db)):
+    """
+    Wie viele Dokumente dieses Batches sich aktuell in der Worker-Queue befinden,
+    aufgeschlüsselt nach Status (pending/in_progress/completed/failed).
+
+    workflow_tasks referenziert document_id nur als JSONB-Payload (keine FK) —
+    daher Join über den Batch der Dokumente statt direkter Relationship.
+    """
+    from sqlalchemy import text as _text
+    from app.models.import_batch import ImportBatch as _Batch
+
+    batch = db.get(_Batch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
+
+    rows = db.execute(
+        _text(
+            "SELECT wt.status, COUNT(*) AS n "
+            "FROM workflow_tasks wt "
+            "JOIN documents d ON d.id = (wt.payload->>'document_id')::int "
+            "WHERE d.batch_id = :batch_id "
+            "GROUP BY wt.status"
+        ),
+        {"batch_id": batch_id},
+    ).all()
+
+    counts = {"pending": 0, "in_progress": 0, "completed": 0, "failed": 0}
+    for row in rows:
+        counts[row.status] = row.n
+
+    return {
+        "pending": counts["pending"],
+        "in_progress": counts["in_progress"],
+        "completed": counts["completed"],
+        "failed": counts["failed"],
+        "total": sum(counts.values()),
+    }
+
+
+@router.post("/{batch_id}/requeue")
+def requeue_batch(
+    batch_id: int,
+    system_prompt_id: int | None = Query(None, description="Systemprompt für die erneute Analyse (None = Standard)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Reiht alle Dokumente dieses Batches erneut zur KI-Analyse in die Worker-Queue ein
+    (auch bereits fertig analysierte oder fehlgeschlagene Dokumente). Dokumente mit
+    bereits laufendem/wartendem Task werden übersprungen (kein Duplikat).
+    """
+    from app.models.import_batch import ImportBatch as _Batch
+
+    batch = db.get(_Batch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
+
+    doc_ids = [doc.id for doc in batch.documents if doc.stored_filename]
+    enqueued = _db_enqueue_for_analysis(doc_ids, system_prompt_id)
+    logger.info("Batch #%d: %d/%d Dokument(e) erneut in Worker-Queue eingereiht", batch_id, enqueued, len(doc_ids))
+    return {"batch_id": batch_id, "total_documents": len(doc_ids), "enqueued": enqueued}
+
+
+@router.delete("/{batch_id}/queue")
+def dequeue_batch(batch_id: int, db: Session = Depends(get_db)):
+    """
+    Entfernt alle wartenden und in Bearbeitung befindlichen Worker-Tasks dieses
+    Batches aus der Queue (pending + in_progress).
+
+    Der Dispatcher markiert Tasks bereits als 'in_progress', sobald er sie aus
+    der DB in seine interne Queue übernimmt — das passiert unabhängig davon, ob
+    gerade tatsächlich ein KI-Server verfügbar ist bzw. eine HTTP-Anfrage läuft.
+    Tasks bleiben deshalb oft nur Sekundenbruchteile im Status 'pending', bevor
+    sie auf 'in_progress' springen — ein Filter nur auf 'pending' würde "alle
+    entfernen" in der Praxis kaum je etwas löschen. Läuft für einen Task
+    tatsächlich schon ein HTTP-Request an die KI, wird dieser NICHT abgebrochen
+    (kein sauberer Cancel-Mechanismus); das Ergebnis wird dann noch ins Dokument
+    geschrieben, aber der zugehörige Task-Datensatz ist bereits entfernt.
+    """
+    from sqlalchemy import text as _text
+    from app.models.import_batch import ImportBatch as _Batch
+
+    batch = db.get(_Batch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
+
+    result = db.execute(
+        _text(
+            "DELETE FROM workflow_tasks wt "
+            "USING documents d "
+            "WHERE d.id = (wt.payload->>'document_id')::int "
+            "AND d.batch_id = :batch_id "
+            "AND wt.status IN ('pending', 'in_progress')"
+        ),
+        {"batch_id": batch_id},
+    )
+    db.commit()
+    logger.info("Batch #%d: %d Worker-Task(s) aus der Queue entfernt", batch_id, result.rowcount)
+    return {"batch_id": batch_id, "removed": result.rowcount}
+
+
 @router.get("/{batch_id}", response_model=ImportBatchWithDocuments)
 def get_import(batch_id: int, db: Session = Depends(get_db)):
     """Gibt einen Import-Batch mit vollständiger Dokumentliste zurück."""
@@ -488,6 +589,23 @@ def delete_import(batch_id: int, db: Session = Depends(get_db)):
             "Batch #%d: %d Datei(en) gelöscht, %d Fehler",
             batch_id, deleted_files, failed_files,
         )
+
+    # Offene/laufende Worker-Tasks dieses Batches entfernen — workflow_tasks referenziert
+    # document_id nur als JSONB-Payload (keine FK), CASCADE über Documents erreicht sie
+    # deshalb nicht. Ohne diesen Schritt blieben verwaiste Tasks in der Queue zurück,
+    # die auf inzwischen gelöschte Dokumente zeigen.
+    doc_ids = [doc.id for doc in batch.documents]
+    if doc_ids:
+        from sqlalchemy import text as _text
+        deleted_tasks = db.execute(
+            _text(
+                "DELETE FROM workflow_tasks "
+                "WHERE (payload->>'document_id')::int = ANY(:doc_ids)"
+            ),
+            {"doc_ids": doc_ids},
+        ).rowcount
+        if deleted_tasks:
+            logger.info("Batch #%d: %d Worker-Task(s) aus der Queue entfernt", batch_id, deleted_tasks)
 
     # DB-Eintrag löschen (CASCADE zu Dokumenten, Extraktionen, Positionen)
     crud.import_batch.delete(db, batch_id)

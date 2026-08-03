@@ -32,6 +32,8 @@ sowie über die Status-/Steuerungs-API des Workers, die das Backend intern per H
 
 - **`redirect_slashes=False`** in `main.py` → alle Router-Routen **ohne** abschließenden `/` registrieren (`@router.get("")` statt `@router.get("/")`), sonst 404
 - **Kein Docker CLI** — der Nutzer verwendet ausschließlich den Synology Container Manager (GUI)
+- **KI-Konfigurationen heißen `ai_clients`** (Modell `AIClients`, Router `routers/ai_clients.py`, CRUD `crud/ai_config.py`) — nicht `ai_configs`/`AIConfig`, trotz älterer Doku-Referenzen anderswo
+- **Lokale Entwicklung parallel zum NAS:** Es existiert ein lokaler Docker-Compose-Stack (Windows, Docker Desktop) unter `D:\Python\_Rechnungsanalyse` für Tests — getrennt vom NAS-Produktivbetrieb. Frontend-Dev-Server auf Windows-Bind-Mounts erkennt Dateiänderungen unzuverlässig (Turbopack-Watcher), siehe „Bekannte Fallstricke"
 
 ---
 
@@ -39,85 +41,130 @@ sowie über die Status-/Steuerungs-API des Workers, die das Backend intern per H
 
 ### Struktur
 
+> **Hinweis zur Vollständigkeit:** Der folgende Baum deckt die Bereiche ab, die aktiv
+> gepflegt/erweitert wurden (Import/KI-Analyse/Worker/Automatisierung). Es existieren
+> daneben weitere Dateien (`models/customer.py`, `models/vendor.py`,
+> `models/vendor_bank_account.py`, `routers/batch.py`, `routers/suppliers.py`,
+> `routers/vendors.py`, `models/export_config.py`, `models/document_token_count.py`,
+> `schemas/processing_settings.py`, `crud/item.py`, `crud/system_log.py` u.a.), die hier
+> (noch) nicht im Detail dokumentiert sind — bei Arbeiten in diesen Bereichen den
+> jeweiligen Code direkt prüfen, nicht auf diese Doku verlassen.
+
 ```
 app/
 ├── main.py                 # FastAPI-Instanz, Router-Registrierung, CORS
 │                           # redirect_slashes=False!
-├── config.py               # Settings via pydantic-settings (aus .env)
+├── config.py               # Settings via pydantic-settings (aus .env) — u.a. import_base_path,
+│                           # storage_path, export_base_path, worker_api_url, timezone,
+│                           # worker_concurrency/worker_poll_interval/worker_lock_timeout_minutes
+│                           # (Anfangswerte für automation_settings, siehe dort)
 ├── database.py             # SQLAlchemy Session-Factory
+├── db_wait.py               # wait_for_db() — gemeinsame "warte auf Postgres"-Schleife
+│                           # (Backend-Migrationen + Worker-Start)
 ├── models/                 # SQLAlchemy-ORM-Modelle
 │   ├── document.py         # + Properties: total_amount, invoice_number, supplier_name,
 │   │                       #   document_type_name, ki_input_tokens, ki_output_tokens,
 │   │                       #   ki_total_duration (Fallback auf doc_ki_* für Non-Eingangsrechnungen)
+│   │                       # page_count wird bereits BEIM IMPORT ermittelt (pypdf, kein
+│   │                       #   Rendering) — nicht erst bei der KI-Analyse, siehe unten
+│   │                       # extraction-Relationship: cascade="all, delete-orphan" (WICHTIG,
+│   │                       #   siehe Bekannte Fallstricke — ohne das IntegrityError beim Löschen)
 │   ├── document_type.py    # DocumentType (id, name) — 15 vordefinierte Typen
-│   ├── import_batch.py
-│   ├── ai_config.py
+│   ├── import_batch.py     # + folder_sync/last_synced_at, auto_export/last_exported_at
+│   ├── ai_clients.py       # AIClients — NICHT ai_config.py/AIConfig (siehe Konventionen oben)
+│   │                       # ip_address: String(100), akzeptiert IP/Hostname ODER volle URL
+│   │                       #   inkl. Protokoll (z.B. "https://openrouter.ai/api")
+│   │                       # port: optional (nullable) — leer = kein :port in der gebauten URL
+│   │                       # max_context_tokens: int|None — Kapazitätsgrenze in Token für die
+│   │                       #   Seitenzahl-Prüfung im Worker (siehe TOKENS_PER_PAGE_ESTIMATE)
+│   ├── automation_settings.py  # Singleton (id=1): folder_sync_interval_minutes,
+│   │                       #   export_weekday/hour/minute, worker_concurrency,
+│   │                       #   worker_poll_interval_seconds, worker_lock_timeout_minutes
+│   ├── workflow_task.py    # WorkflowTask — die Worker-Queue-Tabelle (workflow_tasks)
+│   │                       # TaskKind.PROCESS_DOCUMENT — payload: {document_id, system_prompt_id}
+│   │                       # KEINE FK auf documents — nur JSONB-Payload (siehe Fallstricke:
+│   │                       #   Cascade-Delete erreicht diese Tabelle NICHT automatisch)
+│   ├── document_token_count.py  # 1:n zu Document — ein Eintrag pro KI-Analyse-Durchlauf
+│   │                       #   (append-only, nie überschrieben) — input/output/reasoning-Token,
+│   │                       #   time_spent_seconds
 │   ├── image_settings.py
-│   ├── invoice_extraction.py  # + supplier_id FK → suppliers
-│   │                          # + ki_input_tokens, ki_output_tokens, ki_reasoning_tokens,
-│   │                          #   ki_tokens_per_second, ki_time_to_first_token (nullable)
+│   ├── invoice_extraction.py  # document_id FK (CASCADE, NOT NULL) → siehe cascade-Hinweis oben
 │   ├── order_position.py
-│   ├── supplier.py         # Lieferanten-Stammdaten (Deduplication)
 │   └── system_prompt.py    # Systemprompts für KI-Extraktion
 │                           # + is_document_type_prompt: bool (Dokumententyp-Erkennung)
 ├── schemas/                # Pydantic-Schemas (Request/Response)
-│   ├── document.py         # DocumentRead, DocumentListRead (+Extraktion-Summary,
-│   │                       #   document_type_id/name), DocumentDetail (+ki_*-Felder
-│   │                       #   explizit — nicht von DocumentRead geerbt!),
-│   │                       #   DocumentCommentUpdate
-│   ├── document_type.py    # DocumentTypeRead (id, name)
-│   └── import_batch.py     # ImportBatchCreate (inkl. analyze_after_import,
-│                           #   system_prompt_id, delete_source_files)
+│   ├── ai_clients.py       # AIClientsCreate/Update/Read — port: str|None, max_context_tokens: int|None
+│   ├── automation_settings.py  # inkl. worker_concurrency/worker_poll_interval_seconds/
+│   │                       #   worker_lock_timeout_minutes
+│   ├── import_batch.py     # ImportBatchCreate (inkl. analyze_after_import,
+│   │                       #   system_prompt_id, delete_source_files, folder_sync, auto_export)
+│   │                       # ImportBatchAutomationUpdate (PATCH .../automation)
+│   └── document.py         # DocumentRead, DocumentListRead, DocumentDetail (ki_*-Felder
+│                           #   explizit — nicht von DocumentRead geerbt!)
 ├── crud/                   # Datenbankoperationen (je Modell eine Datei)
+│   ├── ai_config.py        # CRUD-Dateiname weicht vom Modellnamen ab (historisch) —
+│   │                       #   operiert auf app.models.ai_clients.AIClients
+│   ├── automation_settings.py  # get_or_create(): seeded worker_*-Felder NUR beim allerersten
+│   │                       #   Anlegen der Singleton-Zeile aus app.config.settings (ENV) —
+│   │                       #   danach ist ausschließlich die DB (Website) maßgeblich
 │   ├── document.py         # get_all_filtered mit joinedload(extraction, document_type)
-│   │                       # save_extraction: speichert ki_stats; Fallback ohne Stats
-│   │                       #   falls Migration noch nicht angewendet
-│   │                       # update_document_type(db, doc_id, type_id)
-│   ├── document_type.py    # get_all(), get_by_id()
-│   ├── import_batch.py
-│   ├── supplier.py         # find_or_create (IBAN → VAT-ID → Name)
-│   └── system_prompt.py    # + get_doc_type_prompt(db) → Prompt mit is_document_type_prompt=True
-│                           # + _clear_doc_type_prompt(db) — stellt Eindeutigkeit sicher
+│   └── import_batch.py
 ├── routers/                # API-Endpunkte
-│   ├── imports.py          # GET/POST /api/imports, DELETE löscht auch Dateien
-│   │                       # GET /api/imports/{id}/export → Excel-Download
-│   │                       # _import_then_analyze, _delete_source_files
-│   │                       # _build_export_excel (openpyxl, 2 Sheets)
+│   ├── imports.py          # GET/POST /api/imports, DELETE löscht auch Dateien + Worker-Tasks
+│   │                       # PATCH /{id}/automation — folder_sync/auto_export nachträglich umschalten
+│   │                       # GET /{id}/queue-status, POST /{id}/requeue, DELETE /{id}/queue
+│   │                       #   — Worker-Queue-Verwaltung pro Import (siehe eigener Abschnitt)
+│   │                       # GET /{id}/export → Excel-Download (date_from/date_to/date_field-Filter)
+│   │                       # GET /{id}/export/new → inkrementeller Export (nur neue Belege)
 │   ├── documents.py        # GET /api/documents, POST /analyze, GET/{id}, preview, comment
 │   │                       # _KI_IO_EXECUTOR, _analyze_single (zweistufig, sequenziell)
-│   │                       # _db_type_only_finish: Abschluss ohne InvoiceExtraction
-│   │                       # _merge_ki_stats: summiert Token-Stats aus Stufe 1+2
-│   ├── ai_configs.py       # CRUD /api/ai-configs, POST set-default
-│   ├── logs.py             # GET /api/logs (System-Log), GET /api/logs/ki-stats
-│   ├── settings.py         # GET/PUT /api/settings/image-conversion
-│   │                       # GET /api/settings/paths
+│   ├── ai_clients.py       # CRUD /api/ai-clients, POST toggle-active/clear-timeout
+│   │                       # POST /{id}/test — KI-Konfiguration testen (siehe eigener Abschnitt)
+│   ├── logs.py             # GET /api/logs/ki-stats, GET /api/logs/worker-stats
+│   │                       #   (inkl. documents_processed_total — Dashboard-Kennzahl)
+│   ├── tasks.py            # GET /api/tasks, POST /{id}/restart, DELETE /{id}, DELETE (bulk)
+│   │                       # GET /workers, POST /pause, POST /resume (Proxy zum Worker)
+│   ├── settings.py         # GET/PUT /api/settings/image-conversion, /automation, /paths
 │   │                       # CRUD /api/settings/system-prompts
-│   │                       # GET /api/document-types (doc_types_router)
+│   │                       # GET/POST /api/settings/backup, /restore
+│   ├── export_settings.py  # GET/PUT /api/settings/export (Spaltenauswahl Excel-Export)
 │   ├── sse.py              # GET /api/imports/{id}/progress (Server-Sent Events)
 │   └── items.py            # CRUD /api/items (Platzhalter)
 └── services/
     ├── import_service.py   # Import-Orchestrierung, parallel (Semaphore), kein KI
-    │                       # Keine Seitenanzahl-Lesung mehr — wird bei KI-Analyse gesetzt
+    │                       # page_count wird DIREKT NACH DEM KOPIEREN ermittelt (pypdf,
+    │                       #   kein Rendering) — nicht mehr erst bei der KI-Analyse
     ├── ai_service.py       # KI-Extraktion via OpenAI-kompatibler Vision-API
     │                       # Verschachteltes JSON-Format + Normalisierung
-    │                       # extract_invoice_data ist SYNCHRON (httpx.Client)
-    │                       # detect_document_type ist SYNCHRON (httpx.Client)
-    │                       # DEFAULT_DOC_TYPE_SYSTEM_PROMPT — Fallback-Systemprompt
-    └── pdf_service.py      # PDF → Bilder (pypdfium2), Seitenanzahl (pypdf)
+    │                       # extract_invoice_data/detect_document_type sind SYNCHRON (httpx.Client)
+    │                       # reasoning-Parameter: nutzt build_reasoning_param() (siehe ai_reasoning.py)
+    │                       # api_url wird über app.services.ai_url.build_ai_url() gebaut
+    ├── ai_url.py            # build_ai_url(ip_address, port) — EINZIGE korrekte Stelle für die
+    │                       #   KI-Endpunkt-URL-Bildung, genutzt von ai_service.py, ai_test_service.py
+    │                       #   UND worker/worker.py (dort als build_server_url re-exportiert)
+    │                       # Respektiert http://* / https://* in ip_address; Port optional
+    ├── ai_reasoning.py      # build_reasoning_param(reasoning) — "off" → Feld weglassen,
+    │                       #   sonst {"effort": "low"|"medium"|"high"} (OpenRouter/OpenAI-Format)
+    │                       #   NUR für den openai-kompatiblen Pfad, NICHT für LM Studios
+    │                       #   eigenen /api/v1/chat-Endpunkt (der nutzt reasoning als String)
+    ├── ai_test_service.py   # run_ai_test() / build_test_request() — für POST /api/ai-clients/{id}/test
+    │                       # Bewusst UNABHÄNGIG von ai_service.py (Produktions-Pipeline), damit
+    │                       #   Test-Anpassungen die echte Analyse nicht beeinflussen — MUSS aber
+    │                       #   ai_url.py/ai_reasoning.py mitnutzen, sonst laufen Test-Tool und
+    │                       #   Produktion wieder auseinander (siehe Bekannte Fallstricke)
+    └── pdf_service.py      # PDF → Bilder (pypdfium2), Seitenanzahl (pypdf, get_page_count())
 alembic/
 └── versions/
-    ├── 0001_initial.py     # Alle Basistabellen
-    ├── 0002_system_prompts.py
-    ├── 0003_supplier.py    # suppliers-Tabelle + supplier_id FK auf invoice_extractions
-    ├── 0009_ki_stats_on_invoice_extractions.py
-    │                       # 5 ki_*-Spalten auf invoice_extractions (nullable)
-    ├── 0011_document_types.py
-    │                       # document_types-Tabelle (15 Typen), document_type_id FK
-    │                       # auf documents, is_document_type_prompt auf system_prompts
-    │                       # ACHTUNG: down_revision = "0010" (nicht "0010_ki_total_duration")
-    └── 0012_doc_ki_stats.py
-                            # doc_ki_input_tokens, doc_ki_output_tokens, doc_ki_total_duration
-                            # auf documents (Fallback-Stats für Nicht-Eingangsrechnungen)
+    ├── 0001_initial.py     # Alle Basistabellen (aktuelle Baseline — ältere Migrationshistorie
+    │                       #   (0002_system_prompts, 0003_supplier, 0009/0011/0012 ...) wurde
+    │                       #   irgendwann zu dieser neuen 0001-Baseline zusammengefasst)
+    ├── 0002_automation.py  # automation_settings-Tabelle, import_batches.folder_sync/auto_export,
+    │                       #   documents.updated_at
+    ├── 0003_ip_address_length.py   # ai_clients.ip_address: String(20) → String(100)
+    ├── 0004_ai_max_context_tokens.py  # ai_clients.max_context_tokens (nullable)
+    ├── 0005_ai_port_optional.py    # ai_clients.port: NOT NULL → nullable
+    └── 0006_worker_settings.py     # automation_settings.worker_concurrency/
+                                    #   worker_poll_interval_seconds/worker_lock_timeout_minutes
 ```
 
 ### Worker-Container (`app/worker/`)
@@ -132,13 +179,56 @@ app/worker/
 │                        # FOR UPDATE SKIP LOCKED auf workflow_tasks)
 │                        # Dispatcher.paused: bool — wenn True, werden in run() keine neuen
 │                        # Tasks mehr geladen (bereits laufende Tasks werden fertig verarbeitet)
-│                        # build_server_url(ip, port) — freie Funktion, auch von den
-│                        # Status-Routen ohne AIServer-Instanz nutzbar
+│                        # build_server_url = re-exportiertes app.services.ai_url.build_ai_url
+│                        #   (NICHT mehr eigene Implementierung — siehe Bekannte Fallstricke)
+│                        #
+│                        # Dispatcher._load_worker_settings(): liest worker_concurrency/
+│                        #   worker_poll_interval_seconds/worker_lock_timeout_minutes bei JEDEM
+│                        #   Poll-Zyklus frisch aus automation_settings — Änderungen über
+│                        #   Einstellungen → Automatisierung wirken ohne Container-Neustart.
+│                        #   Konstruktor-Parameter (poll_interval/max_workers_cap/
+│                        #   lock_timeout_minutes) sind nur die ANFANGSWERTE vor dem ersten
+│                        #   erfolgreichen DB-Zyklus.
+│                        #
+│                        # AIServer.max_pages / can_handle_pages(page_count): Kapazitätsprüfung
+│                        #   aus max_context_tokens (÷ TOKENS_PER_PAGE_ESTIMATE=4500). Worker
+│                        #   wählt beim acquire_slot() nur Server, die die Seitenzahl des
+│                        #   Dokuments schaffen. Passt KEIN Server (aber mind. einer ist aktiv),
+│                        #   schlägt der Task SOFORT fehl (kein Timeout-Warten, kein Versuch
+│                        #   verschwendet) — Fehlertext nennt Seitenzahl + max. verfügbare Seiten.
+│                        #
+│                        # _cleanup_stale_tasks(min_age_minutes): setzt 'in_progress'-Tasks
+│                        #   zurück, deren locked_at älter als min_age_minutes ist — läuft
+│                        #   PERIODISCH (jeden Poll-Zyklus, min_age=lock_timeout_minutes) UND
+│                        #   einmalig beim Start mit min_age_minutes=None (= alle, garantiert
+│                        #   verwaist nach Container-Neustart).
+│                        #
+│                        # KEIN "Versuch" bei TimeoutError aus acquire_slot() (= kein Server
+│                        #   verfügbar/passend): _release_for_retry_no_penalty() statt
+│                        #   _release_for_retry() — attempts wird NICHT erhöht, Task bleibt
+│                        #   unbegrenzt in der Queue, bis wieder ein Server verfügbar ist.
+│                        #   attempts zählt nur bei TATSÄCHLICH unternommenen KI-Aufrufen
+│                        #   (z.B. ConnectionError während des HTTP-Requests).
 ├── main.py              # Eigene FastAPI-Instanz für den Worker-Container (uvicorn-Entrypoint:
 │                        # `uvicorn app.worker.main:app --host 0.0.0.0 --port 8000`)
 │                        # lifespan: Thread-Pool-Vergrößerung, wait_for_db(), asyncpg-Pool,
-│                        # AIDispatcherClient, Dispatcher als Hintergrund-Task
+│                        # AIDispatcherClient, Dispatcher + folder_sync + export_schedule als
+│                        # Hintergrund-Tasks (je eigener stop_event für sauberes Beenden)
 │                        # KEINE Alembic-Migrationen — bleibt Aufgabe des Backend-Containers
+├── folder_sync.py       # Eigener Loop (unabhängig vom Dispatcher): prüft Import-Batches mit
+│                        #   folder_sync=True im konfigurierten Intervall (automation_settings.
+│                        #   folder_sync_interval_minutes) auf neue PDFs, importiert + reiht sie
+│                        #   zur KI-Analyse ein. Pollt intern alle 30s und vergleicht verstrichene
+│                        #   Zeit gegen das AKTUELL konfigurierte Intervall — Intervalländerungen
+│                        #   greifen so innerhalb von ~30s statt erst nach dem alten,
+│                        #   möglicherweise viel längeren Intervall (siehe Fallstricke).
+├── export_schedule.py   # Eigener Loop: prüft alle 15 Min., ob der konfigurierte Wochentermin
+│                        #   (automation_settings.export_weekday/hour/minute) erreicht ist, und
+│                        #   schreibt für Batches mit auto_export=True eine inkrementelle
+│                        #   Excel-Datei nach EXPORT_BASE_PATH/{Firma}_{Jahr}/. Teilt sich
+│                        #   last_exported_at mit dem manuellen "/export/new"-Endpunkt.
+│                        #   Zeitstempel (Dateiname + Wochentermin-Vergleich) nutzen
+│                        #   settings.timezone (Europe/Berlin), NICHT Container-UTC.
 └── routers/
     └── status.py        # GET /health, GET /status (worker_count, queue_size, servers[],
                          # paused), POST /pause, POST /resume — intern vom Backend abgefragt
@@ -193,13 +283,39 @@ Stattdessen werden die importierten Dokumente via `_db_enqueue_for_analysis()` i
 Die Worker übernehmen die KI-Analyse. Das verhindert Race-Conditions zwischen Import-Pfad und Worker.
 
 `_delete_source_files()` löscht nur Dateien, für die ein DB-Eintrag mit `stored_filename` existiert (kein Blind-Delete).
+Ist der Import-Unterordner danach leer, wird er ebenfalls entfernt (`_sync_delete_source_files`) —
+außer es handelt sich um `IMPORT_BASE_PATH` selbst (kein Unterordner angegeben), das bleibt immer erhalten.
 
 ### Import löschen
 
 `DELETE /api/imports/{id}` löscht:
 - PDF-Dateien aus `STORAGE_PATH/{Firma}_{Jahr}/`
 - Leere Unterordner werden ebenfalls entfernt
+- **Alle Worker-Tasks** dieses Batches aus `workflow_tasks` (pending/in_progress/completed/failed,
+  unabhängig vom Status) — nötig, weil `workflow_tasks` `document_id` nur als JSONB-Payload
+  referenziert (keine FK), die CASCADE über Documents erreicht diese Tabelle deshalb NICHT
+  automatisch. Ohne diesen expliziten Schritt blieben verwaiste Tasks in der Queue zurück.
 - DB-Einträge (Batch → Dokumente → Extraktionen → Positionen via CASCADE)
+
+### Worker-Queue pro Import (`routers/imports.py`)
+
+Drei Endpunkte zur gezielten Steuerung der KI-Analyse-Queue für einen einzelnen Import-Batch
+(Frontend: Panel auf der Import-Detailseite, nur sichtbar wenn `queueStatus` geladen ist):
+
+| Endpunkt | Zweck |
+|---|---|
+| `GET /{batch_id}/queue-status` | Zählt Tasks dieses Batches nach Status (pending/in_progress/completed/failed) — JOIN über `(payload->>'document_id')::int = documents.id` |
+| `POST /{batch_id}/requeue` | Reiht ALLE Dokumente des Batches erneut zur KI-Analyse ein (auch bereits fertige/fehlgeschlagene) — nutzt dieselbe Dedup-Logik wie `_db_enqueue_for_analysis` (überspringt Dokumente mit bereits laufendem/wartendem Task) |
+| `DELETE /{batch_id}/queue` | Entfernt **pending UND in_progress**-Tasks dieses Batches aus der Queue |
+
+**Wichtig zu `DELETE .../queue`:** Der Dispatcher markiert Tasks bereits als `in_progress`,
+sobald er sie aus der DB in seine interne `asyncio.Queue` übernimmt (`_load_tasks`) —
+unabhängig davon, ob gerade tatsächlich ein KI-Server verfügbar ist. Tasks bleiben deshalb oft
+nur Sekundenbruchteile im Status `pending`. Ein Filter nur auf `pending` würde "alle entfernen"
+in der Praxis kaum je etwas löschen — deshalb werden beide Status entfernt. Läuft für einen Task
+bereits ein echter HTTP-Request an die KI, wird dieser NICHT abgebrochen (kein sauberer
+Cancel-Mechanismus); das Ergebnis wird dann noch ins Dokument geschrieben, der Task-Datensatz
+selbst ist aber bereits gelöscht.
 
 ### Dokumententypen (`models/document_type.py`, `crud/document_type.py`)
 
@@ -227,13 +343,24 @@ Die Worker übernehmen die KI-Analyse. Das verhindert Race-Conditions zwischen I
 
 ### KI-Extraktion (`services/ai_service.py`)
 
-- Unterstützt jede OpenAI-kompatible Vision-API (LM Studio, Ollama, OpenAI, etc.)
+- Unterstützt jede OpenAI-kompatible Vision-API (LM Studio, Ollama, OpenAI, OpenRouter, etc.)
 - Endpunkt je nach `endpoint_type`:
   - `openai` → `{api_url}/v1/chat/completions`
   - `lmstudio` → `{api_url}/api/v1/chat`
+- `api_url` wird über `app.services.ai_url.build_ai_url(ip_address, port)` gebaut — **einzige**
+  korrekte Implementierung, auch von `worker/worker.py` (als `build_server_url`) und
+  `ai_test_service.py` genutzt. `ip_address` darf ein reiner Hostname/IP ODER eine vollständige
+  URL inkl. Protokoll sein (z.B. `https://openrouter.ai/api`); `port` ist optional (leer = kein
+  `:port` in der URL). Für reine HTTPS-Cloud-Anbieter MUSS `https://` explizit in `ip_address`
+  stehen, sonst wird fälschlich Klartext-HTTP verwendet (siehe Bekannte Fallstricke).
 - Alle PDF-Seiten werden in **einer** Anfrage gesendet
 - **Kein `"detail": "high"`** in image_url → LM-Studio-Kompatibilität
 - **`"stream": False`** explizit gesetzt → verhindert channelId-Warnungen in LM Studio
+- **`reasoning`-Parameter:** über `app.services.ai_reasoning.build_reasoning_param(reasoning)` —
+  bei `"off"` wird das Feld im Request-Body komplett WEGGELASSEN; sonst als Objekt
+  `{"effort": "low"|"medium"|"high"}` gesendet (OpenRouter/OpenAI-Format). NUR für den
+  openai-kompatiblen Pfad — LM Studios eigener `/api/v1/chat`-Endpunkt bekommt weiterhin einen
+  reinen String (sein eigenes, anderes Payload-Format). Siehe Bekannte Fallstricke.
 - System-Prompt: aus DB (Standard-Prompt) oder explizit per `system_prompt_id`
 - **Niemals `raise_for_status()`** — alle HTTP-Fehler (429/503/500/Timeout/Netzwerk)
   werden als `({}, [], "KI-Fehler: ...", {})` zurückgegeben, nie als Exception
@@ -242,6 +369,28 @@ Die Worker übernehmen die KI-Analyse. Das verhindert Race-Conditions zwischen I
   Grund: verhindert, dass JSON-Serialisierung großer Base64-Payloads und HTTP-I/O
   den asyncio Event-Loop blockieren.
 - **`detect_document_type` ist SYNCHRON** — gleiche Konvention, muss via `asyncio.to_thread()` aufgerufen werden.
+
+### KI-Konfigurationen (`ai_clients`, `routers/ai_clients.py`)
+
+- **`ip_address`** (String(100)): IP/Hostname ODER vollständige URL mit Protokoll — siehe oben.
+- **`port`** (nullable): optional, leer = kein Port in der URL. Formular (`AIConfigForm.tsx`)
+  zeigt bei bestehenden Configs den echten (ggf. leeren) Wert; bei neuen Configs "1234" als
+  Vorschlag (LM-Studio-Standardport), aber nicht erzwungen.
+- **`max_context_tokens`** (nullable int): Kontext-Kapazität dieser KI in Token. `None` =
+  unbeschränkt (Standard, rückwärtskompatibel). Wird mit `TOKENS_PER_PAGE_ESTIMATE` (4500,
+  in `worker/worker.py`) verrechnet, um `AIServer.max_pages` zu bestimmen — der Worker schickt
+  Dokumente nur an KIs, deren Kapazität für die (bereits beim Import ermittelte) Seitenzahl
+  ausreicht (siehe `AIServer.can_handle_pages()` oben unter Worker-Container).
+- **`POST /{id}/test`** — KI-Konfiguration testen, OHNE sie zu aktivieren. Nimmt ein
+  hochgeladenes Test-PDF per multipart/form-data + optionale `system_prompt_id` entgegen,
+  rendert es zu Bildern (`pdf_service.pdf_to_base64_images`, Einstellungen aus
+  `image_settings`), baut die Anfrage über `ai_test_service.run_ai_test()` (nutzt `ai_url.py` +
+  `ai_reasoning.py` — MUSS mit der Produktions-Pipeline synchron bleiben, siehe Fallstricke) und
+  gibt die **vollständige** gesendete Anfrage (Bild-Base64 in der Response auf
+  `<Bilddaten, N Zeichen> <erste 40 Zeichen>…` gekürzt, alles andere vollständig) sowie die
+  **vollständige** Antwort (Status, Header, Body, Dauer) zurück. Schreibt NICHTS in die
+  Datenbank — kein Dokument, kein Import, keine Statusänderung.
+  Frontend: `/settings/ai-test` (eigener Menüpunkt "KI testen" unter Einstellungen).
 
 #### Rückgabe von `extract_invoice_data`
 
@@ -422,6 +571,32 @@ Zusätzlich zum normalen Extraktions-Prompt gibt es einen **Dokumententyp-Prompt
 {"dokumententyp_id": 1, "dokumententyp_name": "Eingangsrechnung"}
 ```
 
+### Automatisierungseinstellungen (`automation_settings`, `routers/settings.py`)
+
+Singleton-Tabelle (id=1), CRUD über `GET/PUT /api/settings/automation`. Steuert drei
+unabhängige Hintergrund-Loops im Worker-Container:
+
+| Feld | Loop | Beschreibung |
+|---|---|---|
+| `folder_sync_interval_minutes` | `folder_sync.py` | Wie oft Batches mit `folder_sync=True` auf neue PDFs geprüft werden |
+| `export_weekday`/`export_hour`/`export_minute` | `export_schedule.py` | Wochentermin für den automatischen inkrementellen Excel-Export (`auto_export=True`-Batches) |
+| `worker_concurrency` | `worker.py::Dispatcher` | Max. gleichzeitige Worker (Obergrenze unabhängig von `parallel_request` je KI-Config) |
+| `worker_poll_interval_seconds` | `worker.py::Dispatcher` | Wie oft die DB auf neue Tasks/geänderte Configs geprüft wird |
+| `worker_lock_timeout_minutes` | `worker.py::Dispatcher` | Ab wann ein `in_progress`-Task als "hängengeblieben" gilt und zurückgesetzt wird |
+
+**ENV-seed-dann-Website-Pattern:** Die drei `worker_*`-Felder werden NUR beim allerersten
+Anlegen der Singleton-Zeile aus `app.config.settings` (also aus der `.env`) übernommen
+(`crud/automation_settings.py::get_or_create`). Existiert die Zeile bereits (z.B. weil eine
+neue Migration nur Spalten hinzufügt, die Zeile aber schon existiert), greift stattdessen der
+`server_default` der Migration — die `.env`-Werte werden dann NICHT automatisch übernommen und
+müssen einmalig manuell über die Website nachgetragen werden. Nach dem ersten Anlegen ist die
+Website (DB) die alleinige Quelle der Wahrheit; die Worker lesen die Werte bei **jedem**
+Poll-Zyklus frisch aus der DB (`Dispatcher._load_worker_settings()`), Änderungen wirken also
+ohne Container-Neustart, meist innerhalb eines Poll-Intervalls (bzw. innerhalb von ~30s für
+den Ordner-Sync-Loop, der intern kürzer pollt als sein eigenes Intervall).
+
+Frontend: `/settings/automation` (Formular mit allen sechs Feldern).
+
 ### Umgebungsvariablen (`.env`)
 
 ```
@@ -431,7 +606,19 @@ POSTGRES_DB=rechnungsanalyse
 DATABASE_URL=postgresql://appuser:...@db:5432/rechnungsanalyse
 IMPORT_BASE_PATH=/volume1/docker/_rechnungsanalyse/import
 STORAGE_PATH=/volume1/docker/_rechnungsanalyse/storage
+EXPORT_BASE_PATH=/volume1/docker/_rechnungsanalyse/export
+TIMEZONE=Europe/Berlin
+WORKER_CONCURRENCY=5
+WORKER_POLL_INTERVAL=20
+WORKER_LOCK_TIMEOUT_MINUTES=30
 ```
+
+**Wichtig:** `WORKER_CONCURRENCY`/`WORKER_POLL_INTERVAL`/`WORKER_LOCK_TIMEOUT_MINUTES` sind nur
+die **Anfangswerte** für die `automation_settings`-Singleton-Zeile — sie werden nur beim
+allerersten Anlegen dieser Zeile übernommen (`crud/automation_settings.py::get_or_create`).
+Danach ist ausschließlich **Einstellungen → Automatisierung** im Frontend maßgeblich; ein
+Ändern der `.env` hat auf einem bereits laufenden System KEINE Wirkung mehr. Siehe Abschnitt
+„Automatisierungseinstellungen" unten.
 
 ### Excel-Export (`routers/imports.py`)
 
@@ -496,24 +683,36 @@ src/
 │   ├── layout.tsx
 │   ├── page.tsx                        # Redirect zu /dashboard
 │   ├── dashboard/page.tsx              # Übersicht aller Import-Batches
+│   │                                   # Zeigt documents_processed_total (aus worker-stats)
 │   ├── belege/page.tsx                 # Alle Dokumente, Filter, KI-Analyse starten
 │   │                                   # KI-Rohdaten-Ansicht + Infos-Ansicht (50/50)
 │   │                                   # Dokumententyp-Filter (DocTypeMultiSelect)
 │   │                                   # Dokumententyp-Spalte in Tabelle
+│   │                                   # Lazy-Load: KEIN automatisches Laden beim Mount,
+│   │                                   #   erst nach "Filter anwenden" (hasLoaded-Gate) —
+│   │                                   #   verhindert Hänger bei sehr vielen Belegen (z.B. 40000)
 │   ├── imports/
 │   │   ├── new/page.tsx                # Neuen Import starten
 │   │   └── [id]/page.tsx               # Import-Detail: ProgressPanel + Dokumentenliste
 │   │                                   # SSE + Polling-Fallback alle 4 s
 │   │                                   # Dokumentenliste lädt automatisch nach Abschluss
+│   │                                   # Queue-Status-Panel (pending/in_progress/completed/
+│   │                                   #   failed), unabhängig alle 5s gepollt, mit
+│   │                                   #   "↻ Erneut senden" / "✕ Aus Queue entfernen"
 │   └── settings/
 │       ├── ai/page.tsx                 # KI-Konfigurationen verwalten
+│       ├── ai-test/page.tsx            # KI-Konfiguration testen (ohne Aktivierung) —
+│       │                               #   PDF-Upload, Prompt-Auswahl, volle Request/Response
+│       ├── automation/page.tsx         # Ordner-Sync-Intervall, Export-Zeitplan,
+│       │                               #   Worker-Konkurrenz/Poll-Intervall/Lock-Timeout
 │       ├── prompts/page.tsx            # Systemprompts verwalten
 │       │                               # Checkbox: Als Dokumententyp-Prompt verwenden
 │       │                               # Hilfetext: erwartetes KI-JSON + Typenliste
 │       └── image/page.tsx             # Bildkonvertierungseinstellungen
 ├── components/
 │   ├── Nav.tsx                         # Links: Dashboard, Belege, Neuer Import,
-│   │                                   #   KI-Einstellungen, Systemprompts, Bildeinstellungen
+│   │                                   #   KI-Einstellungen, KI testen, Systemprompts,
+│   │                                   #   Bildeinstellungen, Automatisierung
 │   ├── dashboard/BatchTable.tsx
 │   ├── dashboard/FilterBar.tsx
 │   ├── imports/ImportForm.tsx          # Firma + Jahr + Pfad-Vorschau (aus API)
@@ -521,7 +720,9 @@ src/
 │   │                                   #   KI-Analyse nach Import (mit KI-Config + Prompt)
 │   ├── imports/DocumentsTable.tsx
 │   ├── imports/ProgressPanel.tsx       # SSE + initialTotal/initialProcessed Fallback
-│   └── settings/AIConfigForm.tsx
+│   └── settings/AIConfigForm.tsx       # port-Feld NICHT required (leer erlaubt);
+│                                       #   max_context_tokens-Feld mit Seiten-Kapazitäts-
+│                                       #   Hilfetext; IP-Feld-Label erwähnt volle-URL-Support
 └── lib/
     ├── api.ts      # axios-Client, alle API-Typen und -Funktionen
     └── sse.ts      # SSE-Client für Fortschritts-Updates
@@ -530,12 +731,14 @@ src/
 ### Navigation (`Nav.tsx`)
 
 ```
-/dashboard        Dashboard
-/belege           Belege
-/imports/new      Neuer Import
-/settings/ai      KI-Einstellungen
-/settings/prompts Systemprompts
-/settings/image   Bildeinstellungen
+/dashboard          Dashboard
+/belege             Belege
+/imports/new        Neuer Import
+/settings/ai        KI-Einstellungen
+/settings/ai-test   KI testen
+/settings/prompts   Systemprompts
+/settings/image     Bildeinstellungen
+/settings/automation Automatisierung
 ```
 
 ### API-Client (`src/lib/api.ts`)
@@ -547,14 +750,15 @@ src/
 
 Exports:
 - `itemsApi` — Platzhalter
-- `aiConfigsApi` — KI-Konfigurationen CRUD
-- `importsApi` — Import-Batches CRUD + `getStatus(id)` (ohne Dokumentliste)
+- `aiConfigsApi` — KI-Konfigurationen CRUD + `test(id, file, systemPromptId)` (multipart, 180s Timeout)
+- `importsApi` — Import-Batches CRUD + `getStatus(id)` + `queueStatus(id)`, `requeue(id, systemPromptId)`, `dequeue(id)`
 - `documentsApi` — Dokumente, Analyse, Vorschau, Kommentar
 - `imageSettingsApi` — Bildkonvertierungseinstellungen
 - `systemPromptsApi` — Systemprompts CRUD
 - `importSettingsApi` — Pfade abrufen (`/api/settings/paths`)
-- `logsApi` — System-Logs + `kiStats()` → `GET /api/logs/ki-stats`
+- `logsApi` — System-Logs + `kiStats()` → `GET /api/logs/ki-stats`, `workerStats()` → `GET /api/logs/worker-stats`
 - `documentTypesApi` — Dokumententypen abrufen (`GET /api/document-types`)
+- `automationSettingsApi` — `get()`/`update()` → `GET/PUT /api/settings/automation`
 
 Typen:
 - `DocumentType` — `{ id: number; name: string }`
@@ -562,6 +766,10 @@ Typen:
 - `DocumentFilter` — enthält `document_type_ids?: number[]`
 - `SystemPrompt` — enthält `is_document_type_prompt: boolean`
 - `SystemPromptCreate` — enthält `is_document_type_prompt?: boolean`
+- `AIConfig`/`AIConfigCreate` — `port: string | null` (optional)
+- `AIConfigTestResult` — Ergebnis von `aiConfigsApi.test()` (Request + Response vollständig)
+- `AutomationSettings`/`AutomationSettingsUpdate` — inkl. `worker_concurrency`, `worker_poll_interval_seconds`, `worker_lock_timeout_minutes`
+- `BatchQueueStatus` — Ergebnis von `importsApi.queueStatus()` (Zählung nach Task-Status)
 
 ### Belege-Seite (`belege/page.tsx`)
 
@@ -570,6 +778,13 @@ Typen:
 - Betrag/Rechnungsnr./Lieferant/Dokumententyp kommen direkt aus `DocumentItem` (Backend liefert sie mit)
 - Aktionsleiste bei Auswahl: KI-Konfiguration + Systemprompt wählen → „KI-Analyse starten"
 - Auto-Refresh alle 5 s solange Dokumente mit Status `processing` vorhanden
+- **Lazy-Load:** Beim Mount wird NUR `loadOptions()` (Firmen/Jahre/Batches/Dokumententypen für
+  die Filter-Dropdowns) geladen — **keine** automatische Beleg-Abfrage. Erst nach Klick auf
+  „Filter anwenden" (`applyFilters()`) wird `loadDocuments()` aufgerufen und `hasLoaded=true`
+  gesetzt; solange `!hasLoaded`, zeigt die Seite einen Platzhalter-Hinweis statt der Tabelle.
+  `resetFilters()` leert die Dokumentliste wieder und setzt `hasLoaded=false`. Grund: bei
+  großen Datenmengen (z.B. 40000 Belege) blockierte/hing die Seite beim automatischen Laden
+  ohne Filter.
 
 #### Filter: `DocTypeMultiSelect`
 
@@ -613,6 +828,12 @@ Behandelt sowohl `number` als auch Strings wie `"719,99 €"`:
 - `batchLoadedRef` verhindert Infinite-Loop in `useCallback`
 - **„↓ Excel exportieren"-Button** (grün) neben „Aktualisieren" — direkter Download-Link
   auf `GET /api/imports/{id}/export/`, nur sichtbar wenn Import nicht mehr aktiv
+- **Queue-Status-Panel:** ruft `importsApi.queueStatus(id)` unabhängig vom Import-Status alle
+  5s ab (auch nach Abschluss, solange noch Worker-Tasks existieren). Zeigt Zählung
+  pending/in_progress/completed/failed. Buttons „↻ Import erneut senden"
+  (`importsApi.requeue`) und „✕ Aus Queue entfernen" (`importsApi.dequeue`) — siehe
+  Backend-Abschnitt „Worker-Queue pro Import" für die genaue Semantik (insbesondere: `dequeue`
+  entfernt auch `in_progress`-Tasks, da `pending` in der Praxis kaum je erreicht wird).
 
 ### Logs-Seite (`logs/page.tsx`)
 
@@ -670,6 +891,12 @@ Behandelt sowohl `number` als auch Strings wie `"719,99 €"`:
 - **Frontend startet nicht nach `&&`-Kette in docker-compose**: Wenn ein Schritt in `cmd1 && cmd2 && cmd3` fehlschlägt, werden alle nachfolgenden Schritte übersprungen. Startup-Kommando verwendet daher `;` als Trenner — jeder Schritt läuft unabhängig. `npm install` Fehler blockieren nicht mehr `npm run dev`.
 - **Worker-Container zeigt kurzzeitig `worker_online: false`**: Normal beim ersten Start oder nach einem Neustart des `worker`-Containers, solange dieser noch hochfährt (asyncpg-Pool aufbauen, `wait_for_db`). Backend liefert in der Zwischenzeit den DB-Fallback (Queue-Länge weiterhin korrekt, `worker_count: 0`). Kein Fehler, kein Eingreifen nötig.
 - **Dispatcher loggt SQL-Fehler direkt nach dem allerersten Start**: Backend und Worker starten parallel; der Worker wartet zwar auf `/venv/.ready` (Pakete installiert), aber nicht auf `alembic upgrade head` (Migrationen). Falls der Dispatcher pollt bevor die Migration durchgelaufen ist, schlägt `_load_servers`/`_load_tasks` kurzzeitig fehl — wird von `Dispatcher.run()` abgefangen und geloggt, kein Crash. Nach der ersten erfolgreichen Migration verschwindet die Meldung von selbst.
+- **KI-Aufruf schlägt bei HTTPS-Cloud-Anbietern fehl (z.B. OpenRouter, HTTP 400/Verbindungsfehler)**: `documents.py` baute die `api_url` früher selbst über eine naive String-Zusammensetzung (`f"http://{ip}:{port}"`), die IMMER `http://` erzwang, auch wenn `ip_address` bereits `https://...` enthielt — abweichend von der (korrekten) URL-Bildung im Worker. Root-Cause eines echten Datenverlust-Vorfalls (fehlgeschlagene Re-Analyse überschrieb erfolgreiche `invoice_extractions`). Fix: einzige URL-Bildung jetzt zentral in `app/services/ai_url.py::build_ai_url()`, von ALLEN drei Aufrufern (`ai_service.py`, `ai_test_service.py`, `worker.py`) genutzt. Bei neuen Cloud-Providern: `ip_address` MUSS `https://` explizit enthalten (z.B. `https://openrouter.ai/api`), sonst wird stillschweigend Klartext-HTTP versucht.
+- **OpenRouter/andere OpenAI-kompatible APIs lehnen `reasoning`-Parameter ab (`"expected object, received string"`)**: Wurde als reiner String (`"off"`/`"high"`) gesendet, OpenRouter erwartet ein Objekt (`{"effort": "high"}`) oder das Feld ganz weggelassen bei "aus". Fix: `app/services/ai_reasoning.py::build_reasoning_param()`, NUR im openai-kompatiblen Anfragepfad genutzt — LM Studios eigener `/api/v1/chat`-Endpunkt behält das String-Format.
+- **KI-Config: Port-Feld zeigt trotz Code-Fix noch `:` oder Pflichtfeld "1234" in der Vorschau**: Fast immer ein veralteter Frontend-Bundle-Cache, kein Code-Bug — vor weiterem Debuggen erst `docker restart rechnungsanalyse-frontend-1` (lokal) bzw. `.next/`-Cache löschen (NAS) und per Chunk-Diff verifizieren, dass der neue Code wirklich ausgeliefert wird, siehe „Frontend-Cache manuell löschen" oben.
+- **Nur ein Bruchteil der aktivierten `parallel_request`-Kapazität wird genutzt (z.B. 4 aktiviert, nur 2 aktive Worker)**: Nicht zwangsläufig ein Bug im Sinne von "kaputt" — der Dispatcher deckelt zusätzlich über `worker_concurrency`/`max_workers_cap` (Einstellungen → Automatisierung), unabhängig von der Summe der `parallel_request`-Werte aller aktiven KI-Configs. Beide Grenzen greifen gleichzeitig (`min()`); die kleinere gewinnt.
+- **Import löschen hinterlässt verwaiste Worker-Tasks**: `workflow_tasks` referenziert `document_id` nur als JSONB-Payload (keine FK) — eine CASCADE über `Document`/`ImportBatch` erreicht diese Tabelle NICHT. `DELETE /api/imports/{id}` muss die zugehörigen Tasks daher explizit per Payload-Lookup löschen (`(payload->>'document_id')::int = ANY(:doc_ids)`), sonst bleiben sie in der Queue und werden dem Worker weiterhin zur Bearbeitung angeboten (obwohl das Dokument längst gelöscht ist).
+- **Dokument wird nach 3 "kein Server verfügbar"-Versuchen fälschlich permanent als `error` markiert**: `acquire_slot()` wirft `TimeoutError`, wenn (noch) kein passender KI-Server frei ist — das ist kein fehlgeschlagener KI-Aufruf, sondern schlicht "später nochmal versuchen". Wurde früher trotzdem über `_check_attempts_and_fail`/`_release_for_retry` behandelt und zählte gegen `max_attempts`. Fix: `_release_for_retry_no_penalty()` — setzt den Task ohne Erhöhung von `attempts` zurück auf `pending`; er bleibt dadurch unbegrenzt in der Queue, bis wieder Kapazität frei wird. `attempts` zählt jetzt ausschließlich echte KI-Aufrufversuche (z.B. `ConnectionError` während des HTTP-Requests).
 
 ### Wichtige Abhängigkeiten
 
@@ -737,23 +964,22 @@ Container Manager → jeweiliger Container → Protokoll
 ```
 ImportBatch  1──n  Document  1──1  InvoiceExtraction  n──1  Supplier
                    │          1──n  OrderPosition
+                   │          1──n  DocumentTokenCount
                    n──1  DocumentType
-AIConfig        (referenziert von ImportBatch.ai_config_id)
+AIClients       (referenziert von ImportBatch.ai_config_id, WorkflowTask-Payload)
+WorkflowTask    (Worker-Queue, JSONB-Payload {document_id, system_prompt_id}, keine FK)
 ImageSettings   (Singleton, globale Bildkonvertierungseinstellungen)
 SystemPrompt    (Standard-Prompt + optionaler Dokumententyp-Prompt)
-ProcessingSettings (Singleton, import_concurrency + ai_concurrency)
+AutomationSettings (Singleton, folder_sync/export-Zeitplan + worker_concurrency/poll_interval/lock_timeout)
 ```
 
 ### Migrationen
 
-| Datei | Inhalt |
-|---|---|
-| `0001_initial.py` | Alle Basistabellen (ai_configs, image_settings, import_batches, documents, invoice_extractions, order_positions) |
-| `0002_system_prompts.py` | `system_prompts`-Tabelle |
-| `0003_supplier.py` | `suppliers`-Tabelle + `supplier_id` FK auf `invoice_extractions` |
-| `0009_ki_stats_on_invoice_extractions.py` | 5 `ki_*`-Spalten auf `invoice_extractions` (nullable) |
-| `0011_document_types.py` | `document_types`-Tabelle (15 vordefinierte Typen), `document_type_id` FK auf `documents`, `is_document_type_prompt` auf `system_prompts` |
-| `0012_doc_ki_stats.py` | `doc_ki_input_tokens`, `doc_ki_output_tokens`, `doc_ki_total_duration` auf `documents` (Fallback-Stats für Nicht-Eingangsrechnungen ohne InvoiceExtraction) |
+Siehe `alembic/versions/` — vollständige, aktuelle Liste im Backend-Dateibaum weiter oben
+(Abschnitt „Backend → Struktur"). Die ältere Historie (`0002_system_prompts`,
+`0003_supplier`, `0009_ki_stats_on_invoice_extractions`, `0011_document_types`,
+`0012_doc_ki_stats` u.a.) wurde zu einer neuen `0001_initial.py`-Baseline zusammengefasst;
+Referenzen auf diese alten Dateinamen in älteren Notizen/Kommentaren sind überholt.
 
 ### Import-Status-Flow
 

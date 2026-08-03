@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     # explizite Umrechnung würden Zeitstempel fälschlich als UTC angezeigt.
     timezone: str = "Europe/Berlin"
 
+    # Ausgangswerte für die worker_*-Felder in automation_settings — werden NUR
+    # beim allerersten Anlegen dieser Singleton-Zeile übernommen (siehe
+    # crud/automation_settings.py::get_or_create()). Danach ist die DB die Quelle
+    # der Wahrheit und über die Website (Einstellungen → Automatisierung) änderbar,
+    # ohne dass diese ENV-Werte noch eine Rolle spielen oder ein Neustart nötig ist.
+
+    # Maximale Anzahl gleichzeitiger Worker im Worker-Container (Obergrenze,
+    # unabhängig von der Summe aus parallel_request über alle aktiven KI-Configs —
+    # verhindert Thread-Pool-Erschöpfung auf NAS-Systemen mit wenigen CPUs).
+    # War früher hart auf 2 kodiert.
+    worker_concurrency: int = 5
+
+    # Poll-Intervall des Dispatchers in Sekunden (wie oft DB auf neue Tasks/
+    # geänderte KI-Configs geprüft wird). Feldname muss exakt WORKER_POLL_INTERVAL
+    # entsprechen (pydantic-settings mappt Umgebungsvariablen case-insensitiv 1:1).
+    worker_poll_interval: float = 20.0
+
+    # Nach wie vielen Minuten ein 'in_progress'-Task als verwaist gilt und
+    # automatisch zurück auf 'pending' gesetzt wird.
+    worker_lock_timeout_minutes: int = 30
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

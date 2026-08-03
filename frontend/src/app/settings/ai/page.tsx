@@ -197,7 +197,9 @@ export default function AISettingsPage() {
                   <p className="mt-1 text-sm text-gray-500">
                     <span className="font-mono">{config.model_name}</span>
                     {" · "}
-                    <span className="font-mono text-gray-400">{config.ip_address}:{config.port}</span>
+                    <span className="font-mono text-gray-400">
+                      {config.ip_address}{config.port ? `:${config.port}` : ""}
+                    </span>
                     {" · "}
                     <span className="text-gray-400">{config.endpoint_type}</span>
                   </p>

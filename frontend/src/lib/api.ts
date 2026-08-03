@@ -81,8 +81,11 @@ export interface AIConfig {
   reasoning: ReasoningLevel;
   ip_address: string;
   endpoint_type: EndpointType;
-  port: string;
+  /** Optional — null/leer = kein :port in der gebauten URL. */
+  port: string | null;
   parallel_request: number;
+  /** Maximale Kontext-Kapazität in Token (Eingabe). null = keine Beschränkung. */
+  max_context_tokens: number | null;
   /** ISO-Zeitstempel: wenn gesetzt und in der Zukunft → temporär deaktiviert */
   timeout_at: string | null;
   created_at: string;
@@ -101,8 +104,9 @@ export interface AIConfigCreate {
   reasoning?: ReasoningLevel;
   ip_address?: string;
   endpoint_type?: EndpointType;
-  port?: string;
+  port?: string | null;
   parallel_request?: number;
+  max_context_tokens?: number | null;
 }
 
 export const aiConfigsApi = {
@@ -118,7 +122,41 @@ export const aiConfigsApi = {
   /** Hebt eine temporäre Sperre auf ohne active zu ändern */
   clearTimeout: (id: number) =>
     apiClient.post<AIConfig>(`/api/ai-clients/${id}/clear-timeout`).then((r) => r.data),
+  /**
+   * Sendet ein Testdokument an diese KI-Konfiguration (unabhängig von active) und
+   * gibt die vollständige Anfrage + Antwort zurück. Schreibt nichts in die DB.
+   * Langes Timeout, da lokale Modelle für große/mehrseitige Dokumente Minuten
+   * brauchen können.
+   */
+  test: (id: number, file: File, systemPromptId?: number | null) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (systemPromptId != null) form.append("system_prompt_id", String(systemPromptId));
+    return apiClient
+      .post<AIConfigTestResult>(`/api/ai-clients/${id}/test`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 180000,
+      })
+      .then((r) => r.data);
+  },
 };
+
+export interface AIConfigTestResult {
+  request: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  };
+  response: {
+    status_code: number;
+    headers: Record<string, string>;
+    body: string;
+    duration_seconds: number;
+  } | null;
+  error: string | null;
+  success: boolean;
+}
 
 // ─── Typen: Import-Batches ────────────────────────────────────────────────────
 
@@ -163,6 +201,14 @@ export interface BatchKiStats {
   total_duration_seconds: number;
 }
 
+export interface BatchQueueStatus {
+  pending: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  total: number;
+}
+
 export const importsApi = {
   list: (params?: { company_name?: string; year?: number }) =>
     apiClient.get<ImportBatch[]>("/api/imports/", { params }).then((r) => r.data),
@@ -176,6 +222,20 @@ export const importsApi = {
     apiClient.get<BatchKiStats>(`/api/imports/${id}/ki-stats`).then((r) => r.data),
   updateAutomation: (id: number, data: { folder_sync?: boolean; auto_export?: boolean }) =>
     apiClient.patch<ImportBatch>(`/api/imports/${id}/automation/`, data).then((r) => r.data),
+  queueStatus: (id: number) =>
+    apiClient.get<BatchQueueStatus>(`/api/imports/${id}/queue-status/`).then((r) => r.data),
+  requeue: (id: number, systemPromptId?: number | null) =>
+    apiClient
+      .post<{ batch_id: number; total_documents: number; enqueued: number }>(
+        `/api/imports/${id}/requeue/`,
+        null,
+        { params: systemPromptId != null ? { system_prompt_id: systemPromptId } : undefined }
+      )
+      .then((r) => r.data),
+  dequeue: (id: number) =>
+    apiClient
+      .delete<{ batch_id: number; removed: number }>(`/api/imports/${id}/queue/`)
+      .then((r) => r.data),
   delete: (id: number) => apiClient.delete(`/api/imports/${id}`),
 };
 
@@ -349,6 +409,12 @@ export interface AutomationSettings {
   export_weekday: number;
   export_hour: number;
   export_minute: number;
+  /** Maximale Anzahl gleichzeitiger Worker im Worker-Container */
+  worker_concurrency: number;
+  /** Poll-Intervall des Dispatchers in Sekunden */
+  worker_poll_interval_seconds: number;
+  /** Ab wie vielen Minuten ein verwaister 'in_progress'-Task zurückgesetzt wird */
+  worker_lock_timeout_minutes: number;
 }
 
 export interface AutomationSettingsUpdate {
@@ -356,6 +422,9 @@ export interface AutomationSettingsUpdate {
   export_weekday: number;
   export_hour: number;
   export_minute: number;
+  worker_concurrency: number;
+  worker_poll_interval_seconds: number;
+  worker_lock_timeout_minutes: number;
 }
 
 export const automationSettingsApi = {
@@ -540,6 +609,8 @@ export interface WorkerStats {
   no_ai_available: boolean;
   worker_online: boolean;
   ai_configs: WorkerAIConfig[];
+  /** Anzahl Dokumente, die insgesamt mindestens einmal von der KI verarbeitet wurden */
+  documents_processed_total: number;
 }
 
 export const workerApi = {

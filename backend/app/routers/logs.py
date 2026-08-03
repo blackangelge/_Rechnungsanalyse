@@ -101,6 +101,12 @@ async def get_worker_stats(db: Session = Depends(get_db)):
         text("SELECT COUNT(*) FROM workflow_tasks WHERE status = 'failed'")
     ).scalar() or 0
 
+    # Anzahl Dokumente, die mindestens einmal von der KI verarbeitet wurden
+    # (mindestens ein Eintrag in documents_token_counts — Typenerkennung oder Extraktion)
+    documents_processed_total = db.execute(
+        text("SELECT COUNT(DISTINCT document_id) FROM documents_token_counts")
+    ).scalar() or 0
+
     # Alle KI-Konfigurationen mit Verfügbarkeitsstatus
     from datetime import datetime
     now = datetime.now(timezone.utc)
@@ -135,4 +141,5 @@ async def get_worker_stats(db: Session = Depends(get_db)):
         "no_ai_available":    no_ai_available,
         "worker_online":      worker_online,
         "ai_configs":         configs,
+        "documents_processed_total": int(documents_processed_total),
     }

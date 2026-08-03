@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { BatchKiStats, ImportBatch, DocumentItem, importsApi } from "@/lib/api";
+import { BatchKiStats, BatchQueueStatus, ImportBatch, DocumentItem, importsApi } from "@/lib/api";
 import ProgressPanel from "@/components/imports/ProgressPanel";
 import DocumentsTable from "@/components/imports/DocumentsTable";
 
@@ -28,6 +28,9 @@ export default function ImportDetailPage() {
   const [docsLoading, setDocsLoading] = useState(false);
   // Aggregierte KI-Statistiken für diesen Batch
   const [kiStats, setKiStats] = useState<BatchKiStats | null>(null);
+  // Worker-Queue-Status für diesen Batch (pending/in_progress/completed/failed)
+  const [queueStatus, setQueueStatus] = useState<BatchQueueStatus | null>(null);
+  const [queueActionLoading, setQueueActionLoading] = useState(false);
 
   const [metaLoading, setMetaLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +79,16 @@ export default function ImportDetailPage() {
       setKiStats(stats);
     } catch {
       // Fehler ignorieren — Stats sind optional
+    }
+  }, [batchId]);
+
+  /** Worker-Queue-Status laden (wie viele Dokumente dieses Batches in der Queue sind) */
+  const loadQueueStatus = useCallback(async () => {
+    try {
+      const status = await importsApi.queueStatus(batchId);
+      setQueueStatus(status);
+    } catch {
+      // Fehler ignorieren — Queue-Status ist optional
     }
   }, [batchId]);
 
@@ -138,6 +151,14 @@ export default function ImportDetailPage() {
     return () => stopPolling();
   }, [loadMeta, loadDocuments, loadKiStats, startPolling, stopPolling]);
 
+  // Queue-Status unabhängig vom Import-Status regelmäßig aktualisieren — die KI-Analyse
+  // läuft über die Worker-Queue oft noch weiter, nachdem der Import selbst "done" ist.
+  useEffect(() => {
+    loadQueueStatus();
+    const interval = setInterval(loadQueueStatus, 5000);
+    return () => clearInterval(interval);
+  }, [loadQueueStatus]);
+
   /** Callback vom ProgressPanel: Import ist abgeschlossen (via SSE) */
   const handleImportDone = useCallback(() => {
     stopPolling(); // Polling stoppen, SSE hat gewonnen
@@ -150,6 +171,34 @@ export default function ImportDetailPage() {
     docsLoadedRef.current = false;
     loadDocuments();
   }, [loadDocuments]);
+
+  /** Gesamten Import erneut zur KI-Analyse einreihen */
+  const handleRequeueBatch = useCallback(async () => {
+    setQueueActionLoading(true);
+    setError(null);
+    try {
+      await importsApi.requeue(batchId);
+      await loadQueueStatus();
+    } catch {
+      setError("Fehler beim erneuten Einreihen in die Worker-Queue");
+    } finally {
+      setQueueActionLoading(false);
+    }
+  }, [batchId, loadQueueStatus]);
+
+  /** Alle wartenden Tasks dieses Imports aus der Worker-Queue entfernen */
+  const handleDequeueBatch = useCallback(async () => {
+    setQueueActionLoading(true);
+    setError(null);
+    try {
+      await importsApi.dequeue(batchId);
+      await loadQueueStatus();
+    } catch {
+      setError("Fehler beim Entfernen aus der Worker-Queue");
+    } finally {
+      setQueueActionLoading(false);
+    }
+  }, [batchId, loadQueueStatus]);
 
   /** Ordner-Sync bzw. automatischen Export nachträglich umschalten */
   const handleToggleAutomation = useCallback(
@@ -228,6 +277,45 @@ export default function ImportDetailPage() {
           </label>
         </div>
       </div>
+
+      {/* Worker-Queue-Status für diesen Import */}
+      {queueStatus && (
+        <div className="rounded-lg border bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center gap-4">
+            <h2 className="text-sm font-semibold text-gray-900">Worker-Queue</h2>
+            <span className="text-sm text-gray-600">
+              <span className="font-semibold text-blue-700">{queueStatus.pending}</span> wartend
+            </span>
+            <span className="text-sm text-gray-600">
+              <span className="font-semibold text-amber-600">{queueStatus.in_progress}</span> in Bearbeitung
+            </span>
+            <span className="text-sm text-gray-600">
+              <span className="font-semibold text-green-700">{queueStatus.completed}</span> abgeschlossen
+            </span>
+            <span className="text-sm text-gray-600">
+              <span className="font-semibold text-red-600">{queueStatus.failed}</span> fehlgeschlagen
+            </span>
+            <div className="ml-auto flex gap-2">
+              <button
+                onClick={handleRequeueBatch}
+                disabled={queueActionLoading}
+                title="Alle Dokumente dieses Imports erneut zur KI-Analyse einreihen"
+                className="rounded border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-40 transition-colors"
+              >
+                ↻ Import erneut senden
+              </button>
+              <button
+                onClick={handleDequeueBatch}
+                disabled={queueActionLoading || (queueStatus.pending === 0 && queueStatus.in_progress === 0)}
+                title="Alle wartenden und in Bearbeitung befindlichen Tasks dieses Imports aus der Worker-Queue entfernen (bereits laufende KI-Anfragen werden nicht abgebrochen)"
+                className="rounded border border-red-300 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-40 transition-colors"
+              >
+                ✕ Aus Queue entfernen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">

@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 
 from app.models.ai_clients import AIClients
+from app.services.ai_reasoning import build_reasoning_param
 from app.services.lmstudioclient import LMStudioClient
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,6 @@ def extract_invoice_data(
     endpoint_type = getattr(config, "endpoint_type", "openai") or "openai"
     base = config.api_url.rstrip("/")
     reasoning = getattr(config, "reasoning", "off") or "off"
-    reasoning_value = "high" if reasoning == "on" else reasoning
 
     user_text = (
         f"Die folgende Rechnung besteht aus {len(images_b64)} Seite(n). "
@@ -186,13 +186,15 @@ def extract_invoice_data(
             "model": config.model_name,
             "max_tokens": config.max_tokens,
             "temperature": config.temperature,
-            "reasoning": reasoning_value,
             "stream": False,
             "messages": [
                 {"role": "system", "content": active_system_prompt},
                 {"role": "user", "content": content_parts},
             ],
         }
+        reasoning_param = build_reasoning_param(reasoning)
+        if reasoning_param is not None:
+            request_body["reasoning"] = reasoning_param
         del content_parts
 
         try:
@@ -330,7 +332,6 @@ def detect_document_type(
     endpoint_type = getattr(config, "endpoint_type", "openai") or "openai"
     base = config.api_url.rstrip("/")
     reasoning = getattr(config, "reasoning", "off") or "off"
-    reasoning_value = "high" if reasoning == "on" else reasoning
 
     # Typliste als Text aufbauen
     type_list_text = "\n".join(f"{dt['id']}: {dt['name']}" for dt in document_types)
@@ -368,13 +369,15 @@ def detect_document_type(
             "model": config.model_name,
             "max_tokens": config.max_tokens,
             "temperature": config.temperature,
-            "reasoning": reasoning_value,
             "stream": False,
             "messages": [
                 {"role": "system", "content": active_system_prompt},
                 {"role": "user", "content": content_parts},
             ],
         }
+        reasoning_param = build_reasoning_param(reasoning)
+        if reasoning_param is not None:
+            request_body["reasoning"] = reasoning_param
         del content_parts
 
         try:

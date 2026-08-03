@@ -46,10 +46,18 @@ class AIClients(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)         # Aktiviert für Analysen
     # Reasoning-Modus: "off" | "low" | "medium" | "high" | "on"
     reasoning: Mapped[str] = mapped_column(String(20), default="off", server_default="off", nullable=False)
-    ip_address: Mapped[str] = mapped_column(String(20), default="", server_default="", nullable=False)           # IP oder Hostname der KI-API
+    ip_address: Mapped[str] = mapped_column(String(100), default="", server_default="", nullable=False)          # IP oder Hostname der KI-API
     endpoint_type: Mapped[str] = mapped_column(String(20), default="openai", server_default="openai", nullable=False)  # "openai" | "lmstudio"
-    port: Mapped[str] = mapped_column(String(5), default="1234", server_default="1234", nullable=False)          # Port der KI-API
+    # Port optional — leer/NULL = keine Portangabe in der URL (siehe app/services/ai_url.py).
+    # Sinnvoll für Cloud-Anbieter mit https://-URL, deren Standardport (443) nicht
+    # explizit in der Anfrage stehen soll.
+    port: Mapped[str | None] = mapped_column(String(5), nullable=True)
     parallel_request: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)        # Maximale parallele Anfragen an diese KI
+    # Maximale Kontext-Kapazität dieser KI-Instanz in Token (Eingabe, z.B. Kontextfenster
+    # des Modells/der Hardware). NULL = keine Beschränkung (Standard, rückwärtskompatibel).
+    # Wird mit TOKENS_PER_PAGE_ESTIMATE verrechnet, um zu entscheiden, ob ein Dokument
+    # (nach Seitenzahl) auf diese KI passt — siehe app/worker/worker.py.
+    max_context_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Bis wann temporär deaktiviert (NULL = aktiv)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

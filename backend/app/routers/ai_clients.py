@@ -8,14 +8,20 @@ Endpunkte:
   PUT    /api/ai-clients/{id}       — Konfiguration aktualisieren
   DELETE /api/ai-clients/{id}       — Konfiguration löschen
   POST   /api/ai-clients/{id}/set-default — als Standard setzen
+  POST   /api/ai-clients/{id}/test  — Testdokument senden, volle Anfrage+Antwort zurückgeben
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncio
+import logging
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import get_db
 from app.schemas.ai_clients import AIClientsCreate, AIClientsRead, AIClientsUpdate
+
+logger = logging.getLogger(__name__)
 
 # Alle Endpunkte dieses Routers beginnen mit /api/ai-clients
 router = APIRouter(prefix="/api/ai-clients", tags=["KI-Konfigurationen"])
@@ -87,3 +93,73 @@ def clear_timeout_ai_config(config_id: int, db: Session = Depends(get_db)):
     if obj is None:
         raise HTTPException(status_code=404, detail="KI-Konfiguration nicht gefunden")
     return obj
+
+
+@router.post("/{config_id}/test")
+async def test_ai_config(
+    config_id: int,
+    file: UploadFile = File(..., description="Test-PDF"),
+    system_prompt_id: int | None = Form(None, description="None = Standard-Extraktionsprompt"),
+    db: Session = Depends(get_db),
+):
+    """
+    Sendet ein hochgeladenes Test-PDF an diese KI-Konfiguration — unabhängig davon,
+    ob sie aktiv (active=True) ist. Schreibt NICHTS in die Datenbank (kein Dokument,
+    kein Import, keine Statusänderung) und gibt die vollständige gesendete Anfrage
+    sowie die vollständige Antwort zurück, zum Debuggen von Verbindungs- oder
+    Konfigurationsproblemen.
+    """
+    from app.services.ai_test_service import run_ai_test
+    from app.services.pdf_service import pdf_to_base64_images
+
+    config = crud.ai_config.get_by_id(db, config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="KI-Konfiguration nicht gefunden")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Leere Datei hochgeladen")
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        img_settings = crud.image_settings.get_or_create(db)
+        images_b64 = await asyncio.to_thread(
+            pdf_to_base64_images,
+            tmp_path,
+            img_settings.dpi,
+            img_settings.image_format,
+            img_settings.jpeg_quality,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    if not images_b64:
+        raise HTTPException(
+            status_code=400,
+            detail="PDF konnte nicht gelesen/gerendert werden (leer, beschädigt oder kein gültiges PDF).",
+        )
+
+    if system_prompt_id:
+        sp = crud.system_prompt.get_by_id(db, system_prompt_id)
+        system_prompt_text = sp.content if sp else None
+    else:
+        default_sp = crud.system_prompt.get_default(db)
+        system_prompt_text = default_sp.content if default_sp else None
+
+    user_text = (
+        f"Dies ist ein Testdokument mit {len(images_b64)} Seite(n) zum Testen dieser "
+        "KI-Konfiguration. Analysiere gemäß der Systemanweisung."
+    )
+
+    logger.info(
+        "KI-Test: Config #%d ('%s'), %d Seite(n), Datei '%s'",
+        config_id, config.name, len(images_b64), file.filename,
+    )
+
+    return await asyncio.to_thread(run_ai_test, images_b64, config, system_prompt_text, user_text)

@@ -38,6 +38,8 @@ from typing import Optional, Protocol
 
 import asyncpg
 
+from app.services.ai_url import build_ai_url as build_server_url
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Logging
 # ──────────────────────────────────────────────────────────────────────────────
@@ -56,6 +58,11 @@ POLL_INTERVAL_SEC = 20
 
 #: Maximale Wartezeit eines Workers auf einen freien Slot.
 SLOT_ACQUIRE_TIMEOUT = 60.0
+
+#: Grobe Schätzung des Token-Verbrauchs pro gerenderter PDF-Seite (Bild + Anteil
+#: Prompt/Ausgabe). Wird mit AIClients.max_context_tokens verrechnet, um zu
+#: entscheiden, ob ein Dokument auf eine bestimmte KI-Instanz passt.
+TOKENS_PER_PAGE_ESTIMATE = 4500
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -84,23 +91,10 @@ class AIClient(Protocol):
 # ══════════════════════════════════════════════════════════════════════════════
 #  DATENKLASSEN
 # ══════════════════════════════════════════════════════════════════════════════
-def build_server_url(ip_address: str, port: str) -> str:
-    """Setzt die Basis-URL aus IP + Port zusammen.
-
-    Falls ``ip_address`` bereits ein Schema enthält (z. B.
-    ``https://api.openai.com``), wird der Port nicht angehängt,
-    sofern er nicht schon Teil der Adresse ist.
-
-    Freistehende Funktion (statt Methode), damit sie auch ohne
-    ``AIServer``-Instanz genutzt werden kann (z. B. von den
-    Status-Routen des Worker-Containers).
-    """
-    if ip_address.startswith(("http://", "https://")):
-        base = ip_address.rstrip("/")
-        if port and ":" not in base.split("//", 1)[1]:
-            base = f"{base}:{port}"
-        return base
-    return f"http://{ip_address}:{port}"
+# build_server_url (importiert oben) — kanonische Implementierung in
+# app/services/ai_url.py. MUSS mit der URL-Bildung in app/routers/documents.py
+# identisch sein, sonst bauen Analyse-Pipeline und Worker-Status unterschiedliche
+# URLs für dieselbe KI-Konfiguration.
 
 
 @dataclass
@@ -116,7 +110,7 @@ class AIServer:
     id: int
     name: str
     ip_address: str
-    port: str
+    port: Optional[str]
     parallel_request: int    # Slots (1-4)
     active: bool
     timeout_at: Optional[datetime]
@@ -141,6 +135,22 @@ class AIServer:
         erreichbar). Wird ausschließlich von der externen AIClient-Klasse
         gesetzt/zurückgesetzt – der Dispatcher liest nur."""
         return self.timeout_at is not None
+
+    @property
+    def max_pages(self) -> int | None:
+        """Maximale Seitenzahl, die diese KI laut max_context_tokens verarbeiten
+        kann (grobe Schätzung über TOKENS_PER_PAGE_ESTIMATE). None = unbeschränkt."""
+        limit = self.raw.get("max_context_tokens")
+        if not limit:
+            return None
+        return max(1, limit // TOKENS_PER_PAGE_ESTIMATE)
+
+    def can_handle_pages(self, page_count: int) -> bool:
+        """True, wenn diese KI ein Dokument mit page_count Seiten verarbeiten kann."""
+        if page_count <= 0:
+            return True  # Seitenzahl (noch) unbekannt — nicht vorab ausschließen
+        limit = self.max_pages
+        return limit is None or page_count <= limit
 
 
 @dataclass
@@ -204,17 +214,27 @@ class ServerPool:
                     log.info(f"- Server {self._servers[sid].name} entfernt")
                     del self._servers[sid]
 
+    def eligible_servers(self, page_count: int = 0) -> list["AIServer"]:
+        """Aktive, erreichbare Server, die page_count Seiten verarbeiten können
+        (unabhängig von aktuell freien Slots) — für Kapazitäts-Vorabprüfungen."""
+        return [
+            s for s in self._servers.values()
+            if s.active and not s.is_down and s.can_handle_pages(page_count)
+        ]
+
     @asynccontextmanager
-    async def acquire_slot(self, timeout: float = 30.0):
-        """Reserviert einen Slot auf einem aktiven, erreichbaren Server.
+    async def acquire_slot(self, timeout: float = 30.0, page_count: int = 0):
+        """Reserviert einen Slot auf einem aktiven, erreichbaren Server, der
+        Dokumente mit page_count Seiten verarbeiten kann (siehe AIServer.can_handle_pages).
 
         "Geeignet" bedeutet:
           * ``active = True``
           * ``timeout_at IS NULL`` (Server gilt als erreichbar)
+          * Kapazität (max_context_tokens) reicht für page_count Seiten
 
         Verwendung::
 
-            async with pool.acquire_slot() as server:
+            async with pool.acquire_slot(page_count=doc_pages) as server:
                 ...
 
         Raises
@@ -227,7 +247,7 @@ class ServerPool:
         while True:
             candidates = [
                 s for s in self._servers.values()
-                if s.active and not s.is_down
+                if s.active and not s.is_down and s.can_handle_pages(page_count)
             ]
             random.shuffle(candidates)
 
@@ -307,10 +327,10 @@ class Worker:
 
     async def _release_for_retry(self, task: Task) -> None:
         """Setzt die Task auf 'pending' zurück, damit sie beim nächsten
-        Polling-Zyklus neu eingesammelt wird.
-
-        Vorteil gegenüber direktem Requeue: Versuchszähler landet sofort
-        in der DB und überlebt einen Crash.
+        Polling-Zyklus neu eingesammelt wird. Erhöht den Versuchszähler —
+        NUR für echte, tatsächlich unternommene KI-Aufrufe (z.B. Verbindung
+        während des Requests verloren). Vorteil gegenüber direktem Requeue:
+        Versuchszähler landet sofort in der DB und überlebt einen Crash.
         """
         async with self.db_pool.acquire() as conn:
             await conn.execute(
@@ -326,6 +346,31 @@ class Worker:
         log.info(
             f"[{self.worker_id}] Task {task.id} zurück auf 'pending' "
             f"(Versuch {task.attempts + 1}/{task.max_attempts})"
+        )
+
+    async def _release_for_retry_no_penalty(self, task: Task) -> None:
+        """Setzt die Task auf 'pending' zurück OHNE den Versuchszähler zu erhöhen.
+
+        Für Fälle, in denen gar kein KI-Aufruf stattgefunden hat, weil kein
+        passender Server verfügbar war (kein aktiver KI-Rechner konfiguriert,
+        alle temporär deaktiviert, oder alle Slots dauerhaft belegt). Ohne
+        Server gibt es keinen "Versuch", der fehlschlagen könnte — das Dokument
+        soll einfach warten, bis wieder ein Server verfügbar ist, statt nach
+        max_attempts fälschlich permanent auf 'error' zu landen.
+        """
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE workflow_tasks
+                   SET status='pending',
+                       worker_id=NULL,
+                       locked_at=NULL,
+                       updated_at=NOW()
+                   WHERE id=$1""",
+                task.id,
+            )
+        log.info(
+            f"[{self.worker_id}] Task {task.id} zurück auf 'pending' "
+            f"(kein KI-Server verfügbar — Versuch nicht gezählt)"
         )
 
     async def _set_document_error(self, task: Task, reason: str) -> None:
@@ -373,13 +418,45 @@ class Worker:
                 task.id, self.worker_id,
             )
 
+    async def _get_document_page_count(self, task: Task) -> int:
+        """Liest page_count des verknüpften Dokuments (0 falls unbekannt/kein
+        process_document-Task) — Basis für die KI-Kapazitätsprüfung."""
+        doc_id = task.payload.get("document_id") if isinstance(task.payload, dict) else None
+        if not isinstance(doc_id, int):
+            return 0
+        async with self.db_pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT page_count FROM documents WHERE id=$1", doc_id
+            )
+        return value or 0
+
     # ──────────────────────────────────────────────────────────────────
     async def _process(self, task: Task) -> None:
         await self._claim_task(task)
 
+        page_count = await self._get_document_page_count(task)
+
+        # Kapazitäts-Vorabprüfung: Ist das Dokument für ALLE aktiven KI-Server zu
+        # groß, sofort fehlschlagen statt SLOT_ACQUIRE_TIMEOUT lang erfolglos zu
+        # warten und das dann als "KI nicht erreichbar" misszudeuten.
+        if page_count > 0 and self.pool.eligible_servers() and not self.pool.eligible_servers(page_count):
+            max_known = max(
+                (s.max_pages for s in self.pool.eligible_servers() if s.max_pages is not None),
+                default=None,
+            )
+            reason = (
+                f"Dokument zu groß für alle konfigurierten KI-Server "
+                f"({page_count} Seiten, max. verfügbar: {max_known if max_known is not None else '?'} Seiten)"
+            )
+            log.error(f"[{self.worker_id}] Task {task.id}: {reason}")
+            await self._mark_failed(task, reason)
+            await self._set_document_error(task, reason)
+            return
+
         try:
             async with self.pool.acquire_slot(
                 timeout=SLOT_ACQUIRE_TIMEOUT,
+                page_count=page_count,
             ) as server:
                 log.info(
                     f"[{self.worker_id}] Task {task.id} auf {server.name}"
@@ -410,11 +487,17 @@ class Worker:
                     await self._mark_failed(task, f"{type(e).__name__}: {e}")
 
         except TimeoutError:
+            # Innerhalb von SLOT_ACQUIRE_TIMEOUT wurde kein passender Server frei —
+            # es fand also gar kein tatsächlicher KI-Aufruf statt (weder Erfolg
+            # noch Fehler). Zählt deshalb NICHT als Versuch, damit ein Dokument
+            # nicht fälschlich auf 'error' landet, nur weil gerade kein KI-Rechner
+            # aktiv/erreichbar ist. Wird unbegrenzt weiter versucht, bis ein
+            # Server verfügbar wird.
             log.warning(
-                f"[{self.worker_id}] Kein Server frei für Task {task.id}"
+                f"[{self.worker_id}] Kein Server frei für Task {task.id} "
+                f"(kein aktiver/passender KI-Rechner verfügbar)"
             )
-            if not await self._check_attempts_and_fail(task):
-                await self._release_for_retry(task)
+            await self._release_for_retry_no_penalty(task)
 
     # ──────────────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -466,11 +549,18 @@ class Dispatcher:
         ai_client: AIClient,
         poll_interval: int = POLL_INTERVAL_SEC,
         max_workers_cap: int = 5,
+        lock_timeout_minutes: int = 30,
     ) -> None:
+        # poll_interval/max_workers_cap/lock_timeout_minutes sind nur die
+        # ANFANGSWERTE (z.B. vor dem ersten erfolgreichen DB-Zugriff) — run()
+        # liest die aktuellen Werte bei jedem Zyklus frisch aus automation_settings
+        # nach (siehe _load_worker_settings()), damit Änderungen über die Website
+        # ohne Container-Neustart wirken.
         self.db_pool = db_pool
         self.ai_client = ai_client
         self.poll_interval = poll_interval
         self.max_workers_cap = max_workers_cap  # Globale Obergrenze für Worker-Anzahl
+        self.lock_timeout_minutes = lock_timeout_minutes
 
         self.queue: asyncio.Queue = asyncio.Queue()
         self.pool = ServerPool()
@@ -481,6 +571,29 @@ class Dispatcher:
         #: Bereits geladene/in Bearbeitung befindliche Tasks laufen weiter — Pause
         #: heißt "keine neue Arbeit annehmen", kein hartes Stoppen laufender Worker.
         self.paused: bool = False
+
+    # ──────────────────────────────────────────────────────────────────
+    async def _load_worker_settings(self) -> None:
+        """
+        Liest worker_concurrency/worker_poll_interval_seconds/worker_lock_timeout_minutes
+        frisch aus automation_settings und übernimmt sie — macht diese Werte über
+        die Website live änderbar, ohne den Worker-Container neu zu starten.
+        Bei Fehlern (z.B. Tabelle noch nicht migriert) bleiben die bisherigen
+        Werte unverändert bestehen.
+        """
+        try:
+            async with self.db_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """SELECT worker_concurrency, worker_poll_interval_seconds,
+                              worker_lock_timeout_minutes
+                       FROM automation_settings WHERE id = 1"""
+                )
+            if row is not None:
+                self.max_workers_cap = row["worker_concurrency"]
+                self.poll_interval = row["worker_poll_interval_seconds"]
+                self.lock_timeout_minutes = row["worker_lock_timeout_minutes"]
+        except Exception as exc:
+            log.warning("Konnte Worker-Einstellungen nicht laden (bleibt bei bisherigen Werten): %s", exc)
 
     # ──────────────────────────────────────────────────────────────────
     async def _load_servers(self) -> list[AIServer]:
@@ -496,7 +609,7 @@ class Dispatcher:
                 """SELECT id, name, api_key, model_name, primary_type,
                           max_tokens, temperature, chat_response, active,
                           reasoning, ip_address, endpoint_type, port,
-                          parallel_request, timeout_at
+                          parallel_request, timeout_at, max_context_tokens
                    FROM ai_clients
                    WHERE active = TRUE"""
             )
@@ -592,49 +705,80 @@ class Dispatcher:
             )
 
     # ──────────────────────────────────────────────────────────────────
-    async def _cleanup_stale_tasks(self) -> None:
-        """Setzt beim Start alle 'in_progress'-Tasks auf 'pending' zurück.
+    async def _cleanup_stale_tasks(self, min_age_minutes: int | None = None) -> None:
+        """Setzt verwaiste 'in_progress'-Tasks auf 'pending' zurück.
 
-        Nach einem Absturz oder Container-Neustart sind Tasks, die sich noch im
-        Status 'in_progress' befinden, verwaist — die Worker, die sie bearbeitet
-        haben, existieren nicht mehr. Ohne diesen Reset würden sie nie wieder
-        abgeholt, da _load_tasks nur 'pending'-Tasks sucht.
+        min_age_minutes=None (Startup-Fall): setzt ALLE 'in_progress'-Tasks zurück —
+        nach einem Absturz/Container-Neustart existieren die Worker, die sie
+        bearbeitet haben, garantiert nicht mehr.
+
+        min_age_minutes=N (periodischer Fall, siehe run()): setzt nur Tasks zurück,
+        deren locked_at älter als N Minuten ist — verhindert, dass ein Task, der
+        gerade tatsächlich noch bei der KI in Bearbeitung ist, mitten in der
+        Anfrage weggerissen wird. N sollte deutlich über der maximalen KI-
+        Antwortzeit liegen (siehe ai_service.REQUEST_TIMEOUT_SECONDS).
+
+        Ohne diesen Reset würden verwaiste Tasks nie wieder abgeholt, da
+        _load_tasks nur 'pending'-Tasks sucht.
         """
         try:
             async with self.db_pool.acquire() as conn:
-                result = await conn.execute(
-                    """UPDATE workflow_tasks
-                       SET status='pending',
-                           worker_id=NULL,
-                           locked_at=NULL,
-                           updated_at=NOW()
-                       WHERE status='in_progress'"""
-                )
+                if min_age_minutes is None:
+                    result = await conn.execute(
+                        """UPDATE workflow_tasks
+                           SET status='pending',
+                               worker_id=NULL,
+                               locked_at=NULL,
+                               updated_at=NOW()
+                           WHERE status='in_progress'"""
+                    )
+                else:
+                    result = await conn.execute(
+                        """UPDATE workflow_tasks
+                           SET status='pending',
+                               worker_id=NULL,
+                               locked_at=NULL,
+                               updated_at=NOW()
+                           WHERE status='in_progress'
+                             AND locked_at < NOW() - make_interval(mins => $1)""",
+                        min_age_minutes,
+                    )
             # asyncpg gibt "UPDATE N" als String zurück
             count = int(result.split()[-1]) if result else 0
             if count:
                 log.warning(
-                    "Startup-Cleanup: %d verwaiste 'in_progress'-Tasks auf 'pending' zurückgesetzt",
-                    count,
+                    "%d verwaiste 'in_progress'-Task(s) auf 'pending' zurückgesetzt (min_age_minutes=%s)",
+                    count, min_age_minutes,
                 )
         except Exception as exc:
-            log.error("Startup-Cleanup fehlgeschlagen (nicht kritisch): %s", exc)
+            log.error("Stale-Task-Cleanup fehlgeschlagen (nicht kritisch): %s", exc)
 
     # ──────────────────────────────────────────────────────────────────
     async def run(self) -> None:
         log.info("Dispatcher gestartet")
 
-        # Verwaiste Tasks aus vorherigen Sitzungen zurücksetzen
+        # Verwaiste Tasks aus vorherigen Sitzungen zurücksetzen (Container-Neustart
+        # o.ä. — hier ist jeder 'in_progress'-Task garantiert verwaist)
         await self._cleanup_stale_tasks()
 
         while True:
             try:
+                # 0. Worker-Einstellungen (Konkurrenz/Poll-Intervall/Lock-Timeout)
+                #    frisch aus der DB übernehmen — macht sie über die Website
+                #    live änderbar, ohne den Container neu zu starten.
+                await self._load_worker_settings()
+
                 # 1. Server-Stand synchronisieren
                 servers = await self._load_servers()
                 await self.pool.update(servers)
 
                 # 2. Worker-Anzahl an Kapazität anpassen
                 await self._scale_workers(self.pool.total_capacity())
+
+                # 2b. Tasks zurücksetzen, die länger als lock_timeout_minutes ohne
+                #     Fortschritt in Bearbeitung sind (z.B. Worker mitten in der
+                #     Verarbeitung abgestürzt, kein sauberer Neustart).
+                await self._cleanup_stale_tasks(min_age_minutes=self.lock_timeout_minutes)
 
                 # 3. Neue Tasks in Queue legen (übersprungen wenn pausiert)
                 if not self.paused:

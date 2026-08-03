@@ -652,11 +652,11 @@ def _db_analyze_read(doc_id: int, ai_config_id: int, system_prompt_id: int | Non
             default_sp = crud.system_prompt.get_default(db)
             system_prompt_text = default_sp.content if default_sp else None
 
-        # API-URL aus IP + Port zusammensetzen.
-        # Das Modell speichert IP und Port getrennt, damit beides einzeln änderbar ist.
-        ip = ai_config.ip_address
-        port = ai_config.port
-        api_url = f"http://{ip}:{port}" if port else ip
+        # API-URL aus IP + Port zusammensetzen (siehe app/services/ai_url.py —
+        # respektiert ein bereits in ip_address enthaltenes https://-Protokoll,
+        # statt immer http:// zu erzwingen).
+        from app.services.ai_url import build_ai_url
+        api_url = build_ai_url(ai_config.ip_address, ai_config.port)
 
         return {
             "pdf_path":              pdf_path,

@@ -39,8 +39,15 @@ class AIClientsBase(BaseModel):
     # IP-Adresse oder Hostname der API (z.B. "192.168.1.100" oder "api.openai.com")
     ip_address: str = ""
     endpoint_type: EndpointType = "openai"  # API-Protokoll: "openai" | "lmstudio"
-    port: str = "1234"                      # API-Port
+    # API-Port — optional. Leer/None = kein :port in der gebauten URL (z.B. für
+    # Cloud-Anbieter mit https://-URL, deren Standardport 443 nicht explizit
+    # in der Anfrage stehen soll). Siehe app/services/ai_url.py.
+    port: str | None = None
     parallel_request: int = 1              # Parallele Anfragen an diese KI
+    # Maximale Kontext-Kapazität in Token (Eingabe). None = keine Beschränkung.
+    # Wird mit ~4500 Token/Seite verrechnet, um zu entscheiden, ob ein Dokument
+    # auf diese KI passt (siehe worker.py::TOKENS_PER_PAGE_ESTIMATE).
+    max_context_tokens: int | None = None
     timeout_at: datetime | None = None     # Temporäre Sperre bis zu diesem Zeitpunkt
 
 

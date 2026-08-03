@@ -237,6 +237,9 @@ export default function BelegePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // Erst nach explizitem "Filter anwenden" laden — bei sehr vielen Belegen (z.B. 40.000+)
+  // würde ein automatisches Laden aller Dokumente beim Seitenaufruf hängen/fehlschlagen.
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   // Auswahl
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -288,13 +291,12 @@ export default function BelegePage() {
   }, []);
 
   useEffect(() => {
-    loadDocuments({});
     loadOptions();
-  }, [loadDocuments, loadOptions]);
+  }, [loadOptions]);
 
-  // Auto-Refresh bei processing-Dokumenten
+  // Auto-Refresh bei processing-Dokumenten — nur wenn bereits geladen wurde
   useEffect(() => {
-    const hasProcessing = documents.some((d) => d.status === "processing");
+    const hasProcessing = hasLoaded && documents.some((d) => d.status === "processing");
     if (hasProcessing && !refreshTimerRef.current) {
       refreshTimerRef.current = setInterval(() => loadDocuments(activeFilters), 5000);
     } else if (!hasProcessing && refreshTimerRef.current) {
@@ -302,7 +304,7 @@ export default function BelegePage() {
       refreshTimerRef.current = null;
     }
     return () => { if (refreshTimerRef.current) { clearInterval(refreshTimerRef.current); refreshTimerRef.current = null; } };
-  }, [documents, activeFilters, loadDocuments]);
+  }, [documents, activeFilters, loadDocuments, hasLoaded]);
 
   // ─── Filter-Logik ─────────────────────────────────────────────────────────
 
@@ -333,6 +335,7 @@ export default function BelegePage() {
     setActiveFilters(f);
     setSelectedIds(new Set());
     setPreviewDocId(null);
+    setHasLoaded(true);
     loadDocuments(f);
   }
 
@@ -341,11 +344,13 @@ export default function BelegePage() {
     setFilterTotalMin(""); setFilterTotalMax(""); setFilterPageMin(""); setFilterPageMax("");
     setSelectedBatchIds(new Set()); setSelectedDocTypeIds(new Set()); setIncludeDeleted(false);
     setFilterKi(""); setFilterSupplierName(""); setFilterDocId("");
-    const f: DocumentFilter = {};
-    setActiveFilters(f);
+    setActiveFilters({});
     setSelectedIds(new Set());
     setPreviewDocId(null);
-    loadDocuments(f);
+    // Zurück in den Ausgangszustand — Belege werden erst nach erneutem "Filter anwenden"
+    // wieder geladen, kein automatisches Nachladen aller Dokumente.
+    setDocuments([]);
+    setHasLoaded(false);
   }
 
   // ─── Auswahl ──────────────────────────────────────────────────────────────
@@ -698,6 +703,20 @@ export default function BelegePage() {
                 Dokument konnte nicht geladen werden.
               </div>
             )}
+          </div>
+        ) : !hasLoaded ? (
+          /* ── Ausgangszustand: noch nicht geladen ── */
+          <div className="rounded-lg border border-dashed border-gray-300 bg-white px-6 py-16 text-center shadow-sm">
+            <p className="text-sm text-gray-500">
+              Belege werden erst nach Klick auf „Filter anwenden" geladen — bei sehr vielen
+              Dokumenten würde ein automatisches Laden aller Belege hängen bleiben.
+            </p>
+            <button
+              onClick={applyFilters}
+              className="mt-4 rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+            >
+              Filter anwenden
+            </button>
           </div>
         ) : (
           <>

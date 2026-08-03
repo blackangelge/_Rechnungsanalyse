@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 
 const SETTINGS_LINKS = [
   { href: "/settings/ai",         label: "KI-Einstellungen" },
+  { href: "/settings/ai-test",    label: "KI testen" },
   { href: "/settings/prompts",    label: "Systemprompts" },
   { href: "/settings/image",      label: "Bildeinstellungen" },
   { href: "/settings/export",     label: "Export-Einstellungen" },

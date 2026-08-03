@@ -24,6 +24,12 @@ class AutomationSettingsUpdate(BaseModel):
     export_weekday: int = Field(default=0, ge=0, le=6)
     export_hour: int = Field(default=6, ge=0, le=23)
     export_minute: int = Field(default=0, ge=0, le=59)
+    # Maximale Anzahl gleichzeitiger Worker im Worker-Container.
+    worker_concurrency: int = Field(default=5, ge=1)
+    # Poll-Intervall des Dispatchers in Sekunden.
+    worker_poll_interval_seconds: int = Field(default=20, ge=1)
+    # Nach wie vielen Minuten ein verwaister 'in_progress'-Task zurückgesetzt wird.
+    worker_lock_timeout_minutes: int = Field(default=30, ge=1)
 
 
 class AutomationSettingsRead(AutomationSettingsUpdate):
