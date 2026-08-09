@@ -12,6 +12,7 @@ und stammen aus der konfigurierbaren ImageSettings-Datenbanktabelle.
 import base64
 import io
 import logging
+import threading
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -24,6 +25,21 @@ logger = logging.getLogger(__name__)
 # Bilder breiter als dieser Wert werden proportional verkleinert,
 # um den Token-Verbrauch bei der KI-API zu reduzieren.
 MAX_IMAGE_WIDTH_PX = 1400
+
+# PDFium (die von pypdfium2 gebundene C-Bibliothek) ist NICHT thread-sicher — laut
+# eigener Doku darf zu keinem Zeitpunkt von mehr als einem Thread gleichzeitig auf
+# PDFium zugegriffen werden, auch nicht auf unterschiedliche PdfDocument-Instanzen.
+# Da pdf_to_base64_images() bei hoher Worker-Konkurrenz (z.B. 20+ parallele Belege)
+# aus vielen Threads gleichzeitig aufgerufen wird (_run_ki_io → _KI_IO_EXECUTOR),
+# führte das ohne Sperre zu internen PDFium-Zustandsfehlern ("Failed to load document
+# (PDFium: Success)" — ein in sich widersprüchlicher Fehler, typisches Symptom von
+# Thread-Korruption) bis hin zu einem Segfault, der den gesamten Worker-Prozess ohne
+# Absturz-Log lautlos beendete (Symptom: Worker "hängt", keine Fehlermeldung, Prozess
+# im Container wird zum Zombie). Diese Sperre serialisiert NUR den kurzen
+# PDFium-Rendering-Schritt — der Rest der Pipeline (KI-HTTP-Anfragen, JSON-Encoding,
+# DB-Zugriffe) bleibt vollständig parallel; das PDF-Rendering selbst dauert nur
+# Millisekunden pro Seite und ist praktisch nie der Flaschenhals.
+_PDFIUM_LOCK = threading.Lock()
 
 
 def get_page_count(pdf_path: str | Path) -> int:
@@ -83,51 +99,60 @@ def pdf_to_base64_images(
     )
 
     images_b64: list[str] = []
-    pdf = pdfium.PdfDocument(str(path))
 
-    try:
-        for page_idx in range(len(pdf)):
-            logger.debug("  Rendere Seite %d/%d", page_idx + 1, len(pdf))
+    # Gesamter PDFium-Zugriff (Öffnen, Rendern, Schließen) unter EINER Sperre —
+    # siehe Kommentar bei _PDFIUM_LOCK oben. Nur dieser Block ist serialisiert,
+    # alles andere (Bildverkleinerung, JPEG/PNG-Encoding, Base64) läuft danach
+    # außerhalb der Sperre und damit weiterhin voll parallel.
+    with _PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(str(path))
+        try:
+            raw_bitmaps = []
+            for page_idx in range(len(pdf)):
+                logger.debug("  Rendere Seite %d/%d", page_idx + 1, len(pdf))
+                page = pdf[page_idx]
+                scale = dpi / 72.0
+                bitmap = page.render(scale=scale, rotation=0)
+                # .copy() ist Pflicht: laut pypdfium2-Doku teilt sich to_pil() für
+                # RGBA/RGBX/L-Puffer den Speicher mit dem PDFium-Bitmap-Objekt statt
+                # ihn zu kopieren. Ohne .copy() würde das PIL-Image nach pdf.close()
+                # (unten, noch innerhalb der Sperre) auf bereits freigegebenen Speicher
+                # zeigen — der eigentliche Grund, warum die Nachbearbeitung erst NACH
+                # dem Freigeben von PDFium (außerhalb der Sperre) passieren darf.
+                raw_bitmaps.append(bitmap.to_pil().copy())
+        except Exception as exc:
+            logger.error("Fehler beim Rendern von '%s': %s", path.name, exc)
+            raw_bitmaps = []
+        finally:
+            pdf.close()
 
-            # PDF-Seite rendern: scale = DPI / 72 (PDF-Standard ist 72 DPI)
-            page = pdf[page_idx]
-            scale = dpi / 72.0
-            bitmap = page.render(scale=scale, rotation=0)
+    # Nachbearbeitung (Skalierung, Format-Konvertierung, Encoding) bewusst AUSSERHALB
+    # der PDFium-Sperre — betrifft nur Pillow/base64 (thread-sicher), blockiert also
+    # keine anderen gleichzeitig wartenden PDF-Renderings mehr.
+    for pil_image in raw_bitmaps:
+        if pil_image.width > MAX_IMAGE_WIDTH_PX:
+            ratio = MAX_IMAGE_WIDTH_PX / pil_image.width
+            new_height = int(pil_image.height * ratio)
+            pil_image = pil_image.resize(
+                (MAX_IMAGE_WIDTH_PX, new_height), Image.LANCZOS
+            )
+            logger.debug(
+                "  Bild skaliert auf %dx%d px", MAX_IMAGE_WIDTH_PX, new_height
+            )
 
-            # PDFium-Bitmap → PIL-Image
-            pil_image = bitmap.to_pil()
+        # Bei JPEG: RGB-Modus erzwingen (PDFium kann RGBA liefern, JPEG hat kein Alpha)
+        if fmt == "JPEG" and pil_image.mode in ("RGBA", "LA", "P"):
+            pil_image = pil_image.convert("RGB")
 
-            # Bild verkleinern, wenn es breiter als MAX_IMAGE_WIDTH_PX ist
-            if pil_image.width > MAX_IMAGE_WIDTH_PX:
-                ratio = MAX_IMAGE_WIDTH_PX / pil_image.width
-                new_height = int(pil_image.height * ratio)
-                pil_image = pil_image.resize(
-                    (MAX_IMAGE_WIDTH_PX, new_height), Image.LANCZOS
-                )
-                logger.debug(
-                    "  Bild skaliert auf %dx%d px", MAX_IMAGE_WIDTH_PX, new_height
-                )
+        buffer = io.BytesIO()
+        if fmt == "JPEG":
+            pil_image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
+        else:
+            pil_image.save(buffer, format="PNG", optimize=True)
+        buffer.seek(0)
 
-            # Bei JPEG: RGB-Modus erzwingen (PDFium kann RGBA liefern, JPEG hat kein Alpha)
-            if fmt == "JPEG" and pil_image.mode in ("RGBA", "LA", "P"):
-                pil_image = pil_image.convert("RGB")
-
-            # Bild in Byte-Buffer schreiben
-            buffer = io.BytesIO()
-            if fmt == "JPEG":
-                pil_image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
-            else:
-                pil_image.save(buffer, format="PNG", optimize=True)
-            buffer.seek(0)
-
-            # Als data:-URL kodieren (kompatibel mit OpenAI Vision API)
-            b64 = base64.b64encode(buffer.read()).decode("utf-8")
-            images_b64.append(f"data:{mime_type};base64,{b64}")
-
-    except Exception as exc:
-        logger.error("Fehler beim Rendern von '%s': %s", path.name, exc)
-    finally:
-        pdf.close()
+        b64 = base64.b64encode(buffer.read()).decode("utf-8")
+        images_b64.append(f"data:{mime_type};base64,{b64}")
 
     logger.info("PDF gerendert: %d Seiten als %s", len(images_b64), fmt)
     return images_b64
