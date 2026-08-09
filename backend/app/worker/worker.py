@@ -411,10 +411,36 @@ class Worker:
         return False
 
     async def _claim_task(self, task: Task) -> None:
-        """Setzt worker_id auf diese Worker-Instanz (Tracking)."""
+        """Markiert den Task als TATSÄCHLICH in Bearbeitung (worker_id + locked_at).
+
+        WICHTIG: locked_at wird bewusst HIER gesetzt — NICHT schon in _load_tasks()
+        beim bloßen Laden in die interne asyncio.Queue. Grund: _cleanup_stale_tasks()
+        hält einen Task für "verwaist", sobald locked_at älter als lock_timeout_minutes
+        ist. Würde locked_at schon beim Laden gesetzt, würden Tasks, die bei einer
+        großen Warteschlange (z.B. 1000+ Dokumente, 24 gleichzeitige Worker) einfach
+        nur lange auf ihren Platz warten — ohne dass je ein Worker sie angefasst hat —
+        fälschlich als "verwaist" erkannt und zurück auf 'pending' gesetzt. Das
+        erzeugt ein DUPLIKAT: die ursprüngliche Kopie hängt weiterhin unverändert in
+        der internen Queue, während _load_tasks() beim nächsten Zyklus dieselbe
+        (jetzt wieder 'pending') Zeile ERNEUT lädt und eine zweite Kopie in die Queue
+        stellt. Beide werden irgendwann von je einem Worker verarbeitet — das führt zu
+        doppelten KI-Anfragen für dasselbe Dokument, und wenn die erste, "legitime"
+        Kopie fertig wird und ihr Task-Datensatz danach z.B. über "Abgeschlossene
+        Tasks löschen" entfernt wird, läuft die zweite Kopie als Geisterprozess ohne
+        zugehörigen Task-Datensatz weiter — sichtbar als Dokument, das laut
+        Warteschlangen-Status "fertig"/"keine Tasks mehr" ist, aber laut Beleg-Status
+        weiterhin "wird verarbeitet" bleibt und tatsächlich noch an die KI sendet.
+        Solange locked_at NULL bleibt (Task nur geladen, aber von keinem Worker
+        beansprucht), lässt die SQL-Bedingung "locked_at < NOW() - interval" der
+        Cleanup-Abfrage die Zeile automatisch unangetastet (NULL-Vergleich ist nie
+        TRUE) — der Timeout greift dann nur noch bei Tasks, die ein Worker wirklich
+        übernommen hat und die seitdem hängen (z.B. Worker/Container abgestürzt).
+        """
         async with self.db_pool.acquire() as conn:
             await conn.execute(
-                "UPDATE workflow_tasks SET worker_id=$2, updated_at=NOW() WHERE id=$1",
+                """UPDATE workflow_tasks
+                   SET worker_id=$2, locked_at=NOW(), updated_at=NOW()
+                   WHERE id=$1""",
                 task.id, self.worker_id,
             )
 
@@ -629,16 +655,20 @@ class Dispatcher:
         ]
 
     async def _load_tasks(self) -> list[Task]:
-        """Holt neue Tasks atomar aus der DB.
+        """Holt neue Tasks atomar aus der DB und übernimmt sie in die interne Queue.
 
-        Nutzt ``FOR UPDATE SKIP LOCKED`` für Parallelsicherheit. Setzt
-        Status, locked_at und worker_id (Platzhalter) in einem Schritt.
+        Nutzt ``FOR UPDATE SKIP LOCKED`` für Parallelsicherheit. Setzt Status auf
+        'in_progress', damit dieselbe Zeile nicht in einem späteren Zyklus erneut
+        als 'pending' gefunden und doppelt geladen wird — locked_at bleibt hier
+        ABSICHTLICH NULL (kein SET locked_at=NOW()!). Das eigentliche "in Bearbeitung
+        seit"-Zeitstempel wird erst in Worker._claim_task() gesetzt, wenn ein Worker
+        den Task WIRKLICH aus der Queue holt und zu verarbeiten beginnt — siehe
+        ausführliche Begründung dort (Duplikat-Bug bei langer Warteschlange).
         """
         async with self.db_pool.acquire() as conn:
             rows = await conn.fetch(
                 """UPDATE workflow_tasks
                    SET status='in_progress',
-                       locked_at=NOW(),
                        worker_id='dispatcher',
                        updated_at=NOW()
                    WHERE id IN (

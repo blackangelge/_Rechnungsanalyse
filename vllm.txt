@@ -1,0 +1,13 @@
+VENV Erstellen und Starten:
+uv venv
+source .venv/bin/activate
+
+Installieren für VLLM:
+sudo apt install -y python3.12-dev
+
+Download Model:
+uv pip install -U "huggingface_hub"
+hf download nvidia/Qwen3.6-35B-A3B-NVFP4
+
+VLLM-Starten:
+vllm serve nvidia/Qwen3.6-35B-A3B-NVFP4     --host 0.0.0.0    --port 8000    --tensor-parallel-size 1    --trust-remote-code    --kv-cache-dtype fp8     --attention-backend flashinfer     --moe-backend marlin    --gpu-memory-utilization 0.4     --max-model-len 262144    --max-num-seqs 24    --max-num-batched-tokens 8192     --enable-chunked-prefill    --async-scheduling    --enable-prefix-caching    --speculative-config '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'     --load-format fastsafetensors    --reasoning-parser qwen3    --tool-call-parser qwen3_xml    --enable-auto-tool-choice --default-chat-template-kwargs '{"enable_thinking": false}'
