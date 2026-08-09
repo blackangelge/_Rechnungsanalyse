@@ -34,17 +34,22 @@ Jede Analyse durchläuft diese Schritte (alle in _analyze_single_inner):
     • Ergebnis: Liste von data:image/...;base64,...-Strings
     → Wird direkt an die KI-API weitergereicht (Vision API)
 
-  SCHRITT 3 — Typ-Entscheidung (drei Pfade je nach Situation)
-    ┌─ Pfad A: Typ bereits bekannt und ≠ Eingangsrechnung
-    │   → _db_type_only_finish: Status "done", keine Extraktion, return
-    │
-    ├─ Pfad B: Typ unbekannt (0) + Dokumententyp-Prompt vorhanden
-    │   → detect_document_type (KI-Aufruf 1): KI erkennt den Dokumenttyp
+  SCHRITT 3 — Typ-Entscheidung (zwei Pfade je nach Situation)
+    ┌─ Pfad B: Dokumententyp-Prompt vorhanden → IMMER (erneut) klassifizieren,
+    │   unabhängig vom bereits gespeicherten Typ (auch bei bereits bekannter
+    │   Eingangsrechnung!)
+    │   → detect_document_type (KI-Aufruf 1): KI (re-)klassifiziert den Dokumenttyp
     │   → _db_save_document_type: Typ sofort in DB sichern (auch bei späterer Fehler)
     │   → Falls NICHT Eingangsrechnung: _db_type_only_finish, return
     │   → Falls Eingangsrechnung: weiter mit extract_invoice_data (KI-Aufruf 2)
+    │   HINWEIS: Kein bereits gespeicherter Typ wird blind übernommen — weder ein
+    │   bekannter Nicht-Eingangsrechnungs-Typ noch eine bekannte Eingangsrechnung.
+    │   Grund 1: "Beleg erneut an KI senden" muss für ALLE Belege tatsächlich wirken.
+    │   Grund 2: Nach einer Korrektur des Typ-Erkennungs-Prompts muss eine zuvor
+    │   fälschlich als Eingangsrechnung erkannte Rechnung bei erneuter Analyse gegen
+    │   den NEUEN Prompt geprüft werden können. Siehe Bekannte Fallstricke.
     │
-    └─ Pfad C: Typ bekannt = Eingangsrechnung ODER kein Typ-Prompt
+    └─ Pfad C: Kein Typ-Prompt konfiguriert (Legacy-Modus)
         → extract_invoice_data (KI-Aufruf 1): Direkt Rechnungsdaten extrahieren
 
   SCHRITT 4 — Ergebnisse speichern (_db_analyze_write, läuft in Thread)
@@ -1142,11 +1147,15 @@ async def _analyze_single_inner(
     Eigentliche KI-Analyse-Logik für ein einzelnes Dokument (nach dem Duplikat-Check).
 
     Diese Funktion durchläuft die vollständige Analyse-Pipeline:
-      Schritt 1 → Schritt 2 → Schritt 3 (Pfad A, B oder C) → Schritt 4
+      Schritt 1 → Schritt 2 → Schritt 3 (Pfad B oder C) → Schritt 4
 
-    Die Entscheidung zwischen den Pfaden (A/B/C) basiert auf zwei Kriterien:
-      • Ist der Dokumententyp bereits bekannt (existing_document_type > 0)?
-      • Gibt es einen Dokumententyp-Prompt in der DB?
+    Die Entscheidung zwischen den Pfaden (B/C) hängt NUR davon ab, ob ein
+    Dokumententyp-Prompt in der DB konfiguriert ist — der bereits gespeicherte
+    existing_document_type spielt dabei bewusst KEINE Rolle mehr. Jeder Analyse-Aufruf
+    klassifiziert bei vorhandenem Typ-Prompt IMMER neu (Pfad B), auch wenn das
+    Dokument schon einmal als Eingangsrechnung erkannt wurde — sonst bliebe eine
+    einmal fälschlich als Eingangsrechnung erkannte Rechnung nach einer Prompt-
+    Korrektur für immer falsch klassifiziert, egal wie oft man sie neu analysiert.
 
     Args:
         doc_id:           ID des zu analysierenden Dokuments.
@@ -1233,42 +1242,28 @@ async def _analyze_single_inner(
     # ANALYSE-SCHRITT 3: Typ-Entscheidung und KI-Aufruf(e)
     # ═══════════════════════════════════════════════════════════════════════════
     #
-    # Drei mögliche Pfade je nach Situation:
+    # Zwei mögliche Pfade je nach Situation:
     #
-    #   Pfad A: Typ bereits bekannt UND kein Eingangsrechnungs-Typ
-    #           → Direkt abschließen, kein weiterer KI-Aufruf nötig
+    #   Pfad B: Typ-Erkennungs-Prompt vorhanden → IMMER zweistufig: erst (erneut) Typ
+    #           erkennen, dann ggf. Rechnungsdaten extrahieren. Gilt unabhängig vom
+    #           bereits gespeicherten existing_document_type — auch ein bereits als
+    #           Eingangsrechnung (1) bekanntes Dokument wird bei jedem expliziten
+    #           Analyse-Aufruf (manuell, "erneut senden", Worker-Retry) NEU klassifiziert,
+    #           nicht blind übernommen. Grund: Wurde der Typ-Erkennungs-Prompt in der
+    #           Zwischenzeit geändert (z.B. weil er Eingangsrechnungen fälschlich zu
+    #           breit erkannt hat), muss ein bereits als "Eingangsrechnung" gespeichertes
+    #           Dokument bei erneuter Analyse gegen den NEUEN Prompt erneut geprüft werden
+    #           — sonst bleibt eine einmal falsch erkannte Eingangsrechnung für immer
+    #           fälschlich als solche stehen, egal wie oft man sie neu analysiert. Zwei
+    #           frühere Kurzschluss-Pfade ("Pfad A" für bekannte Nicht-Eingangsrechnungen,
+    #           die Sonderbehandlung für existing_document_type==1 in Pfad C) wurden
+    #           deshalb entfernt. Siehe CLAUDE.md/Bekannte Fallstricke.
     #
-    #   Pfad B: Typ unbekannt (0) UND Typ-Erkennungs-Prompt vorhanden
-    #           → Zweistufig: erst Typ erkennen, dann ggf. Rechnungsdaten extrahieren
-    #
-    #   Pfad C: Typ bereits als Eingangsrechnung (1) bekannt ODER kein Typ-Prompt
-    #           → Direkt Rechnungsdaten extrahieren (einstufig)
+    #   Pfad C: Kein Typ-Prompt konfiguriert → direkt Rechnungsdaten extrahieren
+    #           (einstufiger Legacy-Modus, keine Typklassifizierung möglich/nötig)
 
-    # ─── PFAD A: Typ bereits bekannt, kein weiterer KI-Aufruf nötig ──────────
-    if existing_document_type > 1:
-        # existing_document_type > 1 bedeutet: ein spezifischer Nicht-Eingangsrechnungs-Typ
-        # wurde bereits in einem früheren Durchlauf gespeichert (z.B. "Lieferschein")
-        # → Keine erneute Typ-Erkennung, keine Rechnungsextraktion nötig.
-        # Typischer Fall: Dokument wird manuell ein zweites Mal analysiert.
-        type_name = next(
-            (t["name"] for t in document_types if t["id"] == existing_document_type),
-            "Unbekannt",  # Fallback wenn ID nicht in der Liste
-        )
-        logger.info(
-            "Dokument #%d: Typ bereits bekannt (%d – %s) — überspringe KI-Erkennung",
-            doc_id, existing_document_type, type_name,
-        )
-        del images_b64   # Base64-Bilder freigeben (kein KI-Aufruf → nicht mehr gebraucht)
-        await asyncio.to_thread(
-            _db_type_only_finish,
-            doc_id, existing_document_type, type_name, page_count,
-            batch_id, original_filename,
-            None,   # Keine ki_stats (kein KI-Aufruf)
-        )
-        return "ok"
-
-    # ─── PFAD B: Typ unbekannt, Typ-Erkennungs-Prompt vorhanden → zweistufig ──
-    if existing_document_type == 0 and doc_type_prompt_text and document_types:
+    # ─── PFAD B: Typ-Erkennungs-Prompt vorhanden → IMMER (erneut) klassifizieren ──
+    if doc_type_prompt_text and document_types:
         # ── KI-Aufruf 1: Dokumententyp erkennen ─────────────────────────────
         # detect_document_type ist SYNCHRON → läuft in asyncio.to_thread
         logger.info(
@@ -1349,26 +1344,16 @@ async def _analyze_single_inner(
         ki_stats = _merge_ki_stats(type_stats, inv_stats)
 
     else:
-        # ─── PFAD C: Direkte Extraktion (einstufig) ──────────────────────────
-        # Dieser Pfad wird gewählt wenn:
-        #   a) existing_document_type == 1 (Eingangsrechnung bereits bekannt)
-        #      → kein Typ-Erkennungs-Schritt nötig, direkt extrahieren
-        #   b) doc_type_prompt_text ist None (kein Typ-Prompt konfiguriert)
-        #      → zweistufige Analyse nicht möglich, direkt extrahieren
-
-        if existing_document_type == 1:
-            # Typ war bereits als Eingangsrechnung bekannt
-            logger.info(
-                "Dokument #%d: Typ bereits bekannt (Eingangsrechnung) — Extraktion direkt",
-                doc_id,
-            )
-            document_type_id = 1   # Eingangsrechnung für _db_analyze_write merken
-        else:
-            # Kein Typ-Prompt → einstufige Analyse (Legacy-Modus)
-            logger.info(
-                "Starte KI-Extraktion für Dokument #%d (%d Seite(n))",
-                doc_id, page_count
-            )
+        # ─── PFAD C: Direkte Extraktion (einstufig, Legacy-Modus) ────────────
+        # Wird nur erreicht wenn KEIN Typ-Erkennungs-Prompt konfiguriert ist (oder die
+        # Dokumententypen-Liste leer ist) — dann ist eine Typklassifizierung ohnehin
+        # nicht möglich, also direkt extrahieren. document_type_id bleibt None, d.h.
+        # ein eventuell bereits gespeicherter Typ bleibt unverändert (_db_analyze_write
+        # überschreibt document_type nur, wenn document_type_id gesetzt ist).
+        logger.info(
+            "Starte KI-Extraktion für Dokument #%d (%d Seite(n))",
+            doc_id, page_count
+        )
 
         # ── KI-Aufruf: Rechnungsdaten extrahieren ────────────────────────────
         extracted_fields, order_positions, raw_response, ki_stats = await asyncio.to_thread(

@@ -132,9 +132,19 @@ export const aiConfigsApi = {
     const form = new FormData();
     form.append("file", file);
     if (systemPromptId != null) form.append("system_prompt_id", String(systemPromptId));
+    // WICHTIG: Content-Type explizit auf undefined setzen (nicht einfach weglassen!).
+    // apiClient hat "Content-Type: application/json" als Instanz-Default (siehe oben,
+    // axios.create({ headers: {...} })). Dieser Default gilt für JEDEN Request dieser
+    // Instanz, auch FormData-Uploads — axios erkennt dann fälschlich "Content-Type ist
+    // bereits explizit gesetzt" und deaktiviert seine automatische FormData-Erkennung,
+    // wodurch der Body als JSON.stringify(form) statt als multipart gesendet wird (die
+    // Datei kommt beim Backend nie an → 422 "file: Field required"). Nur ein WEGLASSEN
+    // des Headers reicht deshalb NICHT — er muss aktiv auf undefined überschrieben werden,
+    // damit axios ihn entfernt und der Browser den korrekten
+    // "multipart/form-data; boundary=..."-Header selbst berechnet.
     return apiClient
       .post<AIConfigTestResult>(`/api/ai-clients/${id}/test`, form, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: { "Content-Type": undefined },
         timeout: 180000,
       })
       .then((r) => r.data);
@@ -509,11 +519,14 @@ export const backupApi = {
   restore: (file: File) => {
     const form = new FormData();
     form.append("file", file);
+    // Content-Type MUSS explizit auf undefined gesetzt werden (nicht nur weglassen!) —
+    // siehe ausführlicher Kommentar bei aiConfigsApi.test() oben, gleicher Bug (Instanz-
+    // Default "application/json" verhindert sonst axios' automatische FormData-Erkennung).
     return apiClient
       .post<{ restored: Record<string, number>; message: string }>(
         "/api/settings/restore/",
         form,
-        { headers: { "Content-Type": "multipart/form-data" } }
+        { headers: { "Content-Type": undefined } }
       )
       .then((r) => r.data);
   },
