@@ -75,13 +75,20 @@ def update_status(
     error_message: str | None = None,
 ) -> Document | None:
     """
-    Setzt den Dokument-Status (pending/processing/done/error).
-    error_message wird aktuell nur geloggt, nicht persistiert.
+    Setzt den Dokument-Status (pending/processing/done/error/waiting_capacity).
+
+    error_message wird — falls angegeben — zusätzlich in raw_response persistiert
+    (für Status-Übergänge VOR einem echten KI-Aufruf gibt es sonst keine KI-Antwort
+    zu speichern, z.B. "Dokument zu groß für alle konfigurierten KI-Server" bei
+    waiting_capacity; dieselbe Stelle wird im Frontend über den "KI"-Button
+    angezeigt). Wird KEIN error_message übergeben, bleibt raw_response unverändert.
     """
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
     obj.status = status
+    if error_message is not None:
+        obj.raw_response = error_message
     db.commit()
     db.refresh(obj)
     return obj

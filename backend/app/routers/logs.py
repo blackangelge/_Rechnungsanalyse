@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 @router.get("/ki-stats")
 def get_ki_stats(db: Session = Depends(get_db)):
-    """Aggregierte KI-Statistiken aus documents_token_counts."""
+    """Aggregierte KI-Statistiken aus documents_token_counts + zwei rollierende
+    Durchsatz-Kennzahlen aus documents (updated_at = Zeitpunkt des letzten
+    Status-Übergangs, siehe Document-Model)."""
     from app.models.document_token_count import DocumentTokenCount
 
     row = db.query(
@@ -46,6 +48,27 @@ def get_ki_stats(db: Session = Depends(get_db)):
     def _float(v) -> float | None:
         return round(float(v), 2) if v is not None else None
 
+    # Belege, die in den letzten 60 Minuten erfolgreich über die Warteschlange
+    # fertig verarbeitet wurden (status='done', updated_at = Zeitpunkt des
+    # Abschlusses). Rollierendes Fenster — bei jedem Aufruf neu berechnet.
+    processed_last_60min = db.execute(
+        text(
+            "SELECT COUNT(*) FROM documents "
+            "WHERE status = 'done' AND updated_at >= NOW() - INTERVAL '60 minutes'"
+        )
+    ).scalar() or 0
+
+    # Belege, die in den letzten 24 Stunden durch die Rechnungsanalyse gegangen
+    # sind — done UND error zählen (beide sind ein abgeschlossener Durchlauf),
+    # waiting_capacity NICHT (dort läuft die Analyse noch/wartet auf Kapazität).
+    analyzed_last_24h = db.execute(
+        text(
+            "SELECT COUNT(*) FROM documents "
+            "WHERE status IN ('done', 'error') "
+            "AND updated_at >= NOW() - INTERVAL '24 hours'"
+        )
+    ).scalar() or 0
+
     return {
         "total_entries":      _int(row.total_entries),
         "sum_input_tokens":   _int(row.sum_input_tokens),
@@ -54,6 +77,8 @@ def get_ki_stats(db: Session = Depends(get_db)):
         "sum_duration_seconds": _float(row.sum_duration),
         "avg_input_tokens":   _float(row.avg_input_tokens),
         "avg_duration_seconds": _float(row.avg_duration),
+        "processed_last_60min": int(processed_last_60min),
+        "analyzed_last_24h":    int(analyzed_last_24h),
     }
 
 

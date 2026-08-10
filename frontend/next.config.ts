@@ -11,6 +11,19 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
     ? process.env.ALLOWED_DEV_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
     : [],
+  experimental: {
+    // Next.js' eigener rewrites()-Proxy (siehe unten) bricht Anfragen an das Backend
+    // standardmäßig nach 30s ab (Node.js "socket hang up" / ECONNRESET — UNABHÄNGIG
+    // von jedem axios-Timeout im Frontend-Code und von jedem Backend-seitigen
+    // httpx-Timeout, da der Next.js-Dev-Server selbst die Verbindung kappt, bevor
+    // die Antwort überhaupt zurückkommt). Betraf v.a. POST /api/ai-clients/{id}/test
+    // bei langsameren/lokalen KI-Modellen — das Backend hat die Anfrage nie mit
+    // einem Fehler beendet (kein Log-Eintrag, kein Traceback), weil der Next.js-
+    // Proxy die Verbindung schon vorher zwangsweise beendet hat. Muss über dem
+    // längsten Backend-Timeout liegen (ai_test_service.REQUEST_TIMEOUT_SECONDS=900,
+    // ai_service.REQUEST_TIMEOUT_SECONDS=900) — siehe Bekannte Fallstricke in CLAUDE.md.
+    proxyTimeout: 920000,
+  },
   async rewrites() {
     return [
       {

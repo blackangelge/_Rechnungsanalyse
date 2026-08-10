@@ -152,6 +152,11 @@ app/
     │                       #   Test-Anpassungen die echte Analyse nicht beeinflussen — MUSS aber
     │                       #   ai_url.py/ai_reasoning.py mitnutzen, sonst laufen Test-Tool und
     │                       #   Produktion wieder auseinander (siehe Bekannte Fallstricke)
+    │                       # REQUEST_TIMEOUT_SECONDS = 900 (= ai_service.py) — war früher 120s,
+    │                       #   zu kurz für langsamere/lokale Modelle, siehe Bekannte Fallstricke
+    │                       # build_test_request() läuft INNERHALB von run_ai_test()s try-Block
+    │                       #   (nicht davor) — sonst kann eine Exception daraus als nackter
+    │                       #   HTTP 500 (ohne JSON-"detail") beim Router durchschlagen
     └── pdf_service.py      # PDF → Bilder (pypdfium2), Seitenanzahl (pypdf, get_page_count())
                             # _PDFIUM_LOCK (threading.Lock): serialisiert JEDEN PDFium-Zugriff
                             #   global — PDFium ist nicht thread-sicher, siehe Bekannte Fallstricke.
@@ -218,12 +223,22 @@ app/worker/
 │                        #   fälschlich als "verwaist" zurückgesetzt und beim nächsten Zyklus
 │                        #   ALS DUPLIKAT erneut geladen (Bug, siehe Bekannte Fallstricke).
 │                        #
-│                        # KEIN "Versuch" bei TimeoutError aus acquire_slot() (= kein Server
-│                        #   verfügbar/passend): _release_for_retry_no_penalty() statt
-│                        #   _release_for_retry() — attempts wird NICHT erhöht, Task bleibt
-│                        #   unbegrenzt in der Queue, bis wieder ein Server verfügbar ist.
-│                        #   attempts zählt nur bei TATSÄCHLICH unternommenen KI-Aufrufen
-│                        #   (z.B. ConnectionError während des HTTP-Requests).
+│                        # KEIN dauerhaftes "failed" mehr bei KI-Erreichbarkeitsproblemen —
+│                        #   _release_for_retry_no_penalty() statt _mark_failed()/max_attempts,
+│                        #   für DREI Fälle: (1) kein passender Server verfügbar (TimeoutError
+│                        #   aus acquire_slot), (2) Dokument zu groß für alle konfigurierten
+│                        #   KI-Server (Kapazitätsprüfung → Status 'waiting_capacity' am
+│                        #   Dokument, siehe unten), (3) ConnectionError beim tatsächlichen
+│                        #   KI-Aufruf (KI-Rechner nicht erreichbar). attempts wird in KEINEM
+│                        #   dieser drei Fälle erhöht — der Task bleibt unbegrenzt in der
+│                        #   Warteschlange, bis sich die Ursache von selbst behebt (KI wieder
+│                        #   erreichbar / größere Konfiguration verfügbar). NUR inhaltliche
+│                        #   Fehler (Bug beim Verarbeiten der KI-Antwort, generisches
+│                        #   Exception) landen weiterhin sofort und ohne Retry auf 'failed'
+│                        #   (_mark_failed) — ein dauerhaft kaputtes Dokument soll nicht
+│                        #   endlos KI-Ressourcen verbrauchen. Die alten Methoden
+│                        #   _check_attempts_and_fail()/_release_for_retry() (MIT Penalty)
+│                        #   wurden entfernt, da sie dadurch keinen Aufrufer mehr hatten.
 ├── main.py              # Eigene FastAPI-Instanz für den Worker-Container (uvicorn-Entrypoint:
 │                        # `uvicorn app.worker.main:app --host 0.0.0.0 --port 8000`)
 │                        # lifespan: Thread-Pool-Vergrößerung, wait_for_db(), asyncpg-Pool,
@@ -559,7 +574,14 @@ Die Properties `ki_input_tokens`, `ki_output_tokens`, `ki_total_duration` auf `D
 
 **Wichtig für Schemas:** `DocumentDetail` erbt von `DocumentRead` (nicht `DocumentListRead`). Die `ki_*`-Felder müssen daher **explizit** in `DocumentDetail` deklariert werden — sie werden nicht automatisch geerbt.
 
-Aggregierte Statistiken: `GET /api/logs/ki-stats` — gibt Summen und Durchschnitte über alle Extraktionen zurück.
+Aggregierte Statistiken: `GET /api/logs/ki-stats` — gibt Summen und Durchschnitte über alle Extraktionen zurück, plus zwei rollierende Durchsatz-Kennzahlen (bei jedem Aufruf neu berechnet, kein Cache):
+
+| Feld | Bedeutung | Quelle |
+|---|---|---|
+| `processed_last_60min` | Belege mit `status='done'`, deren letzter Status-Übergang ≤ 60 Min. her ist | `documents.updated_at` |
+| `analyzed_last_24h` | Belege mit `status IN ('done','error')`, deren letzter Status-Übergang ≤ 24 Std. her ist (`waiting_capacity` zählt NICHT — noch nicht abgeschlossen) | `documents.updated_at` |
+
+Frontend: zwei zusätzliche `StatCard`-Kacheln im Analyse-Statistiken-Bereich von `/logs` ("Verarbeitet (letzte 60 Min.)", "Analysiert (letzte 24 Std.)").
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
@@ -814,10 +836,14 @@ Gleiche Dropdown-Checkbox-Komponente wie `BatchMultiSelect` (Import-Filter):
 
 | Button | Bedingung | Funktion |
 |---|---|---|
-| **KI** (violett) | Status `done` oder `error` | Zeigt KI-Rohantwort als JSON im Modal-Overlay inkl. Token-Statistik |
+| **KI** (violett) | Status `done`, `error` oder `waiting_capacity` | Zeigt KI-Rohantwort (oder bei `waiting_capacity` den Klartext-Grund) im Modal-Overlay inkl. Token-Statistik |
 | **Infos** (smaragd) | Status `done` | Wechselt in Infos-Ansicht (50/50 Split) |
 
 **KI-Modal Token-Statistik:** Liest `viewedDoc.ki_input_tokens`, `viewedDoc.ki_output_tokens`, `viewedDoc.ki_total_duration` — also direkt aus `DocumentDetail`, nicht aus `viewedDoc.extraction`. Dies stellt sicher, dass auch Nicht-Eingangsrechnungen (ohne `InvoiceExtraction`) ihre Token-Stats anzeigen.
+
+**KI-Modal Rohantwort:** `viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response` — Fallback auf die Document-Ebene für Fälle ohne `InvoiceExtraction` (z.B. `waiting_capacity`, wo der Kapazitäts-Grund als Klartext in `documents.raw_response` steht, nicht als KI-JSON). `KiRawView` versucht `JSON.parse` und zeigt bei Fehlschlag den Rohtext — funktioniert deshalb sowohl für echte KI-JSON-Antworten als auch für einfache Klartext-Gründe.
+
+**Status-Badge/Filter:** `waiting_capacity` (amber, "Wartet auf KI-Kapazität") — kein Endzustand, siehe „Dokument-Status-Flow" im Backend-Abschnitt.
 
 #### Infos-Ansicht
 
@@ -917,6 +943,7 @@ Behandelt sowohl `number` als auch Strings wie `"719,99 €"`:
 - **Import löschen hinterlässt verwaiste Worker-Tasks**: `workflow_tasks` referenziert `document_id` nur als JSONB-Payload (keine FK) — eine CASCADE über `Document`/`ImportBatch` erreicht diese Tabelle NICHT. `DELETE /api/imports/{id}` muss die zugehörigen Tasks daher explizit per Payload-Lookup löschen (`(payload->>'document_id')::int = ANY(:doc_ids)`), sonst bleiben sie in der Queue und werden dem Worker weiterhin zur Bearbeitung angeboten (obwohl das Dokument längst gelöscht ist).
 - **Dokument wird nach 3 "kein Server verfügbar"-Versuchen fälschlich permanent als `error` markiert**: `acquire_slot()` wirft `TimeoutError`, wenn (noch) kein passender KI-Server frei ist — das ist kein fehlgeschlagener KI-Aufruf, sondern schlicht "später nochmal versuchen". Wurde früher trotzdem über `_check_attempts_and_fail`/`_release_for_retry` behandelt und zählte gegen `max_attempts`. Fix: `_release_for_retry_no_penalty()` — setzt den Task ohne Erhöhung von `attempts` zurück auf `pending`; er bleibt dadurch unbegrenzt in der Queue, bis wieder Kapazität frei wird. `attempts` zählt jetzt ausschließlich echte KI-Aufrufversuche (z.B. `ConnectionError` während des HTTP-Requests).
 - **Bei großen Batches (z.B. 1000+ Belege) verschwinden Worker-Tasks aus der Queue, während der zugehörige Beleg noch "wird verarbeitet" anzeigt UND tatsächlich noch an die KI gesendet wird — Warteschlangen-Status zeigt "leer", obwohl der KI-Rechner sichtbar noch arbeitet**: Ursache war ein Duplikat-Bug in `worker.py`. `_load_tasks()` setzte `locked_at=NOW()` schon beim bloßen Laden eines Tasks in die interne `asyncio.Queue` — nicht erst, wenn ein Worker ihn tatsächlich übernimmt. Bei einer tiefen Warteschlange (z.B. 1000 Belege, 24 gleichzeitige Worker) kann ein Task locker länger als `worker_lock_timeout_minutes` (Standard 10) unangetastet in der Queue warten, BEVOR ein Worker überhaupt an der Reihe ist. Die periodische `_cleanup_stale_tasks(min_age_minutes=N)` hielt solche Tasks fälschlich für "verwaist" (Worker abgestürzt) und setzte sie auf `pending` zurück — während die ursprüngliche Kopie unverändert weiter in der internen Queue lag. Beim nächsten `_load_tasks()`-Zyklus wurde dieselbe Zeile dadurch ERNEUT geladen → zwei In-Memory-Kopien desselben Tasks. Beide werden irgendwann verarbeitet: läuft die erste durch und wird ihr Task-Datensatz danach z.B. über "Abgeschlossene Tasks löschen" entfernt, verarbeitet die zweite Kopie das (oft schon fertige) Dokument als Geisterprozess erneut — ohne zugehörigen Task-Datensatz, daher unsichtbar im Warteschlangen-Status, aber real noch mit laufender KI-Anfrage. Bei einem sehr langen Testlauf (1007 Belege, mehrere Stunden durch Unterbrechungen) kumulierten sich so hunderte Duplikate (`queue_size` laut `/status` weit über der tatsächlichen Beleganzahl). **Fix:** `locked_at` wird jetzt erst in `Worker._claim_task()` gesetzt (wenn ein Worker den Task WIRKLICH aus der Queue holt), nicht mehr in `_load_tasks()`. Solange ein Task nur in der Queue wartet, bleibt `locked_at` NULL — die SQL-Bedingung `locked_at < NOW() - interval` der Cleanup-Abfrage lässt NULL-Werte automatisch unangetastet, der Timeout greift dadurch nur noch bei Tasks, die ein Worker wirklich übernommen hat und seitdem hängen. **Manuelle Wiederherstellung nach dem Vorfall:** verwaiste "processing"-Belege ohne zugehörigen Task-Datensatz per `POST /api/documents/enqueue` mit den betroffenen `document_ids` neu einreihen (setzt sie zurück auf "pending" und reiht sie sauber neu ein).
+- **KI-Test-Tool: `HTTP 500: Fehler beim Senden der Testanfrage` bei "Rechnung (Extraktion)"-Tests, besonders bei langsameren/lokalen Modellen**: DREI zusammenhängende Ursachen, in dieser Reihenfolge gefunden (erste zwei Fixes allein reichten NICHT). (1) `ai_test_service.REQUEST_TIMEOUT_SECONDS` stand auf 120s — mehr als 7× kürzer als die Produktions-Pipeline (`ai_service.py`, 900s). (2) `build_test_request()` lief AUSSERHALB von `run_ai_test()`s try/except — jede Exception daraus lief ungefangen bis zum Router durch, FastAPI/Starlette antwortet auf unbehandelte Exceptions mit reinem Text ohne JSON-`detail`-Feld, das Frontend zeigt dann nur die generische Fallback-Meldung. Beide gefixt (Timeout auf 900s, `build_test_request()` innerhalb try-Block), Fehler trat beim Nutzer aber weiterhin auf. **Der eigentliche Übeltäter (3):** Next.js' EIGENER `rewrites()`-Proxy (der `/api/:path*` intern zu `${NEXT_PUBLIC_API_URL}/api/:path*` weiterleitet) hat ein Standard-`experimental.proxyTimeout` von **exakt 30000ms** — komplett UNABHÄNGIG von jedem axios-Timeout im Frontend-Code oder httpx-Timeout im Backend! Erkennbar an `Failed to proxy http://backend:8000/api/ai-clients/1/test Error: socket hang up (code: 'ECONNRESET')` in den **Frontend**-Container-Logs (nicht Backend!) — und daran, dass im Backend-Log für die betroffene Anfrage GAR KEIN Abschluss-Eintrag (weder Erfolg noch Fehler/Traceback) erscheint, weil die Anfrage vom Next.js-Proxy gekappt wird, BEVOR die Backend-Antwort zurückkommt; das Backend verarbeitet oft trotzdem im Hintergrund weiter, aber die Antwort geht ins Leere. Betraf jede Anfrage über 30 Sekunden, unabhängig vom Endpunkt — bei lokalen Modellen und der längeren Extraktions-Systemprompt deutlich wahrscheinlicher als bei der kürzeren Typ-Erkennung, aber grundsätzlich JEDEN `/api/*`-Aufruf über 30s betreffend. **Fix:** `experimental.proxyTimeout: 920000` in `next.config.ts` — **Achtung:** `next.config.ts`-Änderungen werden NICHT hot-reloaded, Frontend-Container-Neustart zwingend nötig, sonst bleibt die alte 30s-Grenze aktiv obwohl der Code schon im Repo steht. Live im Browser verifiziert (derselbe Testfall, der vorher nach 30s mit ECONNRESET/HTTP 500 abbrach, lief danach 22,5s durch und lieferte ein vollständiges Ergebnis).
 
 ### Wichtige Abhängigkeiten
 
@@ -1013,4 +1040,16 @@ pending → running → done
 ```
 pending → processing → done
                     → error
+                    → waiting_capacity → (automatisch neu versucht) → processing → done
 ```
+
+`waiting_capacity` ist KEIN Endzustand: wird gesetzt, wenn ein Dokument für ALLE aktuell
+konfigurierten KI-Server zu groß ist (siehe Worker._process() Kapazitätsprüfung). Der Grund
+(z.B. "23 Seiten, max. verfügbar: 1 Seiten") steht als Klartext in `documents.raw_response`
+(NICHT `extraction.raw_response`!) und ist über den "KI"-Button in der Belege-Übersicht
+sichtbar — der zugehörige Task wird unbegrenzt neu versucht, das Dokument wird also
+automatisch fertig verarbeitet, sobald eine ausreichend große KI-Konfiguration verfügbar ist
+(z.B. nachträglich hinzugefügt oder `max_context_tokens` erhöht), ohne manuelles Eingreifen.
+Live verifiziert: Dokument mit 23 Seiten gegen eine auf 1 Seite limitierte Konfiguration
+getestet → `waiting_capacity` gesetzt, Task alle 20s (Poll-Intervall) neu versucht ohne
+`attempts` zu erhöhen; nach Anheben der Kapazität automatisch fertig verarbeitet.

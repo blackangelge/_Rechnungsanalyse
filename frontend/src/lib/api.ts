@@ -142,10 +142,13 @@ export const aiConfigsApi = {
     // des Headers reicht deshalb NICHT — er muss aktiv auf undefined überschrieben werden,
     // damit axios ihn entfernt und der Browser den korrekten
     // "multipart/form-data; boundary=..."-Header selbst berechnet.
+    // Timeout muss über dem Backend-seitigen ai_test_service.REQUEST_TIMEOUT_SECONDS
+    // (900s) liegen — sonst bricht der Browser die Anfrage vorzeitig ab, bevor das
+    // Backend selbst einen sauberen Timeout-Fehler zurückgeben konnte.
     return apiClient
       .post<AIConfigTestResult>(`/api/ai-clients/${id}/test`, form, {
         headers: { "Content-Type": undefined },
-        timeout: 180000,
+        timeout: 920000,
       })
       .then((r) => r.data);
   },
@@ -263,7 +266,9 @@ export interface DocumentItem {
   /** Integer: 0=Unbekannt, 1=Eingangsrechnung, 2=Ausgangsrechnung, … */
   document_type: number;
   comment: string | null;
-  status: "pending" | "processing" | "done" | "error";
+  /** waiting_capacity = kein Endzustand, wird automatisch neu versucht sobald eine
+   *  ausreichend große KI-Konfiguration verfügbar ist (siehe worker.py) */
+  status: "pending" | "processing" | "done" | "error" | "waiting_capacity";
   soft_deleted: boolean;
   created_at: string;
   /** Kurzfelder aus der Extraktion */
@@ -327,6 +332,12 @@ export interface TokenCountEntry {
 export interface DocumentDetail extends DocumentItem {
   /** Vollständige Rechnungsextraktion — nur bei Eingangsrechnungen (document_type=1) */
   extraction: InvoiceExtraction | null;
+  /**
+   * NUR für Status-Übergänge OHNE InvoiceExtraction gefüllt (z.B. waiting_capacity) —
+   * der Grund als Klartext. Für Eingangsrechnungen liegt die KI-Rohantwort stattdessen
+   * in extraction.raw_response, NICHT hier.
+   */
+  raw_response: string | null;
   /** Alle extrahierten Rechnungspositionen */
   order_positions: OrderPosition[];
   /** Alle KI-Analyse-Durchläufe, chronologisch — je Eintrag = ein Aufruf */
@@ -542,6 +553,10 @@ export interface KiStats {
   sum_duration_seconds: number | null;
   avg_input_tokens: number | null;
   avg_duration_seconds: number | null;
+  /** Belege mit status='done', deren letzter Status-Übergang <= 60 Minuten her ist */
+  processed_last_60min: number;
+  /** Belege mit status IN ('done','error'), deren letzter Status-Übergang <= 24 Std. her ist */
+  analyzed_last_24h: number;
 }
 
 export const logsApi = {

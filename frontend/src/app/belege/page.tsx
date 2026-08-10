@@ -55,12 +55,16 @@ function StatusBadge({ status }: { status: string }) {
     processing: "bg-blue-100 text-blue-700",
     done: "bg-green-100 text-green-700",
     error: "bg-red-100 text-red-700",
+    waiting_capacity: "bg-amber-100 text-amber-700",
   };
   const labels: Record<string, string> = {
     pending: "Ausstehend",
     processing: "Wird verarbeitet",
     done: "Fertig",
     error: "Fehler",
+    // Kein Endzustand: wird automatisch neu versucht, sobald eine ausreichend
+    // große KI-Konfiguration verfügbar ist (siehe worker.py, Fallstricke in CLAUDE.md)
+    waiting_capacity: "Wartet auf KI-Kapazität",
   };
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? "bg-gray-100 text-gray-500"}`}>
@@ -539,6 +543,7 @@ export default function BelegePage() {
                 <option value="processing">Wird verarbeitet</option>
                 <option value="done">Fertig</option>
                 <option value="error">Fehler</option>
+                <option value="waiting_capacity">Wartet auf KI-Kapazität</option>
               </select>
             </div>
             <div className="flex flex-col gap-1">
@@ -848,7 +853,7 @@ export default function BelegePage() {
                               </button>
                             )}
 
-                            {(doc.status === "done" || doc.status === "error") && (
+                            {(doc.status === "done" || doc.status === "error" || doc.status === "waiting_capacity") && (
                               <button
                                 onClick={() => openView(doc.id, "ki")}
                                 className="rounded border border-violet-300 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 transition-colors"
@@ -1090,7 +1095,10 @@ export default function BelegePage() {
                     </div>
                   )}
 
-                  <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? null} />
+                  {/* Fallback auf viewedDoc.raw_response (Document-Ebene) für Fälle ohne
+                      InvoiceExtraction, z.B. waiting_capacity — dort steht der Grund als
+                      Klartext, nicht als KI-JSON-Antwort. */}
+                  <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response ?? null} />
                 </>
               )}
               {!viewLoading && !viewedDoc && (

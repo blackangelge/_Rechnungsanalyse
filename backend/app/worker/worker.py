@@ -325,38 +325,25 @@ class Worker:
                 task.id, error,
             )
 
-    async def _release_for_retry(self, task: Task) -> None:
-        """Setzt die Task auf 'pending' zurück, damit sie beim nächsten
-        Polling-Zyklus neu eingesammelt wird. Erhöht den Versuchszähler —
-        NUR für echte, tatsächlich unternommene KI-Aufrufe (z.B. Verbindung
-        während des Requests verloren). Vorteil gegenüber direktem Requeue:
-        Versuchszähler landet sofort in der DB und überlebt einen Crash.
-        """
-        async with self.db_pool.acquire() as conn:
-            await conn.execute(
-                """UPDATE workflow_tasks
-                   SET status='pending',
-                       worker_id=NULL,
-                       locked_at=NULL,
-                       attempts=attempts+1,
-                       updated_at=NOW()
-                   WHERE id=$1""",
-                task.id,
-            )
-        log.info(
-            f"[{self.worker_id}] Task {task.id} zurück auf 'pending' "
-            f"(Versuch {task.attempts + 1}/{task.max_attempts})"
-        )
+    async def _release_for_retry_no_penalty(self, task: Task, reason: str = "kein KI-Server verfügbar") -> None:
+        """Setzt die Task auf 'pending' zurück OHNE den Versuchszähler zu erhöhen —
+        der Task wird dadurch UNBEGRENZT neu versucht, es gibt kein 'failed' mehr.
 
-    async def _release_for_retry_no_penalty(self, task: Task) -> None:
-        """Setzt die Task auf 'pending' zurück OHNE den Versuchszähler zu erhöhen.
-
-        Für Fälle, in denen gar kein KI-Aufruf stattgefunden hat, weil kein
-        passender Server verfügbar war (kein aktiver KI-Rechner konfiguriert,
-        alle temporär deaktiviert, oder alle Slots dauerhaft belegt). Ohne
-        Server gibt es keinen "Versuch", der fehlschlagen könnte — das Dokument
-        soll einfach warten, bis wieder ein Server verfügbar ist, statt nach
-        max_attempts fälschlich permanent auf 'error' zu landen.
+        Verwendet für drei KI-bezogene Fälle, in denen ein permanentes 'failed'
+        nicht sinnvoll ist, weil sich die Ursache von selbst beheben kann:
+          1. Kein passender Server verfügbar (kein aktiver KI-Rechner konfiguriert,
+             alle temporär deaktiviert, oder alle Slots dauerhaft belegt) — hier fand
+             gar kein KI-Aufruf statt, es gibt also ohnehin keinen "Versuch".
+          2. Dokument zu groß für alle konfigurierten KI-Server (Kapazitätsprüfung) —
+             wird automatisch verarbeitet, sobald eine größere KI-Konfiguration
+             verfügbar ist (siehe _set_document_waiting_capacity).
+          3. Verbindungsfehler beim tatsächlichen KI-Aufruf (ConnectionError) — die
+             KI war kurzzeitig/länger nicht erreichbar; kein inhaltliches Problem
+             des Dokuments, sondern ein Infrastrukturproblem, das sich von selbst
+             löst, sobald die KI wieder erreichbar ist.
+        Inhaltliche Fehler (z.B. Bug beim Verarbeiten der KI-Antwort) sind davon
+        NICHT betroffen und landen weiterhin sofort auf 'failed' (_mark_failed) —
+        ein dauerhaft kaputtes Dokument soll nicht endlos KI-Ressourcen verbrauchen.
         """
         async with self.db_pool.acquire() as conn:
             await conn.execute(
@@ -370,14 +357,15 @@ class Worker:
             )
         log.info(
             f"[{self.worker_id}] Task {task.id} zurück auf 'pending' "
-            f"(kein KI-Server verfügbar — Versuch nicht gezählt)"
+            f"({reason} — Versuch nicht gezählt)"
         )
 
     async def _set_document_error(self, task: Task, reason: str) -> None:
         """Setzt das verknüpfte Dokument auf 'error', falls der Payload eine document_id enthält.
 
-        Wird aufgerufen wenn ein Task endgültig fehlschlägt (max_attempts erreicht),
-        damit das Dokument nicht dauerhaft im Status 'processing' hängt.
+        Wird aufgerufen wenn ein Task endgültig fehlschlägt (inhaltlicher Fehler,
+        kein Verbindungsproblem), damit das Dokument nicht dauerhaft im Status
+        'processing' hängt.
         """
         doc_id = task.payload.get("document_id") if isinstance(task.payload, dict) else None
         if not isinstance(doc_id, int):
@@ -391,24 +379,25 @@ class Worker:
                 f"[{self.worker_id}] Konnte Dokument #{doc_id} nicht auf 'error' setzen: {exc}"
             )
 
-    async def _check_attempts_and_fail(self, task: Task) -> bool:
-        """Prüft, ob ein weiterer Versuch das Limit überschreiten würde.
+    async def _set_document_waiting_capacity(self, task: Task, reason: str) -> None:
+        """Setzt das verknüpfte Dokument auf 'waiting_capacity' (KEIN Endzustand).
 
-        Returns
-        -------
-        bool
-            ``True``, wenn die Task als 'failed' markiert wurde
-            (Aufrufer muss nichts mehr tun).
+        Wird verwendet, wenn ein Dokument für alle aktuell konfigurierten KI-Server
+        zu groß ist. Der Task selbst wird dabei NICHT auf 'failed' gesetzt, sondern
+        unbegrenzt neu versucht (siehe _process()) — sobald eine ausreichend große
+        KI-Konfiguration verfügbar ist, wird das Dokument automatisch fertig
+        verarbeitet, ohne dass jemand manuell eingreifen muss.
         """
-        if task.attempts + 1 >= task.max_attempts:
-            log.warning(
-                f"[{self.worker_id}] Task {task.id} hat "
-                f"max_attempts ({task.max_attempts}) erreicht"
+        doc_id = task.payload.get("document_id") if isinstance(task.payload, dict) else None
+        if not isinstance(doc_id, int):
+            return
+        try:
+            from app.routers.documents import _set_waiting_capacity as _doc_set_waiting_capacity
+            await asyncio.to_thread(_doc_set_waiting_capacity, doc_id, reason)
+        except Exception as exc:
+            log.error(
+                f"[{self.worker_id}] Konnte Dokument #{doc_id} nicht auf 'waiting_capacity' setzen: {exc}"
             )
-            await self._mark_failed(task, "max attempts exceeded")
-            await self._set_document_error(task, "max attempts exceeded — KI nicht erreichbar")
-            return True
-        return False
 
     async def _claim_task(self, task: Task) -> None:
         """Markiert den Task als TATSÄCHLICH in Bearbeitung (worker_id + locked_at).
@@ -463,8 +452,11 @@ class Worker:
         page_count = await self._get_document_page_count(task)
 
         # Kapazitäts-Vorabprüfung: Ist das Dokument für ALLE aktiven KI-Server zu
-        # groß, sofort fehlschlagen statt SLOT_ACQUIRE_TIMEOUT lang erfolglos zu
-        # warten und das dann als "KI nicht erreichbar" misszudeuten.
+        # groß, NICHT fehlschlagen (kein 'failed'!) — stattdessen unbegrenzt neu
+        # versuchen, bis irgendwann eine ausreichend große KI-Konfiguration verfügbar
+        # ist (z.B. weil sie nachträglich hinzugefügt/angepasst wurde). Damit das nicht
+        # wie ein stilles Hängenbleiben aussieht, wird der Grund sichtbar als
+        # 'waiting_capacity' am Dokument vermerkt (siehe _set_document_waiting_capacity).
         if page_count > 0 and self.pool.eligible_servers() and not self.pool.eligible_servers(page_count):
             max_known = max(
                 (s.max_pages for s in self.pool.eligible_servers() if s.max_pages is not None),
@@ -474,9 +466,9 @@ class Worker:
                 f"Dokument zu groß für alle konfigurierten KI-Server "
                 f"({page_count} Seiten, max. verfügbar: {max_known if max_known is not None else '?'} Seiten)"
             )
-            log.error(f"[{self.worker_id}] Task {task.id}: {reason}")
-            await self._mark_failed(task, reason)
-            await self._set_document_error(task, reason)
+            log.warning(f"[{self.worker_id}] Task {task.id}: {reason} — wird später erneut versucht")
+            await self._set_document_waiting_capacity(task, reason)
+            await self._release_for_retry_no_penalty(task, reason="Dokument zu groß für alle KI-Server")
             return
 
         try:
@@ -494,23 +486,38 @@ class Worker:
                     log.info(f"[{self.worker_id}] Task {task.id} fertig")
 
                 except ConnectionError as e:
-                    # Server-Problem (timeout_at wurde von der AIClient-
-                    # Klasse selbst gesetzt). Task zurück in den Pool.
+                    # Server-/Verbindungsproblem (timeout_at wurde von der AIClient-
+                    # Klasse selbst gesetzt). KEIN 'failed' — Task wird unbegrenzt neu
+                    # versucht, bis die KI wieder erreichbar ist (kein manuelles
+                    # Eingreifen nötig, wenn ein KI-Rechner z.B. neu startet/ausfällt).
+                    # attempts wird bewusst NICHT erhöht (siehe _release_for_retry_no_penalty)
+                    # — ein Verbindungsfehler ist kein inhaltliches Problem des Dokuments.
                     log.error(
                         f"[{self.worker_id}] Verbindung zu {server.name} "
-                        f"verloren: {e}"
+                        f"verloren: {e} — wird erneut versucht"
                     )
-                    if not await self._check_attempts_and_fail(task):
-                        await self._release_for_retry(task)
+                    await self._release_for_retry_no_penalty(
+                        task, reason=f"Verbindung zu {server.name} verloren"
+                    )
 
                 except Exception as e:
-                    # Inhaltlicher Fehler – nicht erneut versuchen.
+                    # Inhaltlicher Fehler – nicht erneut versuchen (siehe Antwort
+                    # des Nutzers zur Scope-Frage: NUR Verbindungsfehler werden
+                    # unbegrenzt neu versucht, echte inhaltliche Fehler weiterhin
+                    # nicht — sonst würde ein dauerhaft kaputtes Dokument (z.B. Bug
+                    # beim Verarbeiten der KI-Antwort) endlos KI-Ressourcen verbrauchen.
+                    reason = f"{type(e).__name__}: {e}"
                     log.error(
-                        f"[{self.worker_id}] Task {task.id} fehlgeschlagen: "
-                        f"{type(e).__name__}: {e}",
+                        f"[{self.worker_id}] Task {task.id} fehlgeschlagen: {reason}",
                         exc_info=True,
                     )
-                    await self._mark_failed(task, f"{type(e).__name__}: {e}")
+                    await self._mark_failed(task, reason)
+                    # WICHTIG (Bugfix, unabhängig von obigem): _mark_failed setzt nur
+                    # den TASK auf 'failed' — ohne diesen Aufruf blieb das zugehörige
+                    # DOKUMENT für immer auf 'processing' hängen (keine sichtbare
+                    # Fehleranzeige in der Belege-Übersicht, obwohl der Task längst
+                    # fehlgeschlagen war).
+                    await self._set_document_error(task, reason)
 
         except TimeoutError:
             # Innerhalb von SLOT_ACQUIRE_TIMEOUT wurde kein passender Server frei —

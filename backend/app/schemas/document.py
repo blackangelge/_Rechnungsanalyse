@@ -96,6 +96,12 @@ class DocumentDetail(DocumentRead):
     extraction: "InvoiceExtractionRead | None" = None
     order_positions: list["OrderPositionRead"] = []
 
+    # NUR für Status-Übergänge OHNE InvoiceExtraction gefüllt (z.B. waiting_capacity —
+    # "Dokument zu groß für alle konfigurierten KI-Server", siehe worker.py) — der Grund
+    # als Klartext (crud.document.update_status). Für Eingangsrechnungen liegt die
+    # eigentliche KI-Rohantwort stattdessen in extraction.raw_response, NICHT hier.
+    raw_response: str | None = None
+
     # Alle Analyse-Durchläufe — ein Eintrag pro KI-Aufruf (nie überschrieben)
     token_counts: list[TokenCountRead] = []
 

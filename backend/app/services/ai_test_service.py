@@ -22,7 +22,13 @@ from app.services.ai_url import build_ai_url
 
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT_SECONDS = 120
+# Muss mindestens so großzügig sein wie ai_service.REQUEST_TIMEOUT_SECONDS (900s,
+# Produktions-Pipeline) — sonst meldet das Test-Tool eine KI-Konfiguration fälschlich
+# als "kaputt" (Timeout), obwohl dieselbe Konfiguration in der echten Analyse
+# problemlos funktioniert, nur langsamer als die früher hier gesetzten 120s.
+# Betrifft vor allem lokale/kleinere Modelle (LM Studio, Ollama) bei mehrseitigen
+# Dokumenten. Siehe Bekannte Fallstricke in CLAUDE.md.
+REQUEST_TIMEOUT_SECONDS = 900
 
 
 def _truncate_images(body: dict) -> dict:
@@ -129,24 +135,31 @@ def run_ai_test(
     analog zu ai_service.extract_invoice_data). Wirft nie eine Exception — Fehler
     landen im Rückgabewert (result["error"]), damit der Router immer 200 liefert
     und das Frontend Anfrage + Fehler gemeinsam anzeigen kann.
-    """
-    req = build_test_request(images_b64, config, system_prompt_text, user_text)
 
+    WICHTIG: auch build_test_request() selbst läuft innerhalb des try-Blocks (nicht
+    davor!) — ein früherer Bug ließ Exceptions aus build_test_request() ungefangen
+    bis zum Router durchreichen, was FastAPI/Starlette als reinen HTTP 500 ohne
+    JSON-"detail"-Feld beantwortet (Frontend zeigt dann nur die generische Meldung
+    "HTTP 500: Fehler beim Senden der Testanfrage" statt einer konkreten Fehler-
+    ursache). Siehe Bekannte Fallstricke in CLAUDE.md.
+    """
     result: dict[str, Any] = {
-        "request": {
-            "method": req["method"],
-            "url": req["url"],
-            "headers": req["headers"],
-            "body": _truncate_images(req["body"]),
-        },
+        "request": None,
         "response": None,
         "error": None,
         "success": False,
     }
 
-    logger.info("KI-Test: Sende Anfrage an %s (config_id=%d)", req["url"], config.id)
-
     try:
+        req = build_test_request(images_b64, config, system_prompt_text, user_text)
+        result["request"] = {
+            "method": req["method"],
+            "url": req["url"],
+            "headers": req["headers"],
+            "body": _truncate_images(req["body"]),
+        }
+
+        logger.info("KI-Test: Sende Anfrage an %s (config_id=%d)", req["url"], config.id)
         t0 = time.monotonic()
         with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             resp = client.request(

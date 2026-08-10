@@ -284,6 +284,16 @@ export default function LogsPage() {
                     : undefined
                 }
               />
+              <StatCard
+                label="Verarbeitet (letzte 60 Min.)"
+                value={fmt(kiStats.processed_last_60min)}
+                sub="erfolgreich über die Warteschlange"
+              />
+              <StatCard
+                label="Analysiert (letzte 24 Std.)"
+                value={fmt(kiStats.analyzed_last_24h)}
+                sub="alle abgeschlossenen Belege"
+              />
             </div>
 
             <div className="rounded-lg border bg-white shadow-sm overflow-hidden">

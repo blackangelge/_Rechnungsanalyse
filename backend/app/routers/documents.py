@@ -193,18 +193,42 @@ def _set_error(doc_id: int, message: str) -> None:
 
     Args:
         doc_id:  ID des Dokuments, dessen Status geändert werden soll.
-        message: Fehlermeldung für das Log (wird nicht in der DB gespeichert).
+        message: Fehlermeldung — wird zusätzlich in raw_response persistiert
+                 (sichtbar über den "KI"-Button in der Belege-Übersicht).
     """
     try:
         _db = SessionLocal()  # Frische, unbelastete Session öffnen
         try:
-            crud.document.update_status(_db, doc_id, "error")
+            crud.document.update_status(_db, doc_id, "error", error_message=message)
             # Session wird von update_status selbst committed
         finally:
             _db.close()  # Session immer schließen, auch bei Fehler
     except Exception as exc:
         # Selbst dieser letzte Ausweg ist fehlgeschlagen — nur noch loggen
         logger.error("Konnte Fehlerstatus für #%d nicht setzen: %s", doc_id, exc)
+
+
+def _set_waiting_capacity(doc_id: int, message: str) -> None:
+    """
+    Setzt den Status eines Dokuments auf 'waiting_capacity' — eigene Session, analog
+    zu _set_error().
+
+    Wird verwendet, wenn ein Dokument für ALLE aktuell konfigurierten KI-Server zu
+    groß ist (mehr Seiten als jede Konfiguration verarbeiten kann). Anders als
+    'error' ist das KEIN Endzustand: Der zugehörige Task wird unbegrenzt neu
+    versucht (siehe Worker._process()), damit das Dokument automatisch verarbeitet
+    wird, sobald eine ausreichend große KI-Konfiguration verfügbar ist — ohne dass
+    jemand manuell eingreifen muss. Der Grund wird in raw_response gespeichert und
+    ist über den "KI"-Button in der Belege-Übersicht sichtbar.
+    """
+    try:
+        _db = SessionLocal()
+        try:
+            crud.document.update_status(_db, doc_id, "waiting_capacity", error_message=message)
+        finally:
+            _db.close()
+    except Exception as exc:
+        logger.error("Konnte Status 'waiting_capacity' für #%d nicht setzen: %s", doc_id, exc)
 
 
 # ─── Pydantic-Request/Response-Schemas für diesen Router ─────────────────────
