@@ -1046,3 +1046,94 @@ export const exportSettingsApi = {
   update: (data: { invoice_fields: string[]; position_fields: string[] }) =>
     apiClient.put<ExportConfig>("/api/settings/export/", data).then((r) => r.data),
 };
+
+// ─── Artikelsuche (Positionen über alle Belege) ───────────────────────────────
+
+export interface PositionHit {
+  id: number;
+  document_id: number;
+  position_index: number;
+  product_name: string | null;
+  product_description: string | null;
+  article_number: string | null;
+  quantity: number | string | null;
+  unit: string | null;
+  unit_price: number | string | null;
+  total_price: number | string | null;
+  discount: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  supplier_name: string | null;
+  validation_status: ValidationStatus | null;
+  company: string;
+  year: number;
+  batch_id: number;
+  original_filename: string;
+}
+
+export interface PositionFilter {
+  q?: string;
+  article_number?: string;
+  supplier_name?: string;
+  company?: string;
+  year?: number;
+  batch_ids?: number[];
+  document_id?: number;
+  invoice_number?: string;
+  unit?: string;
+  unit_price_min?: number;
+  unit_price_max?: number;
+  total_price_min?: number;
+  total_price_max?: number;
+  quantity_min?: number;
+  quantity_max?: number;
+  /** YYYY-MM-DD */
+  date_from?: string;
+  date_to?: string;
+  validation_status?: ValidationStatus[];
+  include_deleted?: boolean;
+}
+
+export type PositionSort =
+  | "document_id" | "product_name" | "product_description" | "article_number" | "quantity" | "unit"
+  | "unit_price" | "total_price" | "supplier_name" | "invoice_number" | "invoice_date";
+
+export interface PositionSummary {
+  count: number;
+  documents: number;
+  total_price_sum: number | null;
+  unit_price_min: number | null;
+  unit_price_avg: number | null;
+  unit_price_max: number | null;
+  by_unit: { unit: string | null; count: number; quantity: number | null; total_price: number | null }[];
+}
+
+export const positionsApi = {
+  /** Eine Seite Treffer (serverseitig paginiert); `total` = Gesamtzahl (Header X-Total-Count) */
+  search: async (
+    filters: PositionFilter,
+    page: number,
+    pageSize: number,
+    sort?: PositionSort,
+    order: "asc" | "desc" = "desc",
+  ) => {
+    const r = await apiClient.get<PositionHit[]>("/api/positions/", {
+      params: { ...filters, limit: pageSize, offset: page * pageSize, sort, order },
+    });
+    const header = Number(r.headers["x-total-count"]);
+    return { items: r.data, total: Number.isFinite(header) ? header : r.data.length };
+  },
+
+  /** Kennzahlen zu denselben Filtern (Anzahl, Summe, Einzelpreis min/Ø/max, je Einheit) */
+  summary: (filters: PositionFilter) =>
+    apiClient.get<PositionSummary>("/api/positions/summary", { params: filters }).then((r) => r.data),
+
+  /** Einheiten für das Filter-Dropdown */
+  filterOptions: () =>
+    apiClient
+      .get<{ units: { unit: string; count: number }[] }>("/api/positions/filter-options")
+      .then((r) => r.data),
+};
+
+
+// ─── Anmeldung ───────────────────────────────────────────────────────────────

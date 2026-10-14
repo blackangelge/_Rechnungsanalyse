@@ -228,6 +228,7 @@ from app.routers import ai_clients, batch, document_history, document_pdf, docum
 from app.routers import settings as settings_router
 from app.routers import imports as imports_router  # 'imports' ist ein Python-Keyword
 from app.routers import tasks
+from app.routers import positions as positions_router
 from app.routers import export_settings as export_settings_router
 
 app.include_router(ai_clients.router)                  # /api/ai-clients/*
@@ -243,6 +244,7 @@ app.include_router(vendors.router)                     # /api/vendors/*
 app.include_router(workflows.router)                   # /api/workflows/*
 app.include_router(batch.router)                       # /api/batch/*
 app.include_router(tasks.router)                       # /api/tasks/*
+app.include_router(positions_router.router)            # /api/positions/* (Artikelsuche)
 app.include_router(export_settings_router.router)      # /api/settings/export
 
 

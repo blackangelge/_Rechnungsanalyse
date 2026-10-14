@@ -30,6 +30,7 @@ const SETTINGS_LINKS = [
 const MAIN_LINKS = [
   { href: "/dashboard",    label: "Dashboard" },
   { href: "/belege",       label: "Belege" },
+  { href: "/artikel",      label: "Artikel" },
   { href: "/lieferanten",  label: "Lieferanten" },
   { href: "/tasks",        label: "Tasks" },
   { href: "/logs",         label: "KI-Statistiken" },
