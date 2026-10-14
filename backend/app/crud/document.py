@@ -14,6 +14,7 @@ Alle Funktionen erwarten eine bereits geöffnete Session und schließen sie NICH
 das Lifecycle-Management liegt beim Aufrufer.
 """
 
+import json
 import logging
 from decimal import Decimal
 
@@ -174,6 +175,7 @@ def get_all_filtered(
     supplier_name_filter: str | None = None,
     doc_id: int | None = None,
     document_type_ids: list[int] | None = None,
+    validation_statuses: list[str] | None = None,
 ) -> list[Document]:
     """
     Gibt eine gefilterte und sortierte (ID desc) Dokumentliste zurück.
@@ -201,6 +203,7 @@ def get_all_filtered(
         or total_max is not None
         or has_extraction is not None
         or supplier_name_filter is not None
+        or bool(validation_statuses)
     )
     if needs_join:
         query = query.outerjoin(InvoiceExtraction, Document.id == InvoiceExtraction.document_id)
@@ -214,6 +217,9 @@ def get_all_filtered(
         query = query.filter(InvoiceExtraction.id.isnot(None))
     elif has_extraction is False:
         query = query.filter(InvoiceExtraction.id.is_(None))
+
+    if validation_statuses:
+        query = query.filter(InvoiceExtraction.validation_status.in_(validation_statuses))
 
     # vendor_id ist der Lieferantenname-String in der neuen Extraktion
     if supplier_name_filter:
@@ -248,8 +254,14 @@ def save_extraction(
     positions: list[dict],
     raw_response: str,
     ki_stats: dict | None = None,
+    validation: dict | None = None,
 ) -> InvoiceExtraction:
-    """Speichert extrahierte Rechnungsdaten. KI-Stats kommen in DocumentTokenCount."""
+    """
+    Speichert extrahierte Rechnungsdaten. KI-Stats kommen in DocumentTokenCount.
+
+    validation: optionales Ergebnis der Plausibilitätsprüfung (ValidationResult.to_dict() +
+                Zusatzinfos) → invoice_extractions.validation_status / validation_details.
+    """
     db.query(InvoiceExtraction).filter(InvoiceExtraction.document_id == doc_id).delete()
     db.query(OrderPosition).filter(OrderPosition.document_id == doc_id).delete()
     # DocumentTokenCount wird NICHT gelöscht — jeder Analyse-Durchlauf bekommt
@@ -286,9 +298,17 @@ def save_extraction(
             continue
         mapped[_FIELD_MAP.get(k, k)] = v
 
+    validation_cols = (
+        {
+            "validation_status": validation.get("status"),
+            "validation_details": json.dumps(validation, ensure_ascii=False),
+        }
+        if validation else {}
+    )
     extraction = InvoiceExtraction(
         document_id=doc_id,
         raw_response=raw_response,
+        **validation_cols,
         **mapped,
     )
     db.add(extraction)
@@ -299,8 +319,6 @@ def save_extraction(
         for k, v in pos.items():
             if k == "unit_price":
                 pos_mapped["unit_price_netto"] = v
-            elif k == "total_price":
-                pass  # nicht mehr in Model
             elif k == "product_description" and "product_name" not in pos:
                 pos_mapped["product_description"] = v
             else:
@@ -351,3 +369,94 @@ def save_extraction(
     except Exception:
         pass  # Refresh nach ki_stats-Rollback kann fehlschlagen; Extraktion wurde bereits committed
     return extraction
+
+
+# ─── Plausibilitätsprüfung ────────────────────────────────────────────────────
+
+def update_validation(
+    db: Session,
+    doc_id: int,
+    validation: dict,
+    corrected_positions: list[dict] | None = None,
+) -> InvoiceExtraction | None:
+    """
+    Schreibt ein (neues) Prüfergebnis in die Extraktion und übernimmt die dabei entstandenen
+    Korrekturen in die Daten (`corrected_positions` = ValidationResult.corrections):
+      • {"position": idx, "to": wert}            → order_positions.total_price
+      • {"field": "total_amount", "to": wert}    → invoice_extractions.total_amount_brutto
+    """
+    extraction = (
+        db.query(InvoiceExtraction).filter(InvoiceExtraction.document_id == doc_id).first()
+    )
+    if extraction is None:
+        return None
+    for corr in corrected_positions or []:
+        if "position" in corr:
+            pos = (
+                db.query(OrderPosition)
+                .filter(
+                    OrderPosition.document_id == doc_id,
+                    OrderPosition.position_index == corr["position"],
+                )
+                .first()
+            )
+            if pos is not None:
+                pos.total_price = Decimal(str(corr["to"]))
+        elif corr.get("field") == "total_amount":
+            extraction.total_amount_brutto = Decimal(str(corr["to"]))
+    extraction.validation_status = validation.get("status")
+    extraction.validation_details = json.dumps(validation, ensure_ascii=False)
+    db.commit()
+    db.refresh(extraction)
+    return extraction
+
+
+def confirm_validation(db: Session, doc_id: int) -> InvoiceExtraction | None:
+    """Markiert eine Prüfung ("Prüfen!") manuell als erledigt → Status `manual_ok`."""
+    extraction = (
+        db.query(InvoiceExtraction).filter(InvoiceExtraction.document_id == doc_id).first()
+    )
+    if extraction is None:
+        return None
+    details: dict = {}
+    if extraction.validation_details:
+        try:
+            details = json.loads(extraction.validation_details) or {}
+        except (TypeError, ValueError):
+            details = {}
+    details["status"] = "manual_ok"
+    details["confirmed_manually"] = True
+    extraction.validation_status = "manual_ok"
+    extraction.validation_details = json.dumps(details, ensure_ascii=False)
+    db.commit()
+    db.refresh(extraction)
+    return extraction
+
+
+def save_used_prompts(
+    db: Session,
+    doc_id: int,
+    system_prompt: str | None = None,
+    doc_type_prompt: str | None = None,
+) -> None:
+    """
+    Speichert den Wortlaut der bei der Analyse verwendeten Systemprompts am Dokument.
+    Wird zu Beginn jeder (Neu-)Analyse aufgerufen und überschreibt die vorherigen Prompts;
+    der Nachprüfungs-Prompt wird dabei zurückgesetzt.
+    """
+    obj = db.get(Document, doc_id)
+    if obj is None:
+        return
+    obj.used_system_prompt = system_prompt
+    obj.used_doc_type_prompt = doc_type_prompt
+    obj.used_recheck_prompt = None
+    db.commit()
+
+
+def save_recheck_prompt(db: Session, doc_id: int, recheck_prompt: str | None) -> None:
+    """Speichert den Prompt der zweiten KI-Abfrage (Plausibilitäts-Nachprüfung)."""
+    obj = db.get(Document, doc_id)
+    if obj is None:
+        return
+    obj.used_recheck_prompt = recheck_prompt
+    db.commit()

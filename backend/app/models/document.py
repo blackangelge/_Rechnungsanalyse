@@ -23,6 +23,7 @@ Status-Flow:
                       → error
 """
 
+import json
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
@@ -54,6 +55,10 @@ class Document(Base):
     raw_response: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="{}")
     # Soft-Delete: Dokument bleibt in der DB, wird aber nicht mehr angezeigt.
     # Kann über POST /{id}/restore wiederhergestellt werden.
+    # Wortlaut der bei der letzten Analyse verwendeten Systemprompts (Nachvollziehbarkeit)
+    used_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    used_doc_type_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    used_recheck_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     soft_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -106,6 +111,23 @@ class Document(Base):
     def supplier_name(self) -> str | None:
         """Lieferantenname (vendor_id-Freitext) aus der InvoiceExtraction."""
         return self.extraction.vendor_id if self.extraction else None
+
+    @property
+    def validation_status(self) -> str | None:
+        """Plausibilitätsstatus aus der InvoiceExtraction (None wenn keine Extraktion)."""
+        return self.extraction.validation_status if self.extraction else None
+
+    @property
+    def validation(self) -> dict | None:
+        """Details der Plausibilitätsprüfung (geparstes JSON) oder None."""
+        raw = self.extraction.validation_details if self.extraction else None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     @property
     def has_extraction(self) -> bool:

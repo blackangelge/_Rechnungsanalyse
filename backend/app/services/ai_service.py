@@ -290,6 +290,50 @@ def extract_invoice_data(
     return extracted_fields, order_positions, raw_text, ki_stats
 
 
+def build_recheck_prompt(
+    base_prompt: str | None,
+    issues: list[str],
+    previous_raw: str | None,
+) -> str:
+    """
+    Baut den Systemprompt für die zweite KI-Abfrage (Plausibilitäts-Nachprüfung):
+    der normale Extraktionsprompt plus die gefundenen Auffälligkeiten.
+    """
+    parts = [base_prompt or "", "", "PRÜFHINWEIS — NACHPRÜFUNG:"]
+    parts.append(
+        "Eine automatische Plausibilitätsprüfung hat bei einer ersten Auslesung dieser "
+        "Rechnung Unstimmigkeiten gefunden. Lies die Rechnung erneut sorgfältig aus "
+        "und achte besonders auf Mengeneinheiten (t/kg/g, l/ml/hl, Stück, Preis je 100 "
+        "oder je 1000) sowie auf Rechnungssummen. Übernimm Preise und Summen exakt so, "
+        "wie sie auf der Rechnung stehen. Antworte im gleichen JSON-Format wie zuvor."
+    )
+    parts.append("Gefundene Auffälligkeiten:")
+    parts.extend(f"- {msg}" for msg in issues[:20])
+    if previous_raw:
+        parts.append("")
+        parts.append("Erste Auslesung (zur Orientierung, kann fehlerhaft sein):")
+        parts.append(previous_raw[:6000])
+    return "\n".join(parts)
+
+
+def recheck_invoice_data(
+    images_b64: list[str],
+    config,
+    base_prompt: str | None,
+    issues: list[str],
+    previous_raw: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], str, dict, str]:
+    """
+    Zweite KI-Abfrage nach fehlgeschlagener Plausibilitätsprüfung.
+
+    SYNCHRON (via asyncio.to_thread aufrufen), wirft nie eine Exception.
+    Returns: (extracted_fields, order_positions, raw_response, ki_stats, prompt_used)
+    """
+    prompt = build_recheck_prompt(base_prompt, issues, previous_raw)
+    fields, positions, raw, stats = extract_invoice_data(images_b64, config, prompt)
+    return fields, positions, raw, stats, prompt
+
+
 def detect_document_type(
     images_b64: list[str],
     config,
@@ -573,6 +617,19 @@ def _num(val) -> float | None:
         return None
 
 
+def _sum_tax(summary) -> float | None:
+    """Summe der Steuerbeträge aus der USt-Zusammenfassung (None, wenn keine Beträge vorhanden)."""
+    total, found = 0.0, False
+    for row in summary or []:
+        if not isinstance(row, dict):
+            continue
+        amount = _num(row.get("steuerbetrag"))
+        if amount is not None:
+            total += amount
+            found = True
+    return round(total, 2) if found else None
+
+
 def _map_new_format(data: dict) -> tuple[dict, list[dict]]:
     """
     Mappt das neue verschachtelte KI-JSON-Format auf die flachen DB-Felder.
@@ -611,6 +668,8 @@ def _map_new_format(data: dict) -> tuple[dict, list[dict]]:
         "invoice_date":       _date(rechnung.get("rechnungsdatum")),
         "due_date":           _date(rechnung.get("faelligkeit")),
         "total_amount":       _num(zahlung.get("gesamtbetrag_brutto")),
+        "total_amount_netto": _num(zahlung.get("gesamtbetrag_netto")),
+        "total_tax_value":    _sum_tax(zahlung.get("umsatzsteuer_zusammenfassung")),
         "discount_amount":    None,  # nicht im neuen Format vorhanden
         "cash_discount_amount": _num(skonto.get("betrag")),
         "payment_terms":      _str(zahlung.get("zahlungsbedingungen")),
