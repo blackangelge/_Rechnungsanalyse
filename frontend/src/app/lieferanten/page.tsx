@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import MergeModal from "@/components/suppliers/MergeModal";
 import {
-  Vendor, VendorUpdate, VendorBankAccount, WorkflowListItem, vendorsApi, workflowsApi, extractApiError,
+  DuplicateGroup, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount, WorkflowListItem,
+  vendorsApi, workflowsApi, extractApiError,
 } from "@/lib/api";
 
 function VendorEditModal({
@@ -104,6 +106,11 @@ export default function LieferantenPage() {
   const [error, setError] = useState<string | null>(null);
   const [editVendor, setEditVendor] = useState<Vendor | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicateGroup[] | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [mergeVendors, setMergeVendors] = useState<Vendor[] | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [dupeLoading, setDupeLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,6 +142,39 @@ export default function LieferantenPage() {
     }
   }
 
+  function toggleSelected(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleMerged(result: VendorMergeResult) {
+    setMergeVendors(null);
+    setSelected(new Set());
+    setSuccessMsg(
+      `${result.merged_ids.length} Lieferant(en) in „${result.supplier.name}" zusammengeführt — ` +
+      `${result.moved_documents} Beleg(e) zugeordnet, ${result.moved_bank_accounts} Bankverbindung(en) übernommen.`,
+    );
+    await load();
+    if (duplicates !== null) {          // Dublettenliste aktuell halten
+      try { setDuplicates(await vendorsApi.duplicateGroups()); } catch { /* bleibt sichtbar */ }
+    }
+  }
+
+  async function handleFindDuplicates() {
+    setDupeLoading(true);
+    setSuccessMsg(null);
+    try {
+      setDuplicates(await vendorsApi.duplicateGroups());
+    } catch (err) {
+      setError(extractApiError(err, "Fehler bei der Dublettensuche"));
+    } finally {
+      setDupeLoading(false);
+    }
+  }
+
   async function handleDelete(id: number) {
     try {
       await vendorsApi.delete(id);
@@ -152,10 +192,100 @@ export default function LieferantenPage() {
           <h1 className="text-2xl font-bold text-gray-900">Lieferanten</h1>
           <p className="mt-1 text-sm text-gray-500">{vendors.length} Lieferant(en)</p>
         </div>
+        <button
+          onClick={handleFindDuplicates}
+          disabled={dupeLoading}
+          className="rounded bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+        >
+          {dupeLoading ? "Suche..." : "🔍 Dubletten suchen"}
+        </button>
       </div>
 
       {error && (
         <div className="mb-4 rounded bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
+      )}
+
+      {successMsg && (
+        <div className="mb-4 rounded bg-green-50 px-4 py-3 text-sm text-green-700" data-testid="merge-success">{successMsg}</div>
+      )}
+
+      {/* Dubletten-Anzeige */}
+      {duplicates !== null && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4" data-testid="duplicates-panel">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold text-amber-800">
+              {duplicates.length === 0
+                ? "✓ Keine Dubletten gefunden"
+                : `⚠ ${duplicates.length} Dublettengruppe(n) gefunden`}
+            </h2>
+            <button onClick={() => setDuplicates(null)} className="text-xs text-amber-600 hover:underline">
+              Schließen
+            </button>
+          </div>
+          {duplicates.length > 0 && (
+            <p className="mb-3 text-xs text-amber-700">
+              Verglichen werden IBAN, USt-IdNr., Steuernummer und Name (ohne Rechtsform, auch ähnliche Schreibweisen).
+              Es wird nichts automatisch zusammengeführt — du entscheidest je Gruppe.
+            </p>
+          )}
+          {duplicates.map((group, gi) => {
+            const conf = {
+              high: { label: "sehr wahrscheinlich", cls: "bg-red-100 text-red-700" },
+              medium: { label: "wahrscheinlich", cls: "bg-amber-200 text-amber-900" },
+              low: { label: "möglich", cls: "bg-gray-200 text-gray-700" },
+            }[group.confidence];
+            return (
+              <div key={gi} className="mb-3 rounded border border-amber-300 bg-white p-3" data-testid="duplicate-group">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-amber-700">Gruppe {gi + 1}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${conf.cls}`}>{conf.label}</span>
+                  {group.reason_labels.map((l) => (
+                    <span key={l} className="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">{l}</span>
+                  ))}
+                  <button
+                    onClick={() => setMergeVendors(group.suppliers)}
+                    className="ml-auto rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                  >
+                    Zusammenführen…
+                  </button>
+                </div>
+                <div className="space-y-1">
+                  {group.suppliers.map((v) => (
+                    <div key={v.id} className="flex items-center justify-between text-sm">
+                      <span>
+                        <strong>#{v.id}</strong> {v.name} —{" "}
+                        {[v.street, v.postal_code, v.city].filter(Boolean).join(", ") || "—"}
+                        {firstBank(v.bank_accounts)?.iban ? ` • ${firstBank(v.bank_accounts)?.iban}` : ""} • {v.document_count ?? 0} Beleg(e)
+                      </span>
+                      <button
+                        onClick={() => setEditVendor(v)}
+                        className="ml-3 rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-200"
+                      >
+                        Bearbeiten
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Mehrfachauswahl → manuell zusammenführen */}
+      {selected.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5" data-testid="selection-bar">
+          <span className="text-sm font-medium text-blue-800">{selected.size} Lieferant(en) ausgewählt</span>
+          <button
+            onClick={() => setMergeVendors(vendors.filter((v) => selected.has(v.id)))}
+            disabled={selected.size < 2}
+            className="rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            Zusammenführen…
+          </button>
+          {selected.size < 2 && <span className="text-xs text-blue-700">Wähle mindestens zwei aus.</span>}
+          <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-blue-700 hover:underline">Auswahl aufheben</button>
+        </div>
       )}
 
       {loading ? (
@@ -165,6 +295,7 @@ export default function LieferantenPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="w-8 px-3 py-3"></th>
                 <th className="px-4 py-3 text-left">Name</th>
                 <th className="px-4 py-3 text-left">Straße</th>
                 <th className="px-4 py-3 text-left">PLZ</th>
@@ -172,6 +303,7 @@ export default function LieferantenPage() {
                 <th className="px-4 py-3 text-left">USt-IdNr.</th>
                 <th className="px-4 py-3 text-left">IBAN</th>
                 <th className="px-4 py-3 text-left">BIC</th>
+                <th className="px-4 py-3 text-center">Belege</th>
                 <th className="px-4 py-3 text-left" title="Analyse-Ablauf (Workflow) für diesen Lieferanten">Workflow</th>
                 <th className="px-4 py-3 text-right">Aktionen</th>
               </tr>
@@ -179,7 +311,7 @@ export default function LieferantenPage() {
             <tbody className="divide-y divide-gray-100">
               {vendors.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={11} className="px-4 py-6 text-center text-gray-400">
                     Noch keine Lieferanten vorhanden. Starte eine KI-Analyse um Lieferanten zu extrahieren.
                   </td>
                 </tr>
@@ -187,7 +319,11 @@ export default function LieferantenPage() {
               {vendors.map((v) => {
                 const bank = firstBank(v.bank_accounts);
                 return (
-                  <tr key={v.id} className="hover:bg-gray-50">
+                  <tr key={v.id} className={selected.has(v.id) ? "bg-blue-50" : "hover:bg-gray-50"}>
+                    <td className="px-3 py-3">
+                      <input type="checkbox" checked={selected.has(v.id)} onChange={() => toggleSelected(v.id)}
+                        aria-label={`${v.name} auswählen`} className="rounded border-gray-300 text-blue-600" />
+                    </td>
                     <td className="px-4 py-3 font-medium text-gray-900">{v.name}</td>
                     <td className="px-4 py-3 text-gray-600">{v.street ?? "—"}</td>
                     <td className="px-4 py-3 text-gray-600">{v.postal_code ?? "—"}</td>
@@ -195,6 +331,11 @@ export default function LieferantenPage() {
                     <td className="px-4 py-3 text-gray-600 text-xs font-mono">{v.vat_id ?? "—"}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{bank?.iban ?? "—"}</td>
                     <td className="px-4 py-3 text-gray-600">{bank?.bic ?? "—"}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className="inline-block rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                        {v.document_count ?? 0}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       <select
                         value={v.workflow_id ?? ""}
@@ -247,6 +388,14 @@ export default function LieferantenPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {mergeVendors && (
+        <MergeModal
+          suppliers={mergeVendors}
+          onClose={() => setMergeVendors(null)}
+          onMerged={handleMerged}
+        />
       )}
 
       {editVendor && (

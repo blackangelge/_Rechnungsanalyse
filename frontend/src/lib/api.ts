@@ -909,6 +909,8 @@ export interface Vendor {
   /** Eigener Analyse-Workflow dieses Lieferanten (null = Standard) */
   workflow_id?: number | null;
   bank_accounts: VendorBankAccount[];
+  /** Belege mit diesem Lieferantennamen (nicht gelöschte) */
+  document_count?: number;
 }
 
 export interface VendorUpdate {
@@ -922,7 +924,36 @@ export interface VendorUpdate {
   vat_id?: string | null;
 }
 
+export interface DuplicateGroup {
+  suppliers: Vendor[];
+  reasons: string[];
+  reason_labels: string[];
+  confidence: "high" | "medium" | "low";
+}
+
+export interface VendorMergeRequest {
+  target_id: number;
+  source_ids: number[];
+  /** Ausdrücklich gewählte Endwerte einzelner Felder */
+  fields?: Record<string, string | null>;
+  /** Belege auf den Namen des Ziels umschreiben (nur dann gehören sie danach zum Ziel) */
+  update_document_names?: boolean;
+}
+
+export interface VendorMergeResult {
+  supplier: Vendor;
+  merged_ids: number[];
+  moved_documents: number;
+  moved_bank_accounts: number;
+}
+
 export const vendorsApi = {
+  /** Dublettensuche (IBAN, USt-IdNr., Steuernummer, Name) — verändert nichts */
+  duplicateGroups: () =>
+    apiClient.get<DuplicateGroup[]>("/api/vendors/duplicate-groups").then((r) => r.data),
+  /** Lieferanten zusammenführen */
+  merge: (data: VendorMergeRequest) =>
+    apiClient.post<VendorMergeResult>("/api/vendors/merge", data).then((r) => r.data),
   list: () => apiClient.get<Vendor[]>("/api/vendors/").then((r) => r.data),
   get: (id: number) => apiClient.get<Vendor>(`/api/vendors/${id}/`).then((r) => r.data),
   update: (id: number, data: VendorUpdate) =>
