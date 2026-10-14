@@ -30,6 +30,10 @@ class AutomationSettingsUpdate(BaseModel):
     worker_poll_interval_seconds: int = Field(default=20, ge=1)
     # Nach wie vielen Minuten ein verwaister 'in_progress'-Task zurückgesetzt wird.
     worker_lock_timeout_minutes: int = Field(default=30, ge=1)
+    analysis_history_keep: int = Field(
+        default=3, ge=0, le=20,
+        description="Aufbewahrte frühere Analyse-Stände je Beleg (0 = keine Historie)",
+    )
 
 
 class AutomationSettingsRead(AutomationSettingsUpdate):

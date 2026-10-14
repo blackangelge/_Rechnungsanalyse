@@ -506,6 +506,8 @@ export interface AutomationSettings {
   worker_poll_interval_seconds: number;
   /** Ab wie vielen Minuten ein verwaister 'in_progress'-Task zurückgesetzt wird */
   worker_lock_timeout_minutes: number;
+  /** Aufbewahrte frühere Analyse-Stände je Beleg (0 = Historie aus) */
+  analysis_history_keep: number;
 }
 
 export interface AutomationSettingsUpdate {
@@ -516,12 +518,48 @@ export interface AutomationSettingsUpdate {
   worker_concurrency: number;
   worker_poll_interval_seconds: number;
   worker_lock_timeout_minutes: number;
+  analysis_history_keep: number;
 }
 
 export const automationSettingsApi = {
   get: () => apiClient.get<AutomationSettings>("/api/settings/automation/").then((r) => r.data),
   update: (data: AutomationSettingsUpdate) =>
     apiClient.put<AutomationSettings>("/api/settings/automation/", data).then((r) => r.data),
+};
+
+// ─── Analyse-Historie ────────────────────────────────────────────────────────
+
+export interface AnalysisHistoryItem {
+  id: number;
+  document_id: number;
+  created_at: string;
+  pdf_version: number | null;
+  workflow_name: string | null;
+  validation_status: string | null;
+  invoice_number: string | null;
+  supplier_name: string | null;
+  total_amount: number | string | null;
+  position_count: number;
+}
+
+export interface AnalysisHistoryDetail extends AnalysisHistoryItem {
+  extraction: Partial<InvoiceExtraction> & Record<string, unknown>;
+  order_positions: Partial<OrderPosition>[];
+  used_system_prompt?: string | null;
+  used_doc_type_prompt?: string | null;
+  used_recheck_prompt?: string | null;
+  validation?: ValidationDetails | null;
+}
+
+export const analysisHistoryApi = {
+  list: (docId: number) =>
+    apiClient.get<AnalysisHistoryItem[]>(`/api/documents/${docId}/analysis-history`).then((r) => r.data),
+  get: (docId: number, id: number) =>
+    apiClient.get<AnalysisHistoryDetail>(`/api/documents/${docId}/analysis-history/${id}`).then((r) => r.data),
+  restore: (docId: number, id: number) =>
+    apiClient.post(`/api/documents/${docId}/analysis-history/${id}/restore`).then((r) => r.data),
+  remove: (docId: number, id: number) =>
+    apiClient.delete(`/api/documents/${docId}/analysis-history/${id}`).then(() => undefined),
 };
 
 export const importSettingsApi = {

@@ -15,3 +15,4 @@ from app.models.vendor_bank_account import VendorBankAccount  # noqa: F401
 from app.models.system_prompt import SystemPrompt  # noqa: F401
 from app.models.workflow_task import WorkflowTask  # noqa: F401
 from app.models.document_token_count import DocumentTokenCount  # noqa: F401
+from app.models.analysis_history import AnalysisHistory  # noqa: F401

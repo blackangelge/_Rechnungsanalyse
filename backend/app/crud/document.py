@@ -447,6 +447,11 @@ def save_used_prompts(
     obj = db.get(Document, doc_id)
     if obj is None:
         return
+    # Bisherigen Stand (Extraktion + Prompts) aufheben, bevor er ersetzt wird.
+    # Wirft nie — die Historie darf die Analyse nicht stören (siehe crud/analysis_history.py).
+    from app.crud import analysis_history
+    analysis_history.archive_current(db, doc_id)
+    obj = db.get(Document, doc_id)
     obj.used_system_prompt = system_prompt
     obj.used_doc_type_prompt = doc_type_prompt
     obj.used_recheck_prompt = None

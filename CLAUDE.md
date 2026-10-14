@@ -177,9 +177,10 @@ alembic/
     ├── 0005_ai_port_optional.py    # ai_clients.port: NOT NULL → nullable
     ├── 0006_worker_settings.py     # automation_settings.worker_concurrency/
     │                               #   worker_poll_interval_seconds/worker_lock_timeout_minutes
-    └── 0007_plausibility.py        # order_positions.total_price, invoice_extractions.validation_status/
-                                    #   validation_details, documents.used_system_prompt/_doc_type_prompt/
-                                    #   _recheck_prompt
+    ├── 0007_plausibility.py        # order_positions.total_price, invoice_extractions.validation_status/
+    │                               #   validation_details, documents.used_system_prompt/_doc_type_prompt/
+    │                               #   _recheck_prompt
+    └── 0008_analysis_history.py    # analysis_history-Tabelle, automation_settings.analysis_history_keep (Standard 3)
 tests/                      # pytest (SQLite statt PostgreSQL, siehe tests/conftest.py — JSONB wird dort
                             #   als JSON kompiliert): `cd backend && pip install -r requirements-dev.txt && pytest`
 ```
@@ -636,6 +637,27 @@ Dokumententyp-Prompts in `documents.used_system_prompt` / `used_doc_type_prompt`
 Frontend: Spalte „Prüfung" (`ValidationBadge`), Filter „Plausibilität", `ValidationPanel` oben in der Infos-Ansicht (Korrekturen,
 Auffälligkeiten, Durchrechnung, Ergebnis der zweiten KI-Abfrage, Buttons „Prüfung erneut ausführen" / „Als geprüft bestätigen" nur bei
 „Prüfen!"), Positionstabelle mit Gesamtpreis (korrigierte Werte grün).
+
+### Analyse-Historie (`crud/analysis_history.py`, `routers/document_history.py`)
+
+Wird ein Beleg erneut analysiert, ersetzt `save_extraction` Extraktion und Positionen (frühere Fehlanalysen haben so schon gute Daten
+überschrieben). Damit nichts verloren geht, hebt die Historie den **bisherigen Stand** vorher auf.
+
+- **Zeitpunkt:** `crud.document.save_used_prompts` (läuft zu Beginn jeder Analyse — Worker und Backend) ruft
+  `analysis_history.archive_current` auf, *bevor* die `used_*`-Felder überschrieben werden, damit der Snapshot den Prompt der **alten**
+  Analyse enthält. Nicht in `save_extraction` einbauen (dort sind die Prompts schon ersetzt).
+- **Inhalt** (`analysis_history.snapshot`, JSON): `extraction` (alle Spalten inkl. `raw_response`, `validation_*`), `positions`,
+  `meta` (verwendete Prompts, Dokumententyp, Seitenzahl; weitere Felder über `register_meta_fields`). Kurzfelder (Datum, Prüfstatus,
+  Rechnungsnr., Lieferant, Brutto, Positionszahl) liegen als Spalten daneben; die Liste lädt das Snapshot-JSON nie.
+- **Nicht aufgehoben** wird: kein Stand vorhanden, Historie aus (`analysis_history_keep = 0`), KI-Fehlerantwort/leere `raw_response`,
+  und ein Stand, dessen Prüfsumme (`fingerprint`, ohne KI-Laufzeitstatistik) dem zuletzt aufgehobenen gleicht.
+- **Begrenzung:** `automation_settings.analysis_history_keep` (Standard 3, 0–20; Einstellungen → Automatisierung). Jeder Stand ≈ 10 KB.
+- **Wiederherstellen** (`restore`): eine Transaktion — aktuellen Stand aufheben, Extraktion/Positionen/Prompts aus dem Snapshot setzen,
+  wiederhergestellten Eintrag aus der Historie entfernen; Status `done`; gesperrt bei `processing` (HTTP 409).
+- **Robust:** `archive_current` fängt jede Ausnahme ab (z.B. Migration 0008 fehlt) — eine Analyse bricht nie wegen der Historie ab.
+- Endpunkte (`/api/documents/{id}/analysis-history`): `GET` (Liste), `GET /{hid}`, `POST /{hid}/restore`, `DELETE /{hid}`.
+- Frontend: `components/belege/AnalysisHistoryPanel.tsx` in der Infos-Ansicht (Liste, Feld-für-Feld-Vergleich, Wiederherstellen, Löschen).
+- Hinweis: `DocumentTokenCount` ist davon unabhängig (append-only je KI-Durchlauf) und nicht Teil des Snapshots.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

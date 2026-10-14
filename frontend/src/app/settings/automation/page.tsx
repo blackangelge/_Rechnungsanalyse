@@ -42,6 +42,7 @@ export default function AutomationSettingsPage() {
   const [workerConcurrency, setWorkerConcurrency] = useState(5);
   const [workerPollInterval, setWorkerPollInterval] = useState(20);
   const [workerLockTimeout, setWorkerLockTimeout] = useState(30);
+  const [historyKeep, setHistoryKeep] = useState(3);
 
   async function load() {
     try {
@@ -54,6 +55,7 @@ export default function AutomationSettingsPage() {
       setWorkerConcurrency(data.worker_concurrency);
       setWorkerPollInterval(data.worker_poll_interval_seconds);
       setWorkerLockTimeout(data.worker_lock_timeout_minutes);
+      setHistoryKeep(data.analysis_history_keep ?? 3);
     } catch {
       console.warn("Automatisierungseinstellungen konnten nicht geladen werden, Standardwerte werden verwendet.");
     } finally {
@@ -79,6 +81,7 @@ export default function AutomationSettingsPage() {
         worker_concurrency: workerConcurrency,
         worker_poll_interval_seconds: workerPollInterval,
         worker_lock_timeout_minutes: workerLockTimeout,
+        analysis_history_keep: historyKeep,
       });
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
@@ -246,6 +249,35 @@ export default function AutomationSettingsPage() {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Analyse-Historie */}
+        <div className="border-t pt-6">
+          <h2 className="mb-1 text-sm font-semibold text-gray-800">Analyse-Historie</h2>
+          <p className="mb-4 text-xs text-gray-500">
+            Wird ein Beleg erneut analysiert, bleibt der bisherige Stand (Daten, Positionen, verwendete Prompts)
+            erhalten und lässt sich in der Infos-Ansicht vergleichen und wiederherstellen. Ältere Stände werden
+            automatisch gelöscht. 0 schaltet die Historie aus.
+          </p>
+          <label htmlFor="history-keep" className="mb-2 block text-sm font-medium text-gray-700">
+            Aufbewahrte frühere Stände je Beleg
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              id="history-keep"
+              type="number"
+              min={0}
+              max={20}
+              step={1}
+              value={historyKeep}
+              onChange={(e) => setHistoryKeep(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+              className="input w-28"
+            />
+            <span className="text-sm text-gray-500">Stände</span>
+          </div>
+          <p className="mt-1 text-xs text-gray-400">
+            Jeder Stand enthält u. a. die KI-Rohantwort (ca. 10 KB). Bei sehr vielen Belegen den Wert niedrig halten.
+          </p>
         </div>
 
         <button
