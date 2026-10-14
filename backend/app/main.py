@@ -248,6 +248,7 @@ from app.routers import settings as settings_router
 from app.routers import imports as imports_router  # 'imports' ist ein Python-Keyword
 from app.routers import tasks
 from app.routers import positions as positions_router
+from app.routers import validation_backfill as validation_backfill_router
 from app.routers import export_settings as export_settings_router
 
 # Anmeldung selbst (Login/Logout/me) ist offen bzw. prüft sich selbst
@@ -268,6 +269,7 @@ app.include_router(vendors.router, dependencies=_protected)                     
 app.include_router(workflows.router, dependencies=_protected)                    # /api/workflows/*
 app.include_router(batch.router, dependencies=_protected)                        # /api/batch/*
 app.include_router(tasks.router, dependencies=_protected)                        # /api/tasks/*
+app.include_router(validation_backfill_router.router, dependencies=_protected)  # /api/validation-backfill
 app.include_router(positions_router.router, dependencies=_protected)             # /api/positions/* (Artikelsuche)
 app.include_router(export_settings_router.router, dependencies=_protected)       # /api/settings/export
 

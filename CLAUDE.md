@@ -643,6 +643,21 @@ Frontend: Spalte „Prüfung" (`ValidationBadge`), Filter „Plausibilität", `V
 Auffälligkeiten, Durchrechnung, Ergebnis der zweiten KI-Abfrage, Buttons „Prüfung erneut ausführen" / „Als geprüft bestätigen" nur bei
 „Prüfen!"), Positionstabelle mit Gesamtpreis (korrigierte Werte grün).
 
+### Nachrüstung der Prüfung für den Altbestand (`services/validation_backfill.py`, `routers/validation_backfill.py`)
+
+Belege aus der Zeit vor der Plausibilitätsprüfung haben keinen `validation_status` und keinen `order_positions.total_price`. Die Nachrüstung holt beides **ohne KI**
+nach (125.000 Belege à 300/h KI-Analyse wären > 2 Wochen; die Nachrüstung schafft ≈ 600 Belege/s):
+
+- Fehlender Positions-Gesamtpreis ← `raw_response → positionen[i].gesamtpreis` (i = `position_index`); fehlendes Netto/Steuerbetrag ← `zahlungsinformationen`
+  (nur `NULL`-Felder werden ergänzt). Danach `validate_invoice` (inkl. automatischer Korrektur eindeutiger Fehler, abschaltbar) und Speichern über
+  `crud.document.update_validation(..., commit=False)`; `validation_details.backfill = true`, `method = "rules"`. **Keine zweite KI-Abfrage** — „Prüfen!"-Belege gezielt neu analysieren.
+- Es werden nur Belege mit Extraktion, Status `done`, nicht gelöscht und **ohne Prüfstatus** bearbeitet; KI-Fehlerantworten/ungültiges JSON bleiben unberührt (`skipped_no_data`).
+  Ein unterbrochener oder abgebrochener Lauf wird deshalb einfach neu gestartet.
+- Hintergrund-Thread in Blöcken à 200 (Keyset über die Extraktions-ID), Fortschritt im Speicher (ein Lauf gleichzeitig, sonst HTTP 409), Commit je Block,
+  ein defekter Beleg stoppt den Lauf nicht (Fehlerzähler + erste 20 Meldungen). `dry_run` rechnet alles, verwirft aber die Änderungen.
+- Endpunkte: `GET /api/validation-backfill` (Stand + Anzahl offener Belege), `POST` `{dry_run, auto_correct, batch_ids?}`, `POST /cancel`.
+- Frontend: Karte „Prüfung für den Altbestand nachrüsten" in Einstellungen → Automatisierung (Vorschau, Start, Fortschrittsbalken, Ergebnis je Status).
+
 ### Analyse-Historie (`crud/analysis_history.py`, `routers/document_history.py`)
 
 Wird ein Beleg erneut analysiert, ersetzt `save_extraction` Extraktion und Positionen (frühere Fehlanalysen haben so schon gute Daten
