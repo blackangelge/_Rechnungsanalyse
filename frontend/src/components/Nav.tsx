@@ -20,6 +20,7 @@ const SETTINGS_LINKS = [
   { href: "/settings/ai",         label: "KI-Einstellungen" },
   { href: "/settings/ai-test",    label: "KI testen" },
   { href: "/settings/prompts",    label: "Systemprompts" },
+  { href: "/settings/workflows",  label: "Workflows" },
   { href: "/settings/image",      label: "Bildeinstellungen" },
   { href: "/settings/export",     label: "Export-Einstellungen" },
   { href: "/settings/automation", label: "Automatisierung" },

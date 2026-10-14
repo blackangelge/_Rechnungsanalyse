@@ -455,6 +455,11 @@ def save_used_prompts(
     obj.used_system_prompt = system_prompt
     obj.used_doc_type_prompt = doc_type_prompt
     obj.used_recheck_prompt = None
+    # Workflow-Angaben der vorherigen Analyse zurücksetzen (neue Analyse = neuer Stand)
+    obj.used_workflow_id = None
+    obj.used_workflow_name = None
+    obj.used_workflow_graph = None
+    obj.workflow_trace = None
     db.commit()
 
 
@@ -464,4 +469,40 @@ def save_recheck_prompt(db: Session, doc_id: int, recheck_prompt: str | None) ->
     if obj is None:
         return
     obj.used_recheck_prompt = recheck_prompt
+    db.commit()
+
+
+def set_used_prompt(
+    db: Session,
+    doc_id: int,
+    system_prompt: str | None = None,
+    doc_type_prompt: str | None = None,
+) -> None:
+    """Setzt nur die übergebenen Prompts (None = unverändert) — für Workflow-Knoten."""
+    obj = db.get(Document, doc_id)
+    if obj is None:
+        return
+    if system_prompt is not None:
+        obj.used_system_prompt = system_prompt
+    if doc_type_prompt is not None:
+        obj.used_doc_type_prompt = doc_type_prompt
+    db.commit()
+
+
+def save_workflow_run(
+    db: Session,
+    doc_id: int,
+    workflow_id: int | None,
+    workflow_name: str,
+    graph: dict,
+    trace: list[dict],
+) -> None:
+    """Speichert Workflow-Snapshot und Ablaufprotokoll der Analyse am Dokument."""
+    obj = db.get(Document, doc_id)
+    if obj is None:
+        return
+    obj.used_workflow_id = workflow_id
+    obj.used_workflow_name = workflow_name
+    obj.used_workflow_graph = json.dumps(graph, ensure_ascii=False)
+    obj.workflow_trace = json.dumps(trace, ensure_ascii=False)
     db.commit()

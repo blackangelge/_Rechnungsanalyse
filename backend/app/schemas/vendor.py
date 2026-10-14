@@ -35,6 +35,7 @@ class VendorRead(BaseModel):
     hrb_number: str | None = None      # Handelsregisternummer
     tax_number: str | None = None      # Steuernummer
     vat_id: str | None = None          # USt-IdNr.
+    workflow_id: int | None = None     # Eigener Analyse-Workflow (None = Standard)
     bank_accounts: list[VendorBankAccountRead] = []  # Alle Bankverbindungen
 
     model_config = ConfigDict(from_attributes=True)

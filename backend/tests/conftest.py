@@ -33,6 +33,7 @@ def sqlite_session_factory(monkeypatch):
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     monkeypatch.setattr("app.routers.documents.SessionLocal", factory)
+    monkeypatch.setattr("app.services.workflow_runner.SessionLocal", factory)
     return factory
 
 

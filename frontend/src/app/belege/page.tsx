@@ -33,6 +33,9 @@ import {
   DOCUMENT_TYPES,
   ImportBatch,
   ValidationStatus,
+  WorkflowListItem,
+  WorkflowTraceEntry,
+  workflowsApi,
   documentsApi,
   extractApiError,
   getDocTypeName,
@@ -296,6 +299,10 @@ export default function BelegePage() {
   const infosContainerRef = useRef<HTMLDivElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
+  // Analyse-Workflow (leer = automatisch: Lieferant → Standard → klassisch)
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
+
   // PDF-Bearbeitung (Modal „Seiten") + Sammel-Kürzen
   const [editDoc, setEditDoc] = useState<{ id: number; filename: string } | null>(null);
   const [trimMaxPages, setTrimMaxPages] = useState("1");
@@ -329,6 +336,12 @@ export default function BelegePage() {
       setBatches(allBatches);
     } catch (err) {
       console.error("Fehler beim Laden der Imports:", err);
+    }
+    // Workflows sind optional — ohne Workflows bleibt die Auswahl leer ("automatisch")
+    try {
+      setWorkflows(await workflowsApi.list());
+    } catch {
+      setWorkflows([]);
     }
   }, []);
 
@@ -425,7 +438,10 @@ export default function BelegePage() {
     setError(null);
     setSuccessMsg(null);
     try {
-      const result = await documentsApi.enqueue(Array.from(selectedIds));
+      const result = await documentsApi.enqueue(
+        Array.from(selectedIds),
+        selectedWorkflowId ? parseInt(selectedWorkflowId, 10) : undefined,
+      );
       setSuccessMsg(result.message);
       setSelectedIds(new Set());
       await loadDocuments(activeFilters);
@@ -717,8 +733,19 @@ export default function BelegePage() {
                 Die Dokumente werden in die Worker-Warteschlange gestellt und automatisch verarbeitet.
               </p>
             )}
+            <div className="ml-auto flex items-center gap-2">
+              <label className={`text-xs font-medium ${selectedIds.size > 0 ? "text-blue-700" : "text-gray-500"}`}>Workflow</label>
+              <select value={selectedWorkflowId} onChange={(e) => setSelectedWorkflowId(e.target.value)}
+                title="Automatisch: Workflow des Lieferanten, sonst Standard-Workflow, sonst klassischer Ablauf"
+                className="rounded border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
+                <option value="">Automatisch</option>
+                {workflows.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}{w.is_default ? " (Standard)" : ""}</option>
+                ))}
+              </select>
+            </div>
             <button onClick={startAnalysis} disabled={analyzing || selectedIds.size === 0}
-              className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-auto">
+              className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               {analyzing ? "Wird eingereiht…" : "KI-Analyse starten"}
             </button>
           </div>
@@ -1231,6 +1258,7 @@ export default function BelegePage() {
                       InvoiceExtraction, z.B. waiting_capacity — dort steht der Grund als
                       Klartext, nicht als KI-JSON-Antwort. */}
                   <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response ?? null} />
+                  <UsedWorkflow doc={viewedDoc} />
                   <UsedPrompts doc={viewedDoc} />
                 </>
               )}
@@ -1700,6 +1728,43 @@ function UsedPrompts({ doc }: { doc: DocumentDetail }) {
           </pre>
         </details>
       ))}
+    </div>
+  );
+}
+
+// ─── Verwendeter Workflow + Ablaufprotokoll (KI-Modal) ────────────────────────
+
+function UsedWorkflow({ doc }: { doc: DocumentDetail }) {
+  const run: WorkflowTraceEntry[] = doc.workflow_run ?? [];
+  if (!doc.used_workflow_name) return null;
+  return (
+    <div className="mt-4">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        Verwendeter Workflow: {doc.used_workflow_name}
+      </h3>
+      <ol className="space-y-1 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
+        {run.map((t, i) => (
+          <li key={`${t.node_id}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
+            <span className={t.status === "error" ? "text-red-600" : "text-green-600"}>{t.status === "error" ? "✕" : "✓"}</span>
+            <span className="font-medium text-gray-800">{t.label}</span>
+            {t.branch && (
+              <span className={`rounded px-1.5 text-xs font-semibold ${t.branch === "true" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                {t.branch === "true" ? "Ja" : "Nein"}
+              </span>
+            )}
+            <span className="text-xs text-gray-400">{t.duration_s.toLocaleString("de-DE")} s</span>
+            {t.detail && <span className={`text-xs ${t.status === "error" ? "text-red-600" : "text-gray-500"}`}>— {t.detail}</span>}
+          </li>
+        ))}
+      </ol>
+      {doc.used_workflow && (
+        <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-gray-700">Workflow-Definition (Snapshot der Analyse)</summary>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-gray-200 p-3 text-xs text-gray-700">
+            {JSON.stringify(doc.used_workflow, null, 2)}
+          </pre>
+        </details>
+      )}
     </div>
   );
 }

@@ -234,6 +234,8 @@ class AIDispatcherClient:
         # damit nachträgliche Prompt-Bearbeitungen auch bei bereits wartenden/
         # erneut versuchten Tasks berücksichtigt werden.
         system_prompt_id: int | None = payload.get("system_prompt_id")
+        # Optional explizit gewählter Analyse-Workflow (sonst automatische Auswahl in _analyze_single)
+        workflow_id: int | None = payload.get("workflow_id")
 
         # Dokument-Status auf "processing" setzen damit das Frontend den Spinner zeigt.
         # Läuft in einem Thread damit der Event-Loop nicht blockiert wird.
@@ -252,6 +254,7 @@ class AIDispatcherClient:
                 document_id,
                 server.id,
                 system_prompt_id,
+                workflow_id,
             )
         except Exception as exc:
             log.error(

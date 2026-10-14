@@ -44,11 +44,19 @@ _META_FIELDS: list[str] = [
 ]
 
 
+# Workflow-Angaben gehören zum Stand (welcher Workflow hat dieses Ergebnis erzeugt?)
+def _register_workflow_fields() -> None:
+    register_meta_fields("used_workflow_id", "used_workflow_name", "used_workflow_graph", "workflow_trace")
+
+
 def register_meta_fields(*names: str) -> None:
     """Nimmt weitere Dokument-Felder in den Snapshot auf (z.B. Workflow-Angaben)."""
     for name in names:
         if name not in _META_FIELDS:
             _META_FIELDS.append(name)
+
+
+_register_workflow_fields()
 
 
 class HistoryError(Exception):

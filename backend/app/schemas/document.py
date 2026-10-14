@@ -124,6 +124,12 @@ class DocumentDetail(DocumentRead):
     used_doc_type_prompt: str | None = None
     used_recheck_prompt: str | None = None
 
+    # Verwendeter Workflow (Name, Graph-Snapshot) und Ablaufprotokoll der Knoten
+    used_workflow_id: int | None = None
+    used_workflow_name: str | None = None
+    used_workflow: dict | None = None
+    workflow_run: list[dict] | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
