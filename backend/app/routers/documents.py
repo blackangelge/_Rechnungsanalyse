@@ -390,6 +390,7 @@ def _document_filters(
     page_max: Optional[int] = None,
     batch_ids: Optional[list[int]] = Query(default=None),
     include_deleted: bool = False,
+    include_hidden: bool = False,
     has_extraction: Optional[bool] = None,
     supplier_name: Optional[str] = None,
     doc_id: Optional[int] = None,
@@ -399,7 +400,7 @@ def _document_filters(
     """Gemeinsame Filter-Parameter für Liste, Anzahl und ID-Liste."""
     return dict(
         company=company, year=year, status=status, total_min=total_min, total_max=total_max,
-        page_min=page_min, page_max=page_max, batch_ids=batch_ids, include_deleted=include_deleted,
+        page_min=page_min, page_max=page_max, batch_ids=batch_ids, include_deleted=include_deleted, include_hidden=include_hidden,
         has_extraction=has_extraction, supplier_name_filter=supplier_name, doc_id=doc_id,
         document_type_ids=document_type_ids, validation_statuses=validation_status,
     )
@@ -442,9 +443,9 @@ def list_document_ids(filters: dict = Depends(_document_filters), db: Session = 
 
 
 @router.get("/filter-options")
-def document_filter_options(db: Session = Depends(get_db)):
-    """Jahre, Firmen und Lieferantennamen für die Filter-Dropdowns."""
-    return crud.document.get_filter_options(db)
+def document_filter_options(include_hidden: bool = False, db: Session = Depends(get_db)):
+    """Jahre, Firmen und Lieferantennamen für die Filter-Dropdowns (ausgeblendete Imports nur auf Wunsch)."""
+    return crud.document.get_filter_options(db, include_hidden=include_hidden)
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)

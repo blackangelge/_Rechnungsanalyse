@@ -164,7 +164,7 @@ def get_by_id_with_details(db: Session, doc_id: int) -> Document | None:
 _FILTER_KEYS = (
     "company", "year", "status", "total_min", "total_max", "page_min", "page_max", "batch_ids",
     "include_deleted", "has_extraction", "supplier_name_filter", "doc_id", "document_type_ids",
-    "validation_statuses",
+    "validation_statuses", "include_hidden",
 )
 
 
@@ -187,6 +187,10 @@ def _filtered_query(db: Session, **f):
 
     if g("batch_ids"):
         query = query.filter(Document.batch_id.in_(g("batch_ids")))
+    elif not g("include_hidden") and g("doc_id") is None:
+        # Belege ausgeblendeter Imports nur auf Wunsch (Ausnahmen: ausdrücklich gewählter Import, Beleg-ID-Suche)
+        query = query.filter(~Document.batch_id.in_(
+            db.query(ImportBatch.id).filter(ImportBatch.hidden_at.isnot(None))))
 
     needs_join = (
         g("total_min") is not None
@@ -276,7 +280,7 @@ def get_ids_filtered(db: Session, **filters) -> list[int]:
     return [r[0] for r in rows]
 
 
-def get_filter_options(db: Session) -> dict:
+def get_filter_options(db: Session, include_hidden: bool = False) -> dict:
     """
     Werte für die Filter-Dropdowns (früher aus den geladenen Belegen abgeleitet — mit Paginierung
     nicht mehr möglich): Jahre und Firmen der Imports mit nicht gelöschten Belegen, Lieferantennamen.
@@ -284,6 +288,9 @@ def get_filter_options(db: Session) -> dict:
     from app.models.vendor import Vendor
 
     batch_ids = db.query(Document.batch_id).filter(Document.soft_deleted == False).distinct()  # noqa: E712
+    if not include_hidden:
+        batch_ids = batch_ids.filter(~Document.batch_id.in_(
+            db.query(ImportBatch.id).filter(ImportBatch.hidden_at.isnot(None))))
     years = [r[0] for r in db.query(ImportBatch.year).filter(ImportBatch.id.in_(batch_ids))
              .distinct().order_by(ImportBatch.year.desc()).all()]
     companies = [r[0] for r in db.query(ImportBatch.company_name).filter(ImportBatch.id.in_(batch_ids))

@@ -14,7 +14,7 @@ import {
 const EMPTY_FORM = {
   q: "", article_number: "", supplier_name: "", company: "", year: "", batch_id: "", unit: "",
   invoice_number: "", unit_price_min: "", unit_price_max: "", total_price_min: "", total_price_max: "",
-  quantity_min: "", quantity_max: "", date_from: "", date_to: "", document_id: "",
+  quantity_min: "", quantity_max: "", date_from: "", date_to: "", document_id: "", include_hidden: "",
 };
 type Form = typeof EMPTY_FORM;
 
@@ -29,6 +29,7 @@ function toFilter(form: Form): PositionFilter {
     const raw = form[k].trim();
     if (!raw) return;
     if (k === "batch_id") f.batch_ids = [Number(raw)];
+    else if (k === "include_hidden") f.include_hidden = true;
     else if (NUMERIC.includes(k)) {
       const n = Number(raw.replace(",", "."));
       if (Number.isFinite(n)) f[k] = n;
@@ -141,8 +142,8 @@ export default function ArtikelPage() {
     if (Object.values(initial).some(Boolean)) setShowMore(true);
     load(initial, 0, 50, undefined, "desc", true);
     Promise.all([
-      importsApi.list().catch(() => [] as ImportBatch[]),
-      documentsApi.filterOptions().catch(() => ({ years: [] as number[], companies: [] as string[], suppliers: [] as string[] })),
+      importsApi.list({ include_hidden: true }).catch(() => [] as ImportBatch[]),
+      documentsApi.filterOptions(true).catch(() => ({ years: [] as number[], companies: [] as string[], suppliers: [] as string[] })),
       positionsApi.filterOptions().catch(() => ({ units: [] as { unit: string; count: number }[] })),
     ]).then(([b, o, u]) => { setBatches(b); setSuppliers(o.suppliers ?? []); setYears(o.years); setUnits(u.units); });
   }, [load]);
@@ -244,7 +245,7 @@ export default function ArtikelPage() {
               <label className="text-xs font-medium text-gray-600">Import</label>
               <select value={form.batch_id} onChange={set("batch_id")} className={`${field} w-48`}>
                 <option value="">Alle Imports</option>
-                {batches.map((b) => <option key={b.id} value={b.id}>#{b.id} {b.company_name} {b.year}</option>)}
+                {batches.map((b) => <option key={b.id} value={b.id}>#{b.id} {b.company_name} {b.year}{b.hidden_at ? " (ausgeblendet)" : ""}</option>)}
               </select>
             </div>
             {([
@@ -269,6 +270,11 @@ export default function ArtikelPage() {
               <label className="text-xs font-medium text-gray-600">Beleg-ID</label>
               <input type="number" value={form.document_id} onChange={set("document_id")} onKeyDown={onEnter} className={`${field} w-28`} />
             </div>
+            <label className="mb-1.5 flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+              <input type="checkbox" checked={form.include_hidden === "1"} className="rounded border-gray-300 text-blue-600"
+                onChange={(e) => setForm((f) => ({ ...f, include_hidden: e.target.checked ? "1" : "" }))} />
+              Ausgeblendete Imports einbeziehen
+            </label>
           </div>
         )}
       </div>

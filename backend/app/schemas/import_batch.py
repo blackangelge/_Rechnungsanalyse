@@ -8,7 +8,7 @@ ImportBatchWithDocuments — Antwort mit eingebetteter Dokumentliste (für Detai
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ImportBatchCreate(BaseModel):
@@ -46,6 +46,13 @@ class ImportBatchAutomationUpdate(BaseModel):
     auto_export: bool | None = None
 
 
+class ImportVisibilityUpdate(BaseModel):
+    """Imports aus- bzw. einblenden (mehrere auf einmal)."""
+
+    ids: list[int] = Field(min_length=1)
+    hidden: bool
+
+
 class ImportBatchRead(BaseModel):
     """Antwort-Schema für einen Import-Batch (ohne eingebettete Dokumente)."""
 
@@ -64,6 +71,7 @@ class ImportBatchRead(BaseModel):
     finished_at: datetime | None
     created_at: datetime
     total_documents: int = 0   # Anzahl der Dokumente in diesem Batch
+    hidden_at: datetime | None = None   # gesetzt = ausgeblendet
 
     model_config = ConfigDict(from_attributes=True)
 

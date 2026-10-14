@@ -23,7 +23,7 @@ FILTER_KEYS = (
     "q", "article_number", "supplier_name", "company", "year", "batch_ids",
     "document_id", "invoice_number", "unit", "unit_price_min", "unit_price_max",
     "total_price_min", "total_price_max", "quantity_min", "quantity_max",
-    "date_from", "date_to", "validation_statuses", "include_deleted",
+    "date_from", "date_to", "validation_statuses", "include_hidden", "include_deleted",
 )
 
 # Sortierbare Spalten (API-Name → SQL-Spalte)
@@ -64,6 +64,10 @@ def _filtered(db: Session, entities: list, **f) -> Query:
         query = query.filter(Document.soft_deleted == False)  # noqa: E712
     if g("batch_ids"):
         query = query.filter(Document.batch_id.in_(g("batch_ids")))
+    elif not g("include_hidden") and g("document_id") is None:
+        # wie in der Belegliste: Artikel ausgeblendeter Imports nur auf Wunsch (Ausnahmen: gewählter Import, Beleg-ID)
+        query = query.filter(~Document.batch_id.in_(
+            db.query(ImportBatch.id).filter(ImportBatch.hidden_at.isnot(None))))
 
     # Freitext: alle Wörter müssen in Bezeichnung/Beschreibung ODER Artikelnummer vorkommen (UND-verknüpft)
     for term in (g("q") or "").split():

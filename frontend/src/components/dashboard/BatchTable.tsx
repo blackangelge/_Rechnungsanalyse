@@ -16,6 +16,12 @@ import { ImportBatch, importsApi } from "@/lib/api";
 interface Props {
   batches: ImportBatch[];
   onDeleted: (id: number) => void;
+  /** Mehrfachauswahl (z.B. für gemeinsamen Excel-Export oder Ausblenden) */
+  selectedIds: Set<number>;
+  onToggleSelect: (id: number) => void;
+  onToggleSelectAll: () => void;
+  /** Einzelnen Import aus-/einblenden */
+  onSetHidden: (id: number, hidden: boolean) => void;
 }
 
 /** Status-Badge Styles */
@@ -26,7 +32,11 @@ const STATUS_STYLES: Record<string, string> = {
   error: "bg-red-100 text-red-700",
 };
 
-export default function BatchTable({ batches, onDeleted }: Props) {
+export default function BatchTable({
+  batches, onDeleted, selectedIds, onToggleSelect, onToggleSelectAll, onSetHidden,
+}: Props) {
+  const allSelected = batches.length > 0 && batches.every((b) => selectedIds.has(b.id));
+  const someSelected = !allSelected && batches.some((b) => selectedIds.has(b.id));
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   async function handleDelete(id: number) {
@@ -53,6 +63,14 @@ export default function BatchTable({ batches, onDeleted }: Props) {
       <table className="w-full text-sm">
         <thead className="border-b bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
           <tr>
+            <th className="w-10 px-3 py-3">
+              <input
+                type="checkbox" checked={allSelected} aria-label="Alle Imports auswählen"
+                ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                onChange={onToggleSelectAll}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+            </th>
             <th className="px-4 py-3">ID</th>
             <th className="px-4 py-3">Firma</th>
             <th className="px-4 py-3">Jahr</th>
@@ -72,7 +90,24 @@ export default function BatchTable({ batches, onDeleted }: Props) {
             const percent   = isDone ? 100 : 0;
 
             return (
-              <tr key={batch.id} className="hover:bg-gray-50">
+              <tr
+                key={batch.id}
+                data-testid={`batch-row-${batch.id}`}
+                className={[
+                  selectedIds.has(batch.id) ? "bg-blue-50" : "hover:bg-gray-50",
+                  batch.hidden_at ? "opacity-60" : "",
+                ].join(" ")}
+              >
+                {/* Auswahl */}
+                <td className="px-3 py-3">
+                  <input
+                    type="checkbox" checked={selectedIds.has(batch.id)}
+                    onChange={() => onToggleSelect(batch.id)}
+                    aria-label={`Import ${batch.company_name} ${batch.year} auswählen`}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </td>
+
                 {/* ID */}
                 <td className="px-4 py-3 font-mono text-xs text-gray-400">
                   #{batch.id}
@@ -81,6 +116,11 @@ export default function BatchTable({ batches, onDeleted }: Props) {
                 {/* Firma */}
                 <td className="px-4 py-3 font-medium text-gray-800">
                   {batch.company_name}
+                  {batch.hidden_at && (
+                    <span className="ml-2 rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600">
+                      ausgeblendet
+                    </span>
+                  )}
                 </td>
 
                 {/* Jahr */}
@@ -139,6 +179,21 @@ export default function BatchTable({ batches, onDeleted }: Props) {
                     >
                       Details →
                     </Link>
+                    <a
+                      href={importsApi.exportUrl([batch.id])}
+                      download
+                      title="Als Excel-Datei herunterladen"
+                      className="rounded px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                    >
+                      ↓ Excel
+                    </a>
+                    <button
+                      onClick={() => onSetHidden(batch.id, !batch.hidden_at)}
+                      title={batch.hidden_at ? "Wieder einblenden" : "Ausblenden (nichts wird gelöscht)"}
+                      className="rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"
+                    >
+                      {batch.hidden_at ? "Einblenden" : "Ausblenden"}
+                    </button>
                     <button
                       onClick={() => handleDelete(batch.id)}
                       disabled={deletingId === batch.id}

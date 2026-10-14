@@ -189,6 +189,8 @@ export interface ImportBatch {
   finished_at: string | null;
   created_at: string;
   total_documents?: number;
+  /** gesetzt = Import ist ausgeblendet */
+  hidden_at?: string | null;
 }
 
 export interface ImportBatchWithDocuments extends ImportBatch {
@@ -223,8 +225,17 @@ export interface BatchQueueStatus {
 }
 
 export const importsApi = {
-  list: (params?: { company_name?: string; year?: number }) =>
+  list: (params?: { company_name?: string; year?: number; include_hidden?: boolean }) =>
     apiClient.get<ImportBatch[]>("/api/imports/", { params }).then((r) => r.data),
+
+  /** Imports aus- bzw. einblenden (es wird nichts gelöscht) */
+  setHidden: (ids: number[], hidden: boolean) =>
+    apiClient
+      .post<{ updated: number; hidden: boolean; ids: number[] }>("/api/imports/visibility", { ids, hidden })
+      .then((r) => r.data),
+
+  /** Download-URL für den Excel-Export von einem oder mehreren Imports (eine gemeinsame Datei) */
+  exportUrl: (ids: number[]) => `/api/imports/export/?${ids.map((i) => `ids=${i}`).join("&")}`,
   get: (id: number) =>
     apiClient.get<ImportBatchWithDocuments>(`/api/imports/${id}`).then((r) => r.data),
   create: (data: ImportBatchCreate) =>
@@ -467,6 +478,7 @@ export interface DocumentFilter {
   page_max?: number;
   batch_ids?: number[];
   include_deleted?: boolean;
+  include_hidden?: boolean;
   has_extraction?: boolean;
   supplier_name?: string;
   doc_id?: number;
@@ -500,9 +512,11 @@ export const documentsApi = {
   ids: (filters?: DocumentFilter) =>
     apiClient.get<number[]>("/api/documents/ids", { params: filters }).then((r) => r.data),
   /** Werte für die Filter-Dropdowns, unabhängig von der geladenen Seite */
-  filterOptions: () =>
+  filterOptions: (includeHidden = false) =>
     apiClient
-      .get<{ years: number[]; companies: string[]; suppliers: string[] }>("/api/documents/filter-options")
+      .get<{ years: number[]; companies: string[]; suppliers: string[] }>("/api/documents/filter-options", {
+        params: { include_hidden: includeHidden },
+      })
       .then((r) => r.data),
   get: (id: number) =>
     apiClient.get<DocumentDetail>(`/api/documents/${id}`).then((r) => r.data),
@@ -1091,6 +1105,7 @@ export interface PositionFilter {
   date_from?: string;
   date_to?: string;
   validation_status?: ValidationStatus[];
+  include_hidden?: boolean;
   include_deleted?: boolean;
 }
 
