@@ -6,3 +6,4 @@ from app.crud import image_settings  # noqa: F401
 from app.crud import import_batch  # noqa: F401
 from app.crud import system_prompt  # noqa: F401
 from app.crud import vendor  # noqa: F401
+from app.crud import pdf_settings  # noqa: F401

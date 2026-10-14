@@ -270,6 +270,9 @@ export interface DocumentItem {
    *  ausreichend große KI-Konfiguration verfügbar ist (siehe worker.py) */
   status: "pending" | "processing" | "done" | "error" | "waiting_capacity";
   soft_deleted: boolean;
+  /** PDF-Version (aktuelle) und Version, auf der die letzte KI-Analyse lief */
+  pdf_version?: number;
+  analyzed_pdf_version?: number | null;
   created_at: string;
   /** Kurzfelder aus der Extraktion */
   total_amount?: number | null;
@@ -278,6 +281,34 @@ export interface DocumentItem {
   has_extraction?: boolean;
   /** Ergebnis der Plausibilitätsprüfung (nur bei Eingangsrechnungen) */
   validation_status?: ValidationStatus | null;
+}
+
+/** Eine gespeicherte PDF-Version (Original = 1, danach manuell/auto/restore) */
+export interface DocumentVersion {
+  /** null = Original, das noch nie bearbeitet wurde (noch nicht gespeichert) */
+  id: number | null;
+  version_number: number;
+  page_count: number;
+  file_size_bytes: number;
+  source: "original" | "manual" | "auto" | "restore";
+  description: string | null;
+  parent_version: number | null;
+  /** Entfernte Seiten (1-basiert, bezogen auf die Elternversion) */
+  removed_pages: number[] | null;
+  created_at: string | null;
+  is_current: boolean;
+}
+
+export interface AutoTrimResult {
+  trimmed: number[];
+  unchanged: number[];
+  errors: Record<string, string>;
+}
+
+export interface PdfSettings {
+  id: number;
+  auto_trim_enabled: boolean;
+  auto_trim_max_pages: number;
 }
 
 /** ok = plausibel · corrected = automatisch korrigiert · ai_corrected = durch zweite
@@ -458,6 +489,34 @@ export const documentsApi = {
     apiClient.post<DocumentDetail>(`/api/documents/${id}/restore`).then((r) => r.data),
   analyze: (data: AnalyzeRequest) =>
     apiClient.post<{ started: number; message: string }>("/api/documents/analyze", data).then((r) => r.data),
+  /** Versionsverlauf der PDF (Original + Bearbeitungen) */
+  versions: (id: number) =>
+    apiClient.get<DocumentVersion[]>(`/api/documents/${id}/versions`).then((r) => r.data),
+
+  /** URL zur PDF einer bestimmten Version */
+  versionPreviewUrl: (id: number, version: number) =>
+    `${BASE}/api/documents/${id}/versions/${version}/preview`,
+
+  /** URL zum Vorschaubild einer Seite (1-basiert) einer Version */
+  pageThumbnailUrl: (id: number, page: number, version: number, width = 240) =>
+    `${BASE}/api/documents/${id}/pages/${page}/thumbnail?version=${version}&width=${width}`,
+
+  /** Seiten entfernen ODER nur bestimmte behalten → neue Version */
+  editPages: (id: number, data: { remove_pages?: number[]; keep_pages?: number[]; note?: string }) =>
+    apiClient.post<DocumentVersion>(`/api/documents/${id}/pages/remove`, data).then((r) => r.data),
+
+  /** Frühere Version als neue aktuelle Version wiederherstellen */
+  restoreVersion: (id: number, version: number) =>
+    apiClient
+      .post<DocumentVersion>(`/api/documents/${id}/versions/${version}/restore`)
+      .then((r) => r.data),
+
+  /** Mehrere Dokumente auf die ersten N Seiten kürzen */
+  autoTrim: (document_ids: number[], max_pages: number) =>
+    apiClient
+      .post<AutoTrimResult>("/api/documents/auto-trim", { document_ids, max_pages })
+      .then((r) => r.data),
+
   /** Plausibilitätsprüfung auf den gespeicherten Daten erneut ausführen */
   revalidate: (id: number) =>
     apiClient.post<DocumentDetail>(`/api/documents/${id}/validate`).then((r) => r.data),
@@ -560,6 +619,12 @@ export const analysisHistoryApi = {
     apiClient.post(`/api/documents/${docId}/analysis-history/${id}/restore`).then((r) => r.data),
   remove: (docId: number, id: number) =>
     apiClient.delete(`/api/documents/${docId}/analysis-history/${id}`).then(() => undefined),
+};
+
+export const pdfSettingsApi = {
+  get: () => apiClient.get<PdfSettings>("/api/settings/pdf").then((r) => r.data),
+  update: (data: { auto_trim_enabled: boolean; auto_trim_max_pages: number }) =>
+    apiClient.put<PdfSettings>("/api/settings/pdf", data).then((r) => r.data),
 };
 
 export const importSettingsApi = {

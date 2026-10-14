@@ -141,6 +141,7 @@ app/
     │                       # api_url wird über app.services.ai_url.build_ai_url() gebaut
     ├── plausibility_service.py  # Plausibilitätsprüfung (reine Rechenlogik, keine DB/Netzwerk) — siehe
     │                       #   Abschnitt „Plausibilitätsprüfung"
+    ├── pdf_edit_service.py  # PDF-Bearbeitung mit Versionierung (Seiten entfernen, Wiederherstellen, Auto-Kürzen)
     ├── ai_url.py            # build_ai_url(ip_address, port) — EINZIGE korrekte Stelle für die
     │                       #   KI-Endpunkt-URL-Bildung, genutzt von ai_service.py, ai_test_service.py
     │                       #   UND worker/worker.py (dort als build_server_url re-exportiert)
@@ -180,7 +181,8 @@ alembic/
     ├── 0007_plausibility.py        # order_positions.total_price, invoice_extractions.validation_status/
     │                               #   validation_details, documents.used_system_prompt/_doc_type_prompt/
     │                               #   _recheck_prompt
-    └── 0008_analysis_history.py    # analysis_history-Tabelle, automation_settings.analysis_history_keep (Standard 3)
+    ├── 0008_analysis_history.py    # analysis_history-Tabelle, automation_settings.analysis_history_keep (Standard 3)
+    └── 0009_pdf_versions.py        # document_versions, pdf_settings (Singleton), documents.pdf_version/analyzed_pdf_version
 tests/                      # pytest (SQLite statt PostgreSQL, siehe tests/conftest.py — JSONB wird dort
                             #   als JSON kompiliert): `cd backend && pip install -r requirements-dev.txt && pytest`
 ```
@@ -658,6 +660,32 @@ Wird ein Beleg erneut analysiert, ersetzt `save_extraction` Extraktion und Posit
 - Endpunkte (`/api/documents/{id}/analysis-history`): `GET` (Liste), `GET /{hid}`, `POST /{hid}/restore`, `DELETE /{hid}`.
 - Frontend: `components/belege/AnalysisHistoryPanel.tsx` in der Infos-Ansicht (Liste, Feld-für-Feld-Vergleich, Wiederherstellen, Löschen).
 - Hinweis: `DocumentTokenCount` ist davon unabhängig (append-only je KI-Durchlauf) und nicht Teil des Snapshots.
+
+### PDF-Bearbeitung & Versionen (`services/pdf_edit_service.py`, `routers/document_pdf.py`)
+
+Seiten einer PDF können entfernt werden — **manuell** (Modal „Seiten" auf der Belege-Seite mit Vorschaubildern) und **automatisch** (nur die
+ersten N Seiten behalten). Jede Änderung erzeugt eine **neue, unveränderliche Version**; das Original bleibt immer erhalten.
+
+- Dateien: `{batch.storage_folder_path}/versions/{doc_id}/v{n}.pdf`. Version 1 (Original) wird beim **ersten Bearbeiten** angelegt (vorher
+  gibt `GET /versions` ein virtuelles Original mit `id: null` zurück).
+- Die **aktuelle** Version liegt zusätzlich unverändert als `{id}.pdf` — Vorschau, KI-Analyse, Worker und Export brauchen keine Anpassung.
+  `documents.pdf_version` = aktuelle Version, `documents.page_count` wird mitgeführt.
+- **Wiederherstellen** legt eine NEUE Version an (Kopie der alten) — der Verlauf wird nie überschrieben.
+- Schreiben ist atomar (tmp-Datei → `os.replace`); schlägt der DB-Commit fehl, wird `{id}.pdf` auf die Elternversion zurückgesetzt.
+  Bearbeiten ist bei `status == "processing"` gesperrt (HTTP 409). Import löschen entfernt auch `versions/{id}/` (`delete_version_files`).
+- Eine bestehende KI-Extraktion wird durch eine PDF-Änderung **nicht** gelöscht. `documents.analyzed_pdf_version` (gesetzt in `_db_prepare_pdf`
+  vor jeder Analyse) zeigt, ob die PDF seitdem geändert wurde → `v2` (gelb) in der Belege-Liste und Hinweis „bitte neu analysieren".
+- Vorschaubilder (`pdf_service.render_page_thumbnail`) laufen wie das übrige Rendering unter `_PDFIUM_LOCK` (PDFium ist nicht thread-sicher).
+
+**Automatisches Kürzen:** Einstellungen → Automatisierung → „Lange PDFs automatisch kürzen" (`pdf_settings`, Singleton: `auto_trim_enabled`,
+`auto_trim_max_pages`). Es greift an **zwei Stellen**: (1) im Worker **vor der Kapazitätsprüfung** (`worker.prepare_pdf_for_task` in
+`Worker._process`) — sonst bliebe eine 100-seitige PDF als „zu groß für alle KI-Server" (`waiting_capacity`) hängen, obwohl sie gleich auf
+3 Seiten gekürzt würde; (2) in `_analyze_single_inner` als Phase 1b (`_db_prepare_pdf`, idempotent). Fehler dabei brechen die Analyse nie ab.
+Für die Auswahl in der Belege-Liste: `POST /api/documents/auto-trim`.
+
+Endpunkte (`/api/documents`): `GET /{id}/versions`, `GET /{id}/versions/{n}/preview`, `GET /{id}/pages/{page}/thumbnail` (PNG, `?version=`,
+1-basiert), `POST /{id}/pages/remove` (`remove_pages` ODER `keep_pages`, optional `note`), `POST /{id}/versions/{n}/restore`,
+`POST /auto-trim`; `GET|PUT /api/settings/pdf` (auch im Einstellungs-Backup).
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

@@ -117,7 +117,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.database import SessionLocal, get_db
 from app.schemas.document import DocumentCommentUpdate, DocumentDetail, DocumentListRead
-from app.services import ai_service, pdf_service, plausibility_service
+from app.services import ai_service, pdf_edit_service, pdf_service, plausibility_service
 
 logger = logging.getLogger(__name__)
 
@@ -1147,6 +1147,39 @@ def _parse_raw(raw_response: str | None) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _db_prepare_pdf(
+    doc_id: int, original_filename: str, batch_id: int | None, allow_auto_trim: bool = True
+) -> None:
+    """
+    Vor dem Rendern (sync, für asyncio.to_thread): optional automatisch kürzen
+    (neue PDF-Version) und die analysierte PDF-Version am Dokument festhalten.
+    Fehler beim Kürzen brechen die Analyse nie ab — es wird dann das volle PDF analysiert.
+    """
+    from app.models.document import Document as DocModel
+    db = SessionLocal()
+    try:
+        doc = db.get(DocModel, doc_id)
+        if doc is None:
+            return
+        pdf_settings = crud.pdf_settings.get_or_create(db)
+        if allow_auto_trim and pdf_settings.auto_trim_enabled:
+            try:
+                version = pdf_edit_service.auto_trim(db, doc, pdf_settings.auto_trim_max_pages)
+                if version is not None:
+                    logger.info("PDF automatisch gekürzt: %s — %s", original_filename, version.description)
+            except Exception as exc:
+                db.rollback()
+                logger.warning("Auto-Kürzen für #%d fehlgeschlagen: %s", doc_id, exc)
+        doc = db.get(DocModel, doc_id)
+        doc.analyzed_pdf_version = doc.pdf_version
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("PDF-Vorbereitung für #%d fehlgeschlagen: %s", doc_id, exc)
+    finally:
+        db.close()
+
+
 def _db_save_used_prompts(
     doc_id: int, system_prompt: str | None, doc_type_prompt: str | None
 ) -> None:
@@ -1345,6 +1378,9 @@ async def _analyze_single_inner(
     doc_type_prompt_text: str | None = data["doc_type_prompt_text"]
     system_prompt_text: str | None = data["system_prompt_text"]
     document_types: list[dict] = data["document_types"]
+
+    # ── Phase 1b: PDF vorbereiten (ggf. automatisch kürzen, analysierte Version merken) ──
+    await asyncio.to_thread(_db_prepare_pdf, doc_id, original_filename, batch_id)
 
     # Wortlaut der verwendeten Prompts am Dokument festhalten (Nachvollziehbarkeit).
     # Der Typ-Prompt zählt nur, wenn die zweistufige Analyse wirklich läuft.

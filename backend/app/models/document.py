@@ -55,6 +55,10 @@ class Document(Base):
     raw_response: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="{}")
     # Soft-Delete: Dokument bleibt in der DB, wird aber nicht mehr angezeigt.
     # Kann über POST /{id}/restore wiederhergestellt werden.
+    # PDF-Versionierung (siehe services/pdf_edit_service.py): aktuelle Version und die Version,
+    # auf der die letzte KI-Analyse lief (Abweichung → „bitte neu analysieren")
+    pdf_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    analyzed_pdf_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Wortlaut der bei der letzten Analyse verwendeten Systemprompts (Nachvollziehbarkeit)
     used_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     used_doc_type_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)

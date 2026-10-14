@@ -156,3 +156,28 @@ def pdf_to_base64_images(
 
     logger.info("PDF gerendert: %d Seiten als %s", len(images_b64), fmt)
     return images_b64
+
+
+def render_page_thumbnail(pdf_path: str | Path, page_number: int, width_px: int = 240) -> bytes:
+    """
+    Rendert eine einzelne Seite (1-basiert) als kleines PNG für die Seitenauswahl.
+
+    Der PDFium-Zugriff steht — wie überall — unter _PDFIUM_LOCK (PDFium ist nicht thread-sicher);
+    Skalierung und PNG-Encoding laufen danach außerhalb der Sperre.
+
+    Raises:
+        IndexError: Seitenzahl außerhalb des Dokuments.
+    """
+    with _PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(str(Path(pdf_path)))
+        try:
+            if page_number < 1 or page_number > len(pdf):
+                raise IndexError(f"Seite {page_number} existiert nicht (1–{len(pdf)})")
+            page = pdf[page_number - 1]
+            scale = width_px / max(page.get_width(), 1.0)
+            image = page.render(scale=scale).to_pil().convert("RGB").copy()
+        finally:
+            pdf.close()
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()

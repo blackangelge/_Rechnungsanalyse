@@ -37,6 +37,9 @@ class DocumentRead(BaseModel):
     # pending | processing | done | error
     status: str
     soft_deleted: bool = False
+    # PDF-Version (siehe PDF-Bearbeitung) und die Version, auf der die letzte KI-Analyse lief
+    pdf_version: int = 1
+    analyzed_pdf_version: int | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
