@@ -16,3 +16,5 @@ from app.models.system_prompt import SystemPrompt  # noqa: F401
 from app.models.workflow_task import WorkflowTask  # noqa: F401
 from app.models.document_token_count import DocumentTokenCount  # noqa: F401
 from app.models.analysis_history import AnalysisHistory  # noqa: F401
+from app.models.document_version import DocumentVersion  # noqa: F401
+from app.models.pdf_settings import PdfSettings  # noqa: F401

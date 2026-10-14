@@ -7,6 +7,8 @@ Endpunkte unter /api/settings:
   PUT  /api/settings/image-conversion    — Bildkonvertierungseinstellungen aktualisieren
   GET  /api/settings/automation          — Ordner-Sync-Intervall + Export-Zeitplan abrufen
   PUT  /api/settings/automation          — Ordner-Sync-Intervall + Export-Zeitplan aktualisieren
+  GET  /api/settings/pdf                 — PDF-Einstellungen (automatisches Kürzen) abrufen
+  PUT  /api/settings/pdf                 — PDF-Einstellungen aktualisieren
   GET  /api/settings/system-prompts      — alle Systemprompts auflisten
   POST /api/settings/system-prompts      — neuen Systemprompt anlegen
   PUT  /api/settings/system-prompts/{id} — Systemprompt aktualisieren
@@ -26,6 +28,7 @@ from app import crud
 from app.config import settings
 from app.database import get_db
 from app.schemas.automation_settings import AutomationSettingsRead, AutomationSettingsUpdate
+from app.schemas.document_version import PdfSettingsRead, PdfSettingsUpdate
 from app.schemas.image_settings import ImageSettingsRead, ImageSettingsUpdate
 from app.schemas.system_prompt import SystemPromptCreate, SystemPromptRead, SystemPromptUpdate
 
@@ -77,6 +80,17 @@ def get_image_settings(db: Session = Depends(get_db)):
 def update_image_settings(payload: ImageSettingsUpdate, db: Session = Depends(get_db)):
     """Aktualisiert die Bildkonvertierungseinstellungen (DPI, Format, Qualität, Graustufen)."""
     return crud.image_settings.update(db, payload)
+
+
+@router.get("/pdf", response_model=PdfSettingsRead)
+def get_pdf_settings(db: Session = Depends(get_db)):
+    """PDF-Einstellungen: automatisches Kürzen langer PDFs vor der KI-Analyse."""
+    return crud.pdf_settings.get_or_create(db)
+
+
+@router.put("/pdf", response_model=PdfSettingsRead)
+def update_pdf_settings(payload: PdfSettingsUpdate, db: Session = Depends(get_db)):
+    return crud.pdf_settings.update(db, payload)
 
 
 @router.get("/automation", response_model=AutomationSettingsRead)
@@ -156,6 +170,7 @@ def download_backup(db: Session = Depends(get_db)):
     ai_configs = crud.ai_config.get_all(db)
     prompts = crud.system_prompt.get_all(db)
     img = crud.image_settings.get_or_create(db)
+    pdf = crud.pdf_settings.get_or_create(db)
 
     def _obj(o):
         return {c.name: getattr(o, c.name) for c in o.__table__.columns}
@@ -166,6 +181,7 @@ def download_backup(db: Session = Depends(get_db)):
         "ai_configs": [_obj(c) for c in ai_configs],
         "system_prompts": [_obj(p) for p in prompts],
         "image_settings": _obj(img),
+        "pdf_settings": _obj(pdf),
     }
 
     from fastapi.responses import Response
@@ -227,6 +243,14 @@ async def upload_restore(file: UploadFile = File(...), db: Session = Depends(get
         img_data.pop("updated_at", None)
         db.query(ImageSettings).delete()
         db.add(ImageSettings(**img_data))
+
+    # PDF-Einstellungen (fehlen in älteren Backups → bestehende bleiben unverändert)
+    pdf_data = backup.get("pdf_settings")
+    if pdf_data:
+        from app.models.pdf_settings import PdfSettings
+        pdf_data.pop("id", None)
+        db.query(PdfSettings).delete()
+        db.add(PdfSettings(id=1, **pdf_data))
 
     db.commit()
     return {"restored": restored, "message": "Backup erfolgreich wiederhergestellt"}

@@ -562,7 +562,11 @@ def delete_import(batch_id: int, db: Session = Depends(get_db)):
     failed_files = 0
     deleted_folders: set[Path] = set()
 
+    from app.services import pdf_edit_service
+
     for doc in batch.documents:
+        # PDF-Versionen (versions/{id}/…) zuerst entfernen, sonst bleibt der Ordner nicht leer
+        pdf_edit_service.delete_version_files(doc)
         if doc.stored_filename:
             pdf_path = Path(batch.storage_folder_path) / doc.stored_filename
             if pdf_path.exists():

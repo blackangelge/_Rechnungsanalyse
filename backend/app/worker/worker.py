@@ -65,6 +65,25 @@ SLOT_ACQUIRE_TIMEOUT = 60.0
 TOKENS_PER_PAGE_ESTIMATE = 4500
 
 
+
+async def prepare_pdf_for_task(payload) -> None:
+    """
+    Wendet das automatische Kürzen (Einstellungen → Automatisierung → „Lange PDFs kürzen") VOR
+    der Kapazitätsprüfung an: Eine 100-seitige PDF, die auf 3 Seiten gekürzt wird, darf nicht
+    als „zu groß für alle KI-Server" (waiting_capacity) hängen bleiben. Idempotent — hat die PDF
+    schon höchstens N Seiten, passiert nichts. Fehler werden nur geloggt (die Analyse selbst
+    versucht das Kürzen später nochmal und bricht bei einem Fehler nie ab).
+    """
+    doc_id = payload.get("document_id") if isinstance(payload, dict) else None
+    if not isinstance(doc_id, int):
+        return
+    try:
+        from app.routers.documents import _db_prepare_pdf
+        await asyncio.to_thread(_db_prepare_pdf, doc_id, "", None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("PDF-Vorbereitung für Dokument %s fehlgeschlagen: %s", doc_id, exc)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PROTOCOL: Externe KI-Klasse
 # ══════════════════════════════════════════════════════════════════════════════
@@ -448,6 +467,9 @@ class Worker:
     # ──────────────────────────────────────────────────────────────────
     async def _process(self, task: Task) -> None:
         await self._claim_task(task)
+
+        # Automatisches Kürzen langer PDFs vor der Kapazitätsprüfung (siehe prepare_pdf_for_task)
+        await prepare_pdf_for_task(task.payload)
 
         page_count = await self._get_document_page_count(task)
 

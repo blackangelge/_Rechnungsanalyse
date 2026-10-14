@@ -17,7 +17,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { automationSettingsApi } from "@/lib/api";
+import { automationSettingsApi, pdfSettingsApi, extractApiError } from "@/lib/api";
 
 const WEEKDAYS = [
   { value: 0, label: "Montag" },
@@ -28,6 +28,63 @@ const WEEKDAYS = [
   { value: 5, label: "Samstag" },
   { value: 6, label: "Sonntag" },
 ];
+
+/** Automatisches Kürzen langer PDFs vor der KI-Analyse (eigene Einstellung, eigener Speichern-Button) */
+function PdfTrimSettings() {
+  const [enabled, setEnabled] = useState(false);
+  const [maxPages, setMaxPages] = useState(3);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    pdfSettingsApi.get()
+      .then((d) => { setEnabled(d.auto_trim_enabled); setMaxPages(d.auto_trim_max_pages); })
+      .catch(() => { /* Standardwerte behalten */ });
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      await pdfSettingsApi.update({ auto_trim_enabled: enabled, auto_trim_max_pages: maxPages });
+      setMsg({ ok: true, text: "Gespeichert." });
+    } catch (err) {
+      setMsg({ ok: false, text: extractApiError(err, "Fehler beim Speichern") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-white p-6 shadow-sm">
+      <h2 className="mb-1 text-base font-semibold text-gray-800">Lange PDFs automatisch kürzen</h2>
+      <p className="mb-5 text-sm text-gray-500">
+        Hat eine PDF mehr Seiten als eingestellt, werden vor der KI-Analyse nur die ersten Seiten behalten.
+        Das spart Analysezeit, wenn z.B. nur die erste Seite die Rechnung enthält. Das Original bleibt
+        immer als Version 1 erhalten und kann jederzeit wiederhergestellt werden.
+      </p>
+      <label className="mb-4 flex items-center gap-2 text-sm font-medium text-gray-700">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)}
+          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+        Vor der KI-Analyse automatisch kürzen
+      </label>
+      <div className="mb-5 flex items-center gap-3">
+        <label className="text-sm text-gray-700">Nur die ersten</label>
+        <input type="number" min={1} max={500} value={maxPages} disabled={!enabled}
+          onChange={(e) => setMaxPages(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+          className="w-20 rounded border border-gray-300 px-3 py-1.5 text-center text-sm font-semibold focus:border-blue-500 focus:outline-none disabled:opacity-50" />
+        <span className="text-sm text-gray-700">Seite(n) behalten</span>
+      </div>
+      {msg && (
+        <p className={`mb-3 text-sm ${msg.ok ? "text-green-700" : "text-red-600"}`}>{msg.text}</p>
+      )}
+      <button type="button" onClick={save} disabled={saving}
+        className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+        {saving ? "Speichere…" : "Speichern"}
+      </button>
+    </div>
+  );
+}
 
 export default function AutomationSettingsPage() {
   const [loading, setLoading] = useState(false);
@@ -288,6 +345,8 @@ export default function AutomationSettingsPage() {
           {saving ? "Speichern..." : "Einstellungen speichern"}
         </button>
       </form>
+
+      <PdfTrimSettings />
     </div>
   );
 }
