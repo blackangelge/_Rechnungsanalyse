@@ -787,6 +787,23 @@ Gleiche Spaltenkonfiguration wie der Einzelexport (`ExportConfig`); bei ≥ 2 Im
 Die Route muss **vor** `/{batch_id}` stehen. Ausgeblendete Imports sind exportierbar. Laufzeit: ≈ 5–8 ms je Beleg (10.000 Belege ≈ 50–80 s) —
 der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
 
+### Lieferanten: Dublettensuche und Zusammenführen (`services/supplier_dedup.py`, `crud/vendor.py::merge`)
+
+- `GET /api/vendors/duplicate-groups`: Gruppen von Dublettenkandidaten (Union-Find über alle Merkmale; ein Lieferant mit mehreren Bankkonten
+  wird über **alle** seine IBANs verglichen). Konfidenz: gleiche IBAN, USt-IdNr. oder Steuernummer (Schreibweise egal) = **hoch**; gleicher
+  Name nach Normalisierung (ohne Rechtsform wie GmbH/KG/e.K., Umlaute/Satzzeichen egal) = **mittel**; Namensähnlichkeit ≥ 88 % = **niedrig**.
+  Es wird **nie automatisch** zusammengeführt.
+- `POST /api/vendors/merge` `{target_id, source_ids, fields?, update_document_names?}` — eine Transaktion: leere Stammdatenfelder des Ziels aus
+  den Quellen auffüllen (`fields` legt Endwerte ausdrücklich fest), Bankverbindungen der Quellen übernehmen (bereits vorhandene IBANs entfallen),
+  Workflow des Ziels bleibt (sonst erster der Quellen), Quellen werden gelöscht. Fehler → HTTP 400/404, nichts wird verändert.
+- **Belege hängen nur über den Namen am Lieferanten** (`invoice_extractions.vendor_id` ist Text, kein Fremdschlüssel). Deshalb ist
+  `update_document_names` hier standardmäßig **an**: Belege der Quellen (und des Ziels bei geändertem Namen) erhalten den endgültigen Namen,
+  sonst verlieren sie die Zuordnung (Belegzähler, Workflow-Auswahl). Der Originalwortlaut bleibt in `raw_response`.
+- `VendorRead.document_count` = nicht gelöschte Belege mit diesem Namen (`crud.vendor.get_document_counts`, nur in Liste und Dublettensuche befüllt).
+- Frontend `/lieferanten`: „Dubletten suchen" (Gruppen mit Konfidenz und Gründen), Mehrfachauswahl → `components/suppliers/MergeModal.tsx`.
+- `find_or_create` (Analyse) erkennt weiterhin nur exakte IBAN/USt-IdNr./Namen — Schreibvarianten legen neue Lieferanten an, die später
+  per Dublettensuche zusammengeführt werden können.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:

@@ -9,7 +9,7 @@ Bankkonten können derzeit nur über die KI-Extraktion (find_or_create) hinzugef
 nicht manuell über die API.
 """
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VendorBankAccountRead(BaseModel):
@@ -37,6 +37,7 @@ class VendorRead(BaseModel):
     vat_id: str | None = None          # USt-IdNr.
     workflow_id: int | None = None     # Eigener Analyse-Workflow (None = Standard)
     bank_accounts: list[VendorBankAccountRead] = []  # Alle Bankverbindungen
+    document_count: int = 0            # Belege mit diesem Lieferantennamen (nicht gelöschte)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -52,3 +53,28 @@ class VendorUpdate(BaseModel):
     hrb_number: str | None = None
     tax_number: str | None = None
     vat_id: str | None = None
+
+
+class DuplicateGroupRead(BaseModel):
+    """Gruppe von Dublettenkandidaten mit den gefundenen Übereinstimmungen."""
+
+    suppliers: list[VendorRead]
+    reasons: list[str]            # iban | vat_id | tax_number | name | name_similar
+    reason_labels: list[str]
+    confidence: str               # high | medium | low
+
+
+class VendorMergeRequest(BaseModel):
+    target_id: int
+    source_ids: list[int] = Field(min_length=1)
+    # Ausdrücklich gewählte Endwerte einzelner Stammdatenfelder (sonst: Ziel behalten, Leeres auffüllen)
+    fields: dict[str, str | None] | None = None
+    # Belege der zusammengeführten Lieferanten auf den Namen des Ziels umschreiben (nur dann gehören sie danach zum Ziel)
+    update_document_names: bool = True
+
+
+class VendorMergeResult(BaseModel):
+    supplier: VendorRead
+    merged_ids: list[int]
+    moved_documents: int
+    moved_bank_accounts: int

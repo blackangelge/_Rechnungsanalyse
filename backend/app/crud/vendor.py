@@ -11,10 +11,19 @@ Bestehende Felder werden nur ergänzt, nie überschrieben.
 Hinweis: Die übergebene Session wird nicht geschlossen — das ist Aufgabe des Aufrufers.
 """
 
+import logging
+import re
+from dataclasses import dataclass, field
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.document import Document
+from app.models.invoice_extraction import InvoiceExtraction
 from app.models.vendor import Vendor
 from app.models.vendor_bank_account import VendorBankAccount
+
+logger = logging.getLogger(__name__)
 
 
 def get_all(db: Session) -> list[Vendor]:
@@ -138,3 +147,136 @@ def delete(db: Session, vendor_id: int) -> bool:
     db.delete(obj)
     db.commit()
     return True
+
+
+def get_document_counts(db: Session) -> dict[str, int]:
+    """
+    Anzahl nicht gelöschter Belege je Lieferantenname. Die Verknüpfung Beleg ↔ Lieferant läuft in
+    diesem System über den extrahierten Namen (invoice_extractions.vendor_id), nicht über einen Fremdschlüssel.
+    """
+    rows = (
+        db.query(InvoiceExtraction.vendor_id, func.count(InvoiceExtraction.id))
+        .join(Document, Document.id == InvoiceExtraction.document_id)
+        .filter(InvoiceExtraction.vendor_id.isnot(None), Document.soft_deleted == False)  # noqa: E712
+        .group_by(InvoiceExtraction.vendor_id)
+        .all()
+    )
+    return {name: n for name, n in rows}
+
+
+# ─── Zusammenführen ───────────────────────────────────────────────────────────
+
+MERGE_FIELDS = (
+    "name", "street", "postal_code", "city", "country", "hrb_number", "tax_number", "vat_id",
+)
+
+
+class MergeError(ValueError):
+    """Fachlicher Fehler beim Zusammenführen; `status` ist der passende HTTP-Status."""
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
+
+
+@dataclass
+class MergeResult:
+    vendor: Vendor
+    merged_ids: list[int] = field(default_factory=list)
+    moved_documents: int = 0
+    moved_bank_accounts: int = 0
+
+
+def _is_set(value: str | None) -> bool:
+    return bool(value and value.strip())
+
+
+def _iban_key(value: str | None) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", value or "").upper()
+
+
+def merge(
+    db: Session,
+    target_id: int,
+    source_ids: list[int],
+    fields: dict[str, str | None] | None = None,
+    update_document_names: bool = True,
+) -> MergeResult:
+    """
+    Führt die Lieferanten `source_ids` in `target_id` zusammen (alles in einer Transaktion):
+
+      • Leere Stammdatenfelder des Ziels werden aus den Quellen aufgefüllt (in ID-Reihenfolge);
+        `fields` legt einzelne Felder ausdrücklich fest (Vorrang vor dem Auffüllen).
+      • Bankverbindungen der Quellen wandern zum Ziel (IBANs, die das Ziel schon hat, entfallen).
+      • Hat das Ziel keinen Analyse-Workflow, wird der erste der Quellen übernommen.
+      • Belege hängen an Lieferanten nur über den extrahierten Namen (invoice_extractions.vendor_id).
+        Mit `update_document_names` (Standard) bekommen alle Belege der Quellen — und des Ziels, falls
+        sich dessen Name ändert — den endgültigen Namen; nur dann gehören sie danach zum Ziel (Belegzähler,
+        Workflow-Auswahl). Der Originalwortlaut bleibt in `raw_response` erhalten.
+      • Die Quell-Lieferanten werden gelöscht.
+    """
+    ids = list(dict.fromkeys(source_ids))
+    if not ids:
+        raise MergeError("Keine Lieferanten zum Zusammenführen ausgewählt")
+    if target_id in ids:
+        raise MergeError("Der Ziel-Lieferant darf nicht gleichzeitig zusammengeführt werden")
+    target = db.get(Vendor, target_id)
+    if target is None:
+        raise MergeError(f"Ziel-Lieferant #{target_id} nicht gefunden", 404)
+    sources = [db.get(Vendor, i) for i in ids]
+    missing = [i for i, s in zip(ids, sources) if s is None]
+    if missing:
+        raise MergeError("Lieferant(en) nicht gefunden: " + ", ".join(f"#{i}" for i in missing), 404)
+    sources = sorted(sources, key=lambda s: s.id)           # type: ignore[arg-type, return-value]
+
+    overrides = {k: (v.strip() if isinstance(v, str) else v) for k, v in (fields or {}).items()}
+    unknown = [k for k in overrides if k not in MERGE_FIELDS]
+    if unknown:
+        raise MergeError("Unbekannte Felder: " + ", ".join(unknown))
+    if "name" in overrides and not _is_set(overrides["name"]):
+        raise MergeError("Der Name darf nicht leer sein")
+
+    old_names = {target.name} | {s.name for s in sources}
+    try:
+        for fname in MERGE_FIELDS:                          # 1) Leeres auffüllen
+            if not _is_set(getattr(target, fname)):
+                for s in sources:
+                    if _is_set(getattr(s, fname)):
+                        setattr(target, fname, getattr(s, fname))
+                        break
+        for fname, value in overrides.items():              # 2) ausdrückliche Wahl
+            setattr(target, fname, value if _is_set(value) else None)
+        if target.workflow_id is None:
+            target.workflow_id = next((s.workflow_id for s in sources if s.workflow_id), None)
+
+        known = {_iban_key(ba.iban) for ba in target.bank_accounts if _iban_key(ba.iban)}
+        moved_banks = 0
+        for s in sources:                                   # 3) Bankverbindungen
+            for ba in list(s.bank_accounts):
+                key = _iban_key(ba.iban)
+                if key and key in known:
+                    continue                                # Duplikat → entfällt mit der Quelle
+                if key:
+                    known.add(key)
+                s.bank_accounts.remove(ba)
+                target.bank_accounts.append(ba)
+                moved_banks += 1
+
+        moved = 0
+        if update_document_names:                           # 4) Belege dem Ziel zuordnen
+            moved = (
+                db.query(InvoiceExtraction)
+                .filter(InvoiceExtraction.vendor_id.in_(old_names))
+                .filter(InvoiceExtraction.vendor_id != target.name)
+                .update({InvoiceExtraction.vendor_id: target.name}, synchronize_session=False)
+            )
+        for s in sources:
+            db.delete(s)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(target)
+    logger.info("Lieferanten %s in #%d '%s' zusammengeführt (%d Beleg(e) umbenannt, %d Bankverbindung(en) übernommen)",
+                ids, target.id, target.name, moved, moved_banks)
+    return MergeResult(target, ids, moved, moved_banks)
