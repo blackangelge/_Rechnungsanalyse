@@ -48,6 +48,13 @@ class ImportBatch(Base):
     last_exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)   # Zeitstempel Import-Start
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Zeitstempel Import-Ende
+    # Ausgeblendet (archiviert): NULL = sichtbar, sonst Zeitpunkt des Ausblendens.
+    # Ausgeblendete Imports und ihre Belege tauchen in Dashboard, Belege-Liste und Artikelsuche
+    # nur auf Wunsch auf; alles bleibt erhalten und lässt sich wieder einblenden.
+    hidden_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None, index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

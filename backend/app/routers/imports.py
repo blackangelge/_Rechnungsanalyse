@@ -26,6 +26,7 @@ from app.schemas.import_batch import (
     ImportBatchCreate,
     ImportBatchRead,
     ImportBatchWithDocuments,
+    ImportVisibilityUpdate,
 )
 from app.services.import_service import (
     _run_import_io,
@@ -288,13 +289,87 @@ async def _import_then_analyze(
 def list_imports(
     company_name: str | None = Query(None, description="Firmenname (Teilstring-Suche)"),
     year: int | None = Query(None, description="Importjahr (exakt)"),
+    include_hidden: bool = Query(False, description="Auch ausgeblendete Imports liefern"),
     db: Session = Depends(get_db),
 ):
     """
-    Gibt alle Import-Batches zurück.
+    Gibt Import-Batches zurück (ausgeblendete nur mit include_hidden=true).
     Optional nach Firmenname (Teilstring) und/oder Jahr filtern.
     """
-    return crud.import_batch.get_all(db, company_name=company_name, year=year)
+    return crud.import_batch.get_all(
+        db, company_name=company_name, year=year, include_hidden=include_hidden
+    )
+
+
+@router.post("/visibility")
+def set_imports_visibility(payload: ImportVisibilityUpdate, db: Session = Depends(get_db)):
+    """
+    Blendet Imports aus (`hidden: true`) oder wieder ein (`hidden: false`).
+
+    Ausgeblendete Imports und ihre Belege erscheinen im Dashboard, in der Belege-Liste und in der
+    Artikelsuche nur auf Wunsch. Es wird nichts gelöscht — Dateien, Belege und Auswertungen bleiben erhalten.
+    """
+    from app.models.import_batch import ImportBatch as _Batch
+
+    existing = {b.id for b in db.query(_Batch.id).filter(_Batch.id.in_(payload.ids)).all()}
+    missing = sorted(set(payload.ids) - existing)
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail="Import(s) nicht gefunden: " + ", ".join(f"#{i}" for i in missing),
+        )
+    changed = crud.import_batch.set_hidden(db, payload.ids, payload.hidden)
+    logger.info(
+        "%d Import(s) %s: %s", len(existing), "ausgeblendet" if payload.hidden else "eingeblendet",
+        ", ".join(f"#{i}" for i in sorted(existing)),
+    )
+    return {"updated": changed, "hidden": payload.hidden, "ids": sorted(existing)}
+
+
+# ─── GET /api/imports/export?ids=1&ids=2 — gemeinsamer Excel-Export ──────────
+# Muss VOR "/{batch_id}" stehen, sonst wird "export" als Batch-ID gelesen.
+
+@router.get("/export")
+def export_batches_excel(
+    ids: list[int] = Query(..., description="Import-IDs (mehrfach angeben)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Exportiert mehrere Imports in EINE Excel-Datei (gleiche zwei Sheets und Spaltenkonfiguration wie beim
+    Einzelexport, zusätzlich mit der Spalte „Import" am Ende). Nur nicht-gelöschte Dokumente;
+    ausgeblendete Imports sind exportierbar.
+    """
+    from sqlalchemy.orm import joinedload as _jl
+    from app.models.document import Document as _Doc
+    from app.models.import_batch import ImportBatch as _Batch
+
+    ids = list(dict.fromkeys(ids))
+    batches = db.query(_Batch).filter(_Batch.id.in_(ids)).order_by(_Batch.id).all()
+    missing = sorted(set(ids) - {b.id for b in batches})
+    if missing:
+        raise HTTPException(
+            status_code=404, detail="Import(s) nicht gefunden: " + ", ".join(f"#{i}" for i in missing)
+        )
+    docs = (
+        db.query(_Doc)
+        .options(_jl(_Doc.extraction), _jl(_Doc.order_positions))
+        .filter(_Doc.batch_id.in_(ids), _Doc.soft_deleted == False)  # noqa: E712
+        .order_by(_Doc.batch_id, _Doc.id)
+        .all()
+    )
+    invoice_fields, position_fields = _get_export_config_fields(db)
+    excel_bytes = _build_export_excel(
+        batches[0], docs, invoice_fields, position_fields, batches=batches if len(batches) > 1 else None
+    )
+    if len(batches) == 1:
+        filename = f"Export_{batches[0].company_name}_{batches[0].year}".replace(" ", "_") + ".xlsx"
+    else:
+        filename = f"Export_{len(batches)}_Imports_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("", response_model=ImportBatchRead, status_code=status.HTTP_201_CREATED)
@@ -765,9 +840,13 @@ def _build_export_excel(
     docs,
     invoice_fields: list[str],
     position_fields: list[str],
+    batches=None,
 ) -> bytes:
     """
     Erstellt eine formatierte Excel-Datei mit zwei Sheets.
+
+    batches: bei gemeinsamem Export mehrerer Imports (≥ 2) die Import-Liste — dann kommt am Ende
+    beider Sheets die Spalte „Import" („Firma Jahr (#id)") dazu; sonst bleibt das Layout unverändert.
 
     invoice_fields / position_fields: geordnete Liste aktiver Feld-Schlüssel aus
     ExportConfig — nur diese Spalten werden ausgegeben.
@@ -902,13 +981,22 @@ def _build_export_excel(
     inv_defs  = [d for d in INVOICE_DEFS  if d[0] in invoice_fields]
     pos_defs  = [d for d in POSITION_DEFS if d[0] in position_fields]
 
+    # Gemeinsamer Export mehrerer Imports: zusätzliche Spalte „Import" am Ende beider Sheets
+    if batches and len(batches) > 1:
+        _import_label = {b.id: f"{b.company_name} {b.year} (#{b.id})" for b in batches}
+        inv_defs = inv_defs + [("import", "Import", lambda d, e, raw: _import_label.get(d.batch_id), None, 26)]
+        pos_defs = pos_defs + [("import", "Import", lambda d, e, p, tm: _import_label.get(d.batch_id), None, 26)]
+
     # ── Sheet 1: Rechnungen ───────────────────────────────────────────────────
     ws1 = wb.active
     ws1.title = "Rechnungen"
 
     num_cols = max(len(inv_defs), 1)
     ws1.merge_cells(f"A1:{get_column_letter(num_cols)}1")
-    ws1["A1"] = f"Export: {batch.company_name} {batch.year}"
+    ws1["A1"] = (
+        f"Export: {len(batches)} Imports" if batches and len(batches) > 1
+        else f"Export: {batch.company_name} {batch.year}"
+    )
     ws1["A1"].font = Font(name="Arial", size=13, bold=True)
     ws1["A1"].alignment = Alignment(vertical="center")
     ws1.row_dimensions[1].height = 24

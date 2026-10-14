@@ -39,6 +39,7 @@ def _filters(
     date_from: Optional[date] = Query(None, description="Rechnungsdatum von (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="Rechnungsdatum bis (YYYY-MM-DD)"),
     validation_status: Optional[list[str]] = Query(default=None),
+    include_hidden: bool = False,
     include_deleted: bool = False,
 ) -> dict:
     return dict(
@@ -49,7 +50,7 @@ def _filters(
         total_price_min=total_price_min, total_price_max=total_price_max,
         quantity_min=quantity_min, quantity_max=quantity_max,
         date_from=date_from, date_to=date_to, validation_statuses=validation_status,
-        include_deleted=include_deleted,
+        include_hidden=include_hidden, include_deleted=include_deleted,
     )
 
 
@@ -65,8 +66,9 @@ def search_positions(
     db: Session = Depends(get_db),
 ):
     """
-    Durchsucht alle Positionen aller Belege. Gelöschte Belege werden nur auf Wunsch
-    (`include_deleted`) einbezogen.
+    Durchsucht alle Positionen aller Belege. Belege ausgeblendeter Imports und gelöschte Belege
+    werden nur auf Wunsch (`include_hidden`, `include_deleted`) einbezogen; ein ausdrücklich gewählter
+    Import (`batch_ids`) bzw. eine Beleg-ID (`document_id`) gelten immer.
     """
     response.headers["X-Total-Count"] = str(position_search.count(db, **filters))
     response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"

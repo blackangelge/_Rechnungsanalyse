@@ -768,6 +768,25 @@ Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, s
 - Es werden nur Listenspalten gelesen (kein `raw_response`); Teilstring-Suche nutzt die `pg_trgm`-Indizes aus Migration 0011.
 - Frontend `app/artikel/page.tsx`: alle Filter stehen in der Adresszeile (`?q=…&unit=t`) → teilbar; Beleg-Link auf `/belege?doc_id=…`.
 
+### Imports ausblenden (`import_batches.hidden_at`, Migration `0012_import_hidden`)
+
+Ganze Imports lassen sich ausblenden, wenn sie gerade nicht wichtig sind — **nichts wird gelöscht**, alles ist umkehrbar.
+
+- `POST /api/imports/visibility` `{ids, hidden}` (mehrere auf einmal, idempotent: bereits passende Imports behalten ihren Zeitstempel;
+  unbekannte ID → 404 und es ändert sich nichts). `GET /api/imports` liefert Ausgeblendete nur mit `include_hidden=true`.
+- `GET /api/documents` (+ `/ids`, `/filter-options`) und `GET /api/positions` schließen Belege ausgeblendeter Imports standardmäßig aus;
+  `include_hidden=true` nimmt sie hinein. **Ausnahmen:** ein ausdrücklich gewählter Import (`batch_ids`) und die Suche per `doc_id`/`document_id`
+  zeigen immer an. Neue Auswertungen/Listen über Belege müssen diese Regel (`_filtered_query`, `position_search._filtered`) mitbedenken.
+- Frontend: Dashboard mit Mehrfachauswahl (Ausblenden/Einblenden), Schalter „Ausgeblendete anzeigen (N)", Zeilen-Buttons und Markierung;
+  Import-Detailseite mit Button; Belege-/Artikel-Filter „Ausgeblendete Imports einbeziehen".
+
+### Gemeinsamer Excel-Export mehrerer Imports (`routers/imports.py`)
+
+`GET /api/imports/export?ids=1&ids=2` — mehrere Imports in **eine** Datei (Dashboard: Imports ankreuzen → „↓ Excel exportieren"; zusätzlich Excel-Link je Zeile).
+Gleiche Spaltenkonfiguration wie der Einzelexport (`ExportConfig`); bei ≥ 2 Imports kommt am Ende beider Sheets die Spalte **„Import"** (`Firma Jahr (#id)`) dazu.
+Die Route muss **vor** `/{batch_id}` stehen. Ausgeblendete Imports sind exportierbar. Laufzeit: ≈ 5–8 ms je Beleg (10.000 Belege ≈ 50–80 s) —
+der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:

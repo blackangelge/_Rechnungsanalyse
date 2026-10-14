@@ -184,3 +184,12 @@ def test_filter_options_units(client, world):
     units = client.get("/api/positions/filter-options").json()["units"]
     assert units[0] == {"unit": "kg", "count": 3}
     assert {u["unit"] for u in units} == {"kg", "t", "stück"}
+
+
+def test_hidden_imports_excluded_unless_requested(client, world):
+    client.post("/api/imports/visibility", json={"ids": [world.batches["A"].id], "hidden": True})
+    assert get(client)[1] == 2                                                        # nur Import B
+    assert get(client, include_hidden=True)[1] == 7
+    assert get(client, batch_ids=[world.batches["A"].id])[1] == 5                    # ausdrücklich gewählt
+    assert get(client, document_id=world.docs["d1"].id)[1] == 2                       # per Beleg-ID
+    assert client.get("/api/positions/summary").json()["count"] == 2

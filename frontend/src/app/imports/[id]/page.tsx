@@ -239,9 +239,28 @@ export default function ImportDetailPage() {
     <div className="space-y-6">
       {/* Kopfzeile */}
       <div>
-        <h1 className="text-xl font-semibold text-gray-900">
-          Import: {batch.company_name} {batch.year}
-        </h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-semibold text-gray-900">
+            Import: {batch.company_name} {batch.year}
+          </h1>
+          {batch.hidden_at && (
+            <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600">ausgeblendet</span>
+          )}
+          <button
+            onClick={async () => {
+              try {
+                await importsApi.setHidden([batchId], !batch.hidden_at);
+                await loadMeta();
+              } catch {
+                setError("Aus-/Einblenden fehlgeschlagen");
+              }
+            }}
+            className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
+            title={batch.hidden_at ? "Wieder in Dashboard und Belegen anzeigen" : "Aus Dashboard und Belegen ausblenden (nichts wird gelöscht)"}
+          >
+            {batch.hidden_at ? "Einblenden" : "Ausblenden"}
+          </button>
+        </div>
         <p className="text-sm text-gray-500">
           {batch.import_folder_path}
           {batch.comment && (
