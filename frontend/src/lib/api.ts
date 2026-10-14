@@ -1201,6 +1201,36 @@ export const positionsApi = {
       .then((r) => r.data),
 };
 
+// ─── Nachrüstung der Plausibilitätsprüfung (Altbestand, ohne KI) ──────────────
+
+export interface ValidationBackfillState {
+  running: boolean;
+  /** Anzahl noch ungeprüfter, fertig analysierter Belege */
+  pending: number;
+  dry_run?: boolean;
+  auto_correct?: boolean;
+  total?: number;
+  processed?: number;
+  filled_prices?: number;
+  corrections?: number;
+  /** Prüfstatus → Anzahl (zusätzlich `skipped_no_data` = keine verwertbare KI-Antwort) */
+  outcomes?: Record<string, number>;
+  error_count?: number;
+  errors?: string[];
+  cancelled?: boolean;
+  started_at?: string;
+  finished_at?: string | null;
+}
+
+export const validationBackfillApi = {
+  status: () =>
+    apiClient.get<ValidationBackfillState>("/api/validation-backfill/").then((r) => r.data),
+  start: (opts: { dry_run: boolean; auto_correct: boolean }) =>
+    apiClient.post<ValidationBackfillState>("/api/validation-backfill/", opts).then((r) => r.data),
+  cancel: () =>
+    apiClient.post<{ cancelled: boolean }>("/api/validation-backfill/cancel").then((r) => r.data),
+};
+
 // ─── Anmeldung ───────────────────────────────────────────────────────────────
 
 export interface AuthInfo {

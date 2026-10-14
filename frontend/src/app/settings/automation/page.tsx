@@ -17,7 +17,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { automationSettingsApi, pdfSettingsApi, extractApiError } from "@/lib/api";
+import {
+  ValidationBackfillState, automationSettingsApi, pdfSettingsApi, validationBackfillApi, extractApiError,
+} from "@/lib/api";
 
 const WEEKDAYS = [
   { value: 0, label: "Montag" },
@@ -82,6 +84,118 @@ function PdfTrimSettings() {
         className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
         {saving ? "Speichere…" : "Speichern"}
       </button>
+    </div>
+  );
+}
+
+const OUTCOME_LABELS: Record<string, string> = {
+  ok: "In Ordnung", corrected: "Automatisch korrigiert", needs_review: "Prüfen!",
+  unchecked: "Nicht prüfbar", skipped_no_data: "Übersprungen (keine verwertbare KI-Antwort)",
+};
+
+/** Plausibilitätsprüfung für Belege nachrüsten, die vor deren Einführung analysiert wurden — ohne KI */
+function ValidationBackfill() {
+  const [state, setState] = useState<ValidationBackfillState | null>(null);
+  const [autoCorrect, setAutoCorrect] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    try { setState(await validationBackfillApi.status()); } catch { /* beim nächsten Takt erneut */ }
+  }
+
+  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    if (!state?.running) return;
+    const t = setInterval(refresh, 2000);
+    return () => clearInterval(t);
+  }, [state?.running]);
+
+  async function start(dryRun: boolean) {
+    if (!dryRun && !confirm(
+      `Prüfung für ${state?.pending?.toLocaleString("de-DE") ?? "alle ungeprüften"} Belege nachrüsten?\n\n` +
+      (autoCorrect ? "Eindeutige Fehler (z.B. t/kg) werden dabei automatisch korrigiert. " : "") +
+      "Fehlende Positions-Gesamtpreise werden aus der gespeicherten KI-Antwort ergänzt.",
+    )) return;
+    setBusy(true);
+    setError(null);
+    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect })); }
+    catch (err) { setError(extractApiError(err, "Start fehlgeschlagen")); }
+    finally { setBusy(false); }
+  }
+
+  async function cancel() {
+    try { await validationBackfillApi.cancel(); await refresh(); }
+    catch (err) { setError(extractApiError(err, "Abbrechen fehlgeschlagen")); }
+  }
+
+  const total = state?.total ?? 0;
+  const processed = state?.processed ?? 0;
+  const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+  const hasRun = !!state?.started_at;
+
+  return (
+    <div className="rounded-lg border bg-white p-6 shadow-sm" data-testid="backfill-card">
+      <h2 className="mb-1 text-base font-semibold text-gray-800">Prüfung für den Altbestand nachrüsten</h2>
+      <p className="mb-4 text-sm text-gray-500">
+        Belege, die vor der Plausibilitätsprüfung analysiert wurden, haben keinen Prüfstatus. Hier wird er <b>ohne KI</b> nachgeholt:
+        fehlende Positions-Gesamtpreise werden aus der gespeicherten KI-Antwort ergänzt und alle Werte durchgerechnet.
+        Die „Vorschau" rechnet alles durch, speichert aber nichts. Belege mit „Prüfen!" kannst du danach gezielt neu analysieren lassen.
+      </p>
+      <p className="mb-4 text-sm text-gray-700" data-testid="backfill-pending">
+        Noch ungeprüft: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
+      </p>
+      <label className="mb-4 flex items-center gap-2 text-sm text-gray-700">
+        <input type="checkbox" checked={autoCorrect} onChange={(e) => setAutoCorrect(e.target.checked)}
+          disabled={state?.running} className="rounded border-gray-300 text-blue-600" />
+        Eindeutige Fehler automatisch korrigieren (sonst nur markieren)
+      </label>
+
+      {state?.running ? (
+        <div className="mb-4" data-testid="backfill-progress">
+          <div className="mb-1 flex justify-between text-xs text-gray-500">
+            <span>{state.dry_run ? "Vorschau läuft…" : "Nachrüstung läuft…"}</span>
+            <span>{processed.toLocaleString("de-DE")} / {total.toLocaleString("de-DE")} ({percent} %)</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+            <div className="h-2 rounded-full bg-blue-500 transition-all" style={{ width: `${percent}%` }} />
+          </div>
+          <button type="button" onClick={cancel}
+            className="mt-3 rounded border border-red-300 px-4 py-1.5 text-sm text-red-700 hover:bg-red-50">Abbrechen</button>
+        </div>
+      ) : (
+        <div className="mb-4 flex gap-3">
+          <button type="button" onClick={() => start(true)} disabled={busy} data-testid="backfill-preview"
+            className="rounded border border-blue-300 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+            Vorschau (nichts speichern)
+          </button>
+          <button type="button" onClick={() => start(false)} disabled={busy || !state?.pending} data-testid="backfill-start"
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            Nachrüstung starten
+          </button>
+        </div>
+      )}
+
+      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+
+      {hasRun && !state?.running && (
+        <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700" data-testid="backfill-result">
+          <p className="mb-1 font-medium">
+            {state?.dry_run ? "Vorschau (nichts gespeichert)" : state?.cancelled ? "Abgebrochen" : "Fertig"}:{" "}
+            {processed.toLocaleString("de-DE")} Beleg(e) geprüft
+          </p>
+          <ul className="list-inside list-disc">
+            {Object.entries(state?.outcomes ?? {}).map(([k, n]) => (
+              <li key={k}>{OUTCOME_LABELS[k] ?? k}: {n.toLocaleString("de-DE")}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-gray-500">
+            {(state?.filled_prices ?? 0).toLocaleString("de-DE")} Gesamtpreise ergänzt, {(state?.corrections ?? 0).toLocaleString("de-DE")} Korrekturen
+            {(state?.error_count ?? 0) > 0 && ` · ${state?.error_count} Fehler`}
+          </p>
+          {state?.errors?.slice(0, 5).map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -347,6 +461,8 @@ export default function AutomationSettingsPage() {
       </form>
 
       <PdfTrimSettings />
+
+      <ValidationBackfill />
     </div>
   );
 }

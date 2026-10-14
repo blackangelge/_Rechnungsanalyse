@@ -430,6 +430,7 @@ def update_validation(
     doc_id: int,
     validation: dict,
     corrected_positions: list[dict] | None = None,
+    commit: bool = True,
 ) -> InvoiceExtraction | None:
     """
     Schreibt ein (neues) Prüfergebnis in die Extraktion und übernimmt die dabei entstandenen
@@ -458,8 +459,9 @@ def update_validation(
             extraction.total_amount_brutto = Decimal(str(corr["to"]))
     extraction.validation_status = validation.get("status")
     extraction.validation_details = json.dumps(validation, ensure_ascii=False)
-    db.commit()
-    db.refresh(extraction)
+    if commit:
+        db.commit()
+        db.refresh(extraction)
     return extraction
 
 
