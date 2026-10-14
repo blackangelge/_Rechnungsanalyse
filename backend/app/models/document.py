@@ -63,6 +63,12 @@ class Document(Base):
     used_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     used_doc_type_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     used_recheck_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bei der letzten Analyse verwendeter Workflow: Name + Graph-Snapshot (bleibt nach Ändern/Löschen des
+    # Workflows erhalten) und Ablaufprotokoll je Knoten (siehe services/workflow_runner.py)
+    used_workflow_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    used_workflow_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    used_workflow_graph: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workflow_trace: Mapped[str | None] = mapped_column(Text, nullable=True)
     soft_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -132,6 +138,25 @@ class Document(Base):
         except (TypeError, ValueError):
             return None
         return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _json_or_none(text):
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def used_workflow(self) -> dict | None:
+        """Graph-Snapshot des verwendeten Workflows (geparst) oder None."""
+        return self._json_or_none(self.used_workflow_graph)
+
+    @property
+    def workflow_run(self) -> list | None:
+        """Ablaufprotokoll des Workflows (je Knoten Status, Dauer, Detail) oder None."""
+        return self._json_or_none(self.workflow_trace)
 
     @property
     def has_extraction(self) -> bool:

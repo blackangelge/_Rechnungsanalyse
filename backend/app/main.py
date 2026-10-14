@@ -224,7 +224,7 @@ app.add_middleware(
 
 
 # ── Router registrieren ─────────────────────────────────────────────────────
-from app.routers import ai_clients, batch, document_history, document_pdf, documents, logs, sse, vendors
+from app.routers import ai_clients, batch, document_history, document_pdf, documents, logs, sse, vendors, workflows
 from app.routers import settings as settings_router
 from app.routers import imports as imports_router  # 'imports' ist ein Python-Keyword
 from app.routers import tasks
@@ -240,6 +240,7 @@ app.include_router(settings_router.router)             # /api/settings/*
 app.include_router(settings_router.doc_types_router)   # /api/document-types
 app.include_router(logs.router)                        # /api/logs/*
 app.include_router(vendors.router)                     # /api/vendors/*
+app.include_router(workflows.router)                   # /api/workflows/*
 app.include_router(batch.router)                       # /api/batch/*
 app.include_router(tasks.router)                       # /api/tasks/*
 app.include_router(export_settings_router.router)      # /api/settings/export

@@ -9,7 +9,7 @@ Bankverbindungen sind als separate VendorBankAccount-Einträge (1:N) gespeichert
 da ein Lieferant mehrere Bankkonten haben kann.
 """
 
-from sqlalchemy import Integer, String
+from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -39,6 +39,10 @@ class Vendor(Base):
     hrb_number: Mapped[str | None] = mapped_column(String(100), nullable=True)   # Handelsregisternummer (HRB)
     tax_number: Mapped[str | None] = mapped_column(String(100), nullable=True)   # Steuernummer
     vat_id: Mapped[str | None] = mapped_column(String(100), nullable=True)       # USt-IdNr. (Dedup-Priorität 2)
+    # Eigener Analyse-Workflow für diesen Lieferanten (None = Standard-Workflow bzw. klassischer Ablauf)
+    workflow_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True
+    )
 
     bank_accounts: Mapped[list["VendorBankAccount"]] = relationship(  # noqa: F821
         "VendorBankAccount", back_populates="vendor", cascade="all, delete-orphan"

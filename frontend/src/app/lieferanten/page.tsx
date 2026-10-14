@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Vendor, VendorUpdate, VendorBankAccount, vendorsApi, extractApiError } from "@/lib/api";
+import {
+  Vendor, VendorUpdate, VendorBankAccount, WorkflowListItem, vendorsApi, workflowsApi, extractApiError,
+} from "@/lib/api";
 
 function VendorEditModal({
   vendor,
@@ -118,6 +120,21 @@ export default function LieferantenPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+
+  useEffect(() => {
+    workflowsApi.list().then(setWorkflows).catch(() => { /* Spalte bleibt ohne Auswahl nutzbar */ });
+  }, []);
+
+  async function handleWorkflowChange(vendorId: number, value: string) {
+    try {
+      const updated = await vendorsApi.setWorkflow(vendorId, value ? Number(value) : null);
+      setVendors((prev) => prev.map((v) => (v.id === vendorId ? { ...v, workflow_id: updated.workflow_id } : v)));
+    } catch (err) {
+      setError(extractApiError(err, "Workflow konnte nicht zugewiesen werden"));
+    }
+  }
+
   async function handleDelete(id: number) {
     try {
       await vendorsApi.delete(id);
@@ -155,13 +172,14 @@ export default function LieferantenPage() {
                 <th className="px-4 py-3 text-left">USt-IdNr.</th>
                 <th className="px-4 py-3 text-left">IBAN</th>
                 <th className="px-4 py-3 text-left">BIC</th>
+                <th className="px-4 py-3 text-left" title="Analyse-Ablauf (Workflow) für diesen Lieferanten">Workflow</th>
                 <th className="px-4 py-3 text-right">Aktionen</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {vendors.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={9} className="px-4 py-6 text-center text-gray-400">
                     Noch keine Lieferanten vorhanden. Starte eine KI-Analyse um Lieferanten zu extrahieren.
                   </td>
                 </tr>
@@ -177,6 +195,19 @@ export default function LieferantenPage() {
                     <td className="px-4 py-3 text-gray-600 text-xs font-mono">{v.vat_id ?? "—"}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{bank?.iban ?? "—"}</td>
                     <td className="px-4 py-3 text-gray-600">{bank?.bic ?? "—"}</td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={v.workflow_id ?? ""}
+                        onChange={(e) => handleWorkflowChange(v.id, e.target.value)}
+                        aria-label={`Workflow für ${v.name}`}
+                        className={`rounded border px-2 py-1 text-xs focus:outline-none ${
+                          v.workflow_id ? "border-blue-300 bg-blue-50 text-blue-800" : "border-gray-300 text-gray-500"
+                        }`}
+                      >
+                        <option value="">Standard</option>
+                        {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
                         <button

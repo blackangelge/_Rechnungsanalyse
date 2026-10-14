@@ -445,6 +445,11 @@ export interface DocumentDetail extends DocumentItem {
   used_system_prompt?: string | null;
   used_doc_type_prompt?: string | null;
   used_recheck_prompt?: string | null;
+  /** Bei der letzten Analyse verwendeter Workflow (Name, Graph-Snapshot) + Ablaufprotokoll */
+  used_workflow_id?: number | null;
+  used_workflow_name?: string | null;
+  used_workflow?: WorkflowGraph | null;
+  workflow_run?: WorkflowTraceEntry[] | null;
 }
 
 /**
@@ -473,6 +478,8 @@ export interface AnalyzeRequest {
   document_ids: number[];
   ai_config_id?: number;
   system_prompt_id?: number;
+  /** Workflow (Analyse-Ablauf). Leer = automatisch: Lieferant → Standard → klassisch */
+  workflow_id?: number;
 }
 
 export const documentsApi = {
@@ -523,8 +530,14 @@ export const documentsApi = {
   /** Prüfung nach manueller Kontrolle als "geprüft" bestätigen */
   confirmValidation: (id: number) =>
     apiClient.post<DocumentDetail>(`/api/documents/${id}/validation/confirm`).then((r) => r.data),
-  enqueue: (documentIds: number[]) =>
-    apiClient.post<{ enqueued: number; message: string }>("/api/documents/enqueue", { document_ids: documentIds }).then((r) => r.data),
+  /** Dokumente in die Worker-Warteschlange einreihen; optional mit einem bestimmten Analyse-Workflow */
+  enqueue: (documentIds: number[], workflowId?: number) =>
+    apiClient
+      .post<{ enqueued: number; message: string }>("/api/documents/enqueue", {
+        document_ids: documentIds,
+        ...(workflowId ? { workflow_id: workflowId } : {}),
+      })
+      .then((r) => r.data),
 };
 
 // ─── Typen: Bildkonvertierungseinstellungen ───────────────────────────────────
@@ -736,6 +749,111 @@ export const logsApi = {
   kiStats: () => apiClient.get<KiStats>("/api/logs/ki-stats/").then((r) => r.data),
 };
 
+// ─── Typen: Workflows ─────────────────────────────────────────────────────────
+
+export type WorkflowNodeType =
+  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "validate" | "end";
+
+export interface WorkflowNodeConfig {
+  // trim_pages
+  max_pages?: number;
+  // detect_type / extract
+  system_prompt_id?: number | null;
+  ai_config_id?: number | null;
+  // validate
+  auto_correct?: boolean;
+  ai_recheck?: boolean;
+  // branch
+  field?: "document_type" | "supplier_name" | "page_count" | "validation_status";
+  op?: "equals" | "not_equals" | "contains" | "gt" | "lt" | "in";
+  value?: string;
+}
+
+export interface WorkflowGraphNode {
+  id: string;
+  type: WorkflowNodeType;
+  position: { x: number; y: number };
+  data: { label: string; config: WorkflowNodeConfig };
+}
+
+export interface WorkflowGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  /** "true" | "false" bei Verzweigungen, sonst null */
+  sourceHandle?: string | null;
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+}
+
+export interface WorkflowListItem {
+  id: number;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  node_count: number;
+  supplier_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Workflow {
+  id: number;
+  name: string;
+  description: string | null;
+  graph: WorkflowGraph;
+  is_default: boolean;
+  supplier_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowTemplate {
+  key: string;
+  name: string;
+  description: string;
+  graph: WorkflowGraph;
+}
+
+export interface WorkflowValidation {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/** Ein Eintrag im Ablaufprotokoll einer Analyse */
+export interface WorkflowTraceEntry {
+  node_id: string;
+  type: WorkflowNodeType;
+  label: string;
+  status: "ok" | "error";
+  duration_s: number;
+  detail: string | null;
+  branch: "true" | "false" | null;
+}
+
+export const workflowsApi = {
+  list: () => apiClient.get<WorkflowListItem[]>("/api/workflows/").then((r) => r.data),
+  templates: () => apiClient.get<WorkflowTemplate[]>("/api/workflows/templates").then((r) => r.data),
+  get: (id: number) => apiClient.get<Workflow>(`/api/workflows/${id}`).then((r) => r.data),
+  create: (data: { name: string; description?: string | null; template?: string; graph?: WorkflowGraph }) =>
+    apiClient.post<Workflow>("/api/workflows/", data).then((r) => r.data),
+  update: (id: number, data: { name: string; description?: string | null; graph: WorkflowGraph }) =>
+    apiClient.put<Workflow>(`/api/workflows/${id}`, data).then((r) => r.data),
+  delete: (id: number) => apiClient.delete(`/api/workflows/${id}`),
+  validate: (graph: WorkflowGraph) =>
+    apiClient.post<WorkflowValidation>("/api/workflows/validate", { graph }).then((r) => r.data),
+  setDefault: (id: number) =>
+    apiClient.post<Workflow>(`/api/workflows/${id}/set-default`).then((r) => r.data),
+  clearDefault: (id: number) =>
+    apiClient.post<Workflow>(`/api/workflows/${id}/clear-default`).then((r) => r.data),
+  duplicate: (id: number) =>
+    apiClient.post<Workflow>(`/api/workflows/${id}/duplicate`).then((r) => r.data),
+};
+
 // ─── Typen: Lieferanten (Vendors) ────────────────────────────────────────────
 
 export interface VendorBankAccount {
@@ -755,6 +873,8 @@ export interface Vendor {
   hrb_number: string | null;
   tax_number: string | null;
   vat_id: string | null;
+  /** Eigener Analyse-Workflow dieses Lieferanten (null = Standard) */
+  workflow_id?: number | null;
   bank_accounts: VendorBankAccount[];
 }
 
@@ -775,6 +895,9 @@ export const vendorsApi = {
   update: (id: number, data: VendorUpdate) =>
     apiClient.put<Vendor>(`/api/vendors/${id}/`, data).then((r) => r.data),
   delete: (id: number) => apiClient.delete(`/api/vendors/${id}/`),
+  /** Analyse-Workflow des Lieferanten festlegen (null = Standard-Workflow) */
+  setWorkflow: (id: number, workflow_id: number | null) =>
+    apiClient.put<Vendor>(`/api/vendors/${id}/workflow`, { workflow_id }).then((r) => r.data),
 };
 
 // ─── Typen: SSE-Fortschritts-Event ───────────────────────────────────────────

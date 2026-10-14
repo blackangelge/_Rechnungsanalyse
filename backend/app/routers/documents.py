@@ -249,6 +249,8 @@ class AnalyzeRequest(BaseModel):
     document_ids: list[int]
     ai_config_id: Optional[int] = None
     system_prompt_id: Optional[int] = None
+    # Optional: Workflow für diese Analyse (sonst automatisch: Lieferant → Standard → klassisch)
+    workflow_id: Optional[int] = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -262,6 +264,8 @@ class EnqueueRequest(BaseModel):
     """Request-Body für POST /api/documents/enqueue."""
 
     document_ids: list[int]  # Liste der Dokument-IDs, die in die Warteschlange eingereiht werden sollen
+    # Optional: Workflow, der für diese Analyse gelten soll (sonst automatisch: Lieferant → Standard → klassisch)
+    workflow_id: int | None = None
 
 
 class EnqueueResponse(BaseModel):
@@ -312,6 +316,8 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
     # Mindestens eine ID muss angegeben sein
     if not payload.document_ids:
         raise HTTPException(status_code=400, detail="Keine Dokument-IDs angegeben.")
+    if payload.workflow_id is not None and crud.workflow.get_by_id(db, payload.workflow_id) is None:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
 
     count = 0    # Anzahl neu angelegter Tasks
     skipped = 0  # Anzahl übersprungener Dokumente (bereits in Warteschlange)
@@ -350,9 +356,12 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
         # ── Schritt 2: Neuen WorkflowTask anlegen ────────────────────────────
         # workflow_id: UUID zur Gruppierung zusammengehöriger Tasks
         # (hier jeder Task einzeln, da direkt vom Nutzer ausgelöst)
+        task_payload: dict = {"kind": "process_document", "document_id": doc_id}
+        if payload.workflow_id:
+            task_payload["workflow_id"] = payload.workflow_id
         task = WorkflowTask(
             workflow_id=str(uuid.uuid4()),
-            payload={"kind": "process_document", "document_id": doc_id},
+            payload=task_payload,
             status="pending",   # Worker holt sich pending-Tasks via SKIP LOCKED
         )
         db.add(task)
@@ -477,6 +486,8 @@ async def analyze_documents(
     # ── Schritt 1: Eingabe prüfen ────────────────────────────────────────────
     if not payload.document_ids:
         raise HTTPException(status_code=400, detail="Keine Dokument-IDs angegeben")
+    if payload.workflow_id is not None and crud.workflow.get_by_id(db, payload.workflow_id) is None:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
 
     # ── Schritt 2: KI-Konfiguration bestimmen ────────────────────────────────
     ai_config = None
@@ -542,6 +553,7 @@ async def analyze_documents(
         document_ids=valid_ids,
         ai_config_id=ai_config_id,
         system_prompt_id=payload.system_prompt_id,
+        workflow_id=payload.workflow_id,
     ))
 
     return AnalyzeResponse(
@@ -1039,6 +1051,7 @@ async def _run_analysis(
     document_ids: list[int],
     ai_config_id: int,
     system_prompt_id: int | None,
+    workflow_id: int | None = None,
 ) -> None:
     """
     Analysiert eine Liste von Dokumenten SEQUENZIELL (eines nach dem anderen).
@@ -1070,7 +1083,7 @@ async def _run_analysis(
     for doc_id in document_ids:
         try:
             # Ein Dokument vollständig analysieren bevor das nächste startet
-            await _analyze_single(doc_id, ai_config_id, system_prompt_id)
+            await _analyze_single(doc_id, ai_config_id, system_prompt_id, workflow_id)
         except Exception as exc:
             # Unerwarteter Fehler außerhalb der normalen Fehlerbehandlung
             # (sollte nicht vorkommen, aber sicherheitshalber abgefangen)
@@ -1180,6 +1193,40 @@ def _db_prepare_pdf(
         db.close()
 
 
+def _db_prepare_for_capacity(doc_id: int, explicit_workflow_id: int | None) -> None:
+    """
+    Vorbereitung VOR der Kapazitätsprüfung des Workers (sync, für asyncio.to_thread): wendet das
+    automatische Kürzen an, damit eine lange PDF nicht fälschlich als „zu groß für alle KI-Server" hängen bleibt.
+
+      • Läuft für das Dokument ein Workflow: nur dessen führende „PDF kürzen"-Knoten zählen
+        (die globale Auto-Kürzen-Einstellung gilt im Workflow-Modus nicht).
+      • Sonst gilt die globale Einstellung (Einstellungen → Automatisierung).
+    Fehler werden nie weitergereicht — die Analyse wiederholt das Kürzen selbst.
+    """
+    from app.models.document import Document as DocModel
+    from app.services import workflow_service
+    try:
+        workflow = _db_resolve_workflow(doc_id, explicit_workflow_id)
+        if workflow is None:
+            _db_prepare_pdf(doc_id, "", None, True)
+            return
+        limit = workflow_service.leading_trim_pages(workflow["graph"])
+        if not limit:
+            return
+        db = SessionLocal()
+        try:
+            doc = db.get(DocModel, doc_id)
+            if doc is not None:
+                pdf_edit_service.auto_trim(db, doc, limit)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Vorab-Kürzen (Workflow) für #%d fehlgeschlagen: %s", doc_id, exc)
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Vorbereitung vor der Kapazitätsprüfung für #%d fehlgeschlagen: %s", doc_id, exc)
+
+
 def _db_save_used_prompts(
     doc_id: int, system_prompt: str | None, doc_type_prompt: str | None
 ) -> None:
@@ -1215,9 +1262,11 @@ async def _plausibility_pass(
     order_positions: list,
     raw_response: str,
     ki_stats: dict,
+    auto_correct: bool = True,
+    ai_recheck: bool = True,
 ) -> tuple[dict, list, str, dict, dict | None]:
     """
-    Plausibilitätsprüfung in drei Stufen:
+    Plausibilitätsprüfung in drei Stufen (Stufe 1 und 2 lassen sich im Workflow abschalten):
       1. rechnerische Prüfung inkl. automatischer Einheiten-Korrektur (ohne KI)
       2. bei Auffälligkeiten: zweite KI-Abfrage mit Prüfhinweisen
       3. besteht auch diese nicht: Status "needs_review" (manuelle Bearbeitung)
@@ -1232,6 +1281,7 @@ async def _plausibility_pass(
         return await _plausibility_pass_inner(
             doc_id, images_b64, config_proxy, base_prompt,
             extracted_fields, order_positions, raw_response, ki_stats,
+            auto_correct, ai_recheck,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Plausibilitätsprüfung #%d fehlgeschlagen: %s", doc_id, exc)
@@ -1241,14 +1291,15 @@ async def _plausibility_pass(
 async def _plausibility_pass_inner(
     doc_id, images_b64, config_proxy, base_prompt,
     extracted_fields, order_positions, raw_response, ki_stats,
+    auto_correct=True, ai_recheck=True,
 ):
     ps = plausibility_service
     result = await asyncio.to_thread(
-        ps.validate_invoice, extracted_fields, order_positions, _parse_raw(raw_response), True
+        ps.validate_invoice, extracted_fields, order_positions, _parse_raw(raw_response), auto_correct
     )
     validation = result.to_dict()
     validation["method"] = "rules"
-    if result.status != ps.STATUS_NEEDS_REVIEW:
+    if result.status != ps.STATUS_NEEDS_REVIEW or not ai_recheck:
         return extracted_fields, order_positions, raw_response, ki_stats, validation
 
     # ── Stufe 2: zweite KI-Abfrage ───────────────────────────────────────────
@@ -1285,10 +1336,49 @@ async def _plausibility_pass_inner(
     return extracted_fields, order_positions, raw_response, merged_stats, validation
 
 
+def _db_resolve_workflow(doc_id: int, explicit_id: int | None) -> dict | None:
+    """
+    Wählt den Workflow für ein Dokument (sync, für asyncio.to_thread):
+      1. explizit gewählter Workflow (Payload der Warteschlange)
+      2. Workflow des (bereits bekannten) Lieferanten — greift bei erneuter Analyse; der Lieferant wird
+         über den extrahierten Namen (`invoice_extractions.vendor_id`, ohne Groß/Klein) in der Lieferantentabelle gesucht
+      3. Standard-Workflow
+    Gibt None zurück, wenn keiner existiert → klassischer Ablauf.
+    """
+    from sqlalchemy import func as _func
+    from app.models.document import Document as _DocModel
+    from app.models.vendor import Vendor as _Vendor
+    db = SessionLocal()
+    try:
+        wf = crud.workflow.get_by_id(db, explicit_id) if explicit_id else None
+        source = "gewählt"
+        if wf is None:
+            doc = db.get(_DocModel, doc_id)
+            name = (doc.supplier_name or "").strip() if doc is not None else ""
+            vendor = (
+                db.query(_Vendor)
+                .filter(_func.lower(_Vendor.name) == name.lower(), _Vendor.workflow_id.isnot(None))
+                .first()
+                if name else None
+            )
+            if vendor is not None:
+                wf = crud.workflow.get_by_id(db, vendor.workflow_id)
+                source = f"Lieferant {vendor.name}"
+        if wf is None:
+            wf = crud.workflow.get_default(db)
+            source = "Standard"
+        if wf is None:
+            return None
+        return {"id": wf.id, "name": wf.name, "graph": json.loads(wf.graph), "source": source}
+    finally:
+        db.close()
+
+
 async def _analyze_single(
     doc_id: int,
     ai_config_id: int,
     system_prompt_id: int | None,
+    workflow_id: int | None = None,
 ) -> str:
     """
     Schutzschicht um _analyze_single_inner: verhindert parallele Doppelverarbeitung.
@@ -1323,7 +1413,7 @@ async def _analyze_single(
     _analyzing_docs.add(doc_id)
     try:
         # Eigentliche Analyse ausführen
-        return await _analyze_single_inner(doc_id, ai_config_id, system_prompt_id)
+        return await _analyze_single_inner(doc_id, ai_config_id, system_prompt_id, workflow_id)
     finally:
         # Auch bei Exceptions: Dokument aus dem Schutz-Set entfernen,
         # damit es später erneut analysiert werden kann
@@ -1334,6 +1424,7 @@ async def _analyze_single_inner(
     doc_id: int,
     ai_config_id: int,
     system_prompt_id: int | None,
+    workflow_id: int | None = None,
 ) -> str:
     """
     Eigentliche KI-Analyse-Logik für ein einzelnes Dokument (nach dem Duplikat-Check).
@@ -1355,11 +1446,22 @@ async def _analyze_single_inner(
         system_prompt_id: ID des Extraktionsprompts (None = Standard-Prompt).
                            Wird erst in _db_analyze_read() in Text aufgelöst,
                            nicht schon vom Aufrufer — siehe dortige Begründung.
+        workflow_id:      Optional explizit gewählter Workflow (sonst: Lieferant → Standard → klassisch).
 
     Returns:
         "ok"             — Analyse abgeschlossen (Dokument ist jetzt done oder error)
         "ai_unavailable" — KI-Endpunkt nicht erreichbar (Task wird re-queued)
     """
+    # ═══════════════════════════════════════════════════════════════════════════
+    # WORKFLOW-AUSWAHL: gewählter → Lieferanten- → Standard-Workflow, sonst klassischer Ablauf
+    # ═══════════════════════════════════════════════════════════════════════════
+    workflow = await asyncio.to_thread(_db_resolve_workflow, doc_id, workflow_id)
+    if workflow is not None:
+        from app.services import workflow_runner
+        return await workflow_runner.analyze_with_workflow(
+            doc_id, ai_config_id, system_prompt_id, workflow
+        )
+
     # ═══════════════════════════════════════════════════════════════════════════
     # ANALYSE-SCHRITT 1: DB-Daten lesen
     # ═══════════════════════════════════════════════════════════════════════════

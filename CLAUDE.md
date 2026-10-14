@@ -141,6 +141,8 @@ app/
     │                       # api_url wird über app.services.ai_url.build_ai_url() gebaut
     ├── plausibility_service.py  # Plausibilitätsprüfung (reine Rechenlogik, keine DB/Netzwerk) — siehe
     │                       #   Abschnitt „Plausibilitätsprüfung"
+    ├── workflow_service.py  # Workflow-Engine (reine Logik): Graph-Validierung, Bedingungen, Ablaufschleife, Vorlagen
+    ├── workflow_runner.py   # Knoten-Implementierungen + analyze_with_workflow (nutzt die Helfer aus routers/documents.py)
     ├── pdf_edit_service.py  # PDF-Bearbeitung mit Versionierung (Seiten entfernen, Wiederherstellen, Auto-Kürzen)
     ├── ai_url.py            # build_ai_url(ip_address, port) — EINZIGE korrekte Stelle für die
     │                       #   KI-Endpunkt-URL-Bildung, genutzt von ai_service.py, ai_test_service.py
@@ -182,7 +184,8 @@ alembic/
     │                               #   validation_details, documents.used_system_prompt/_doc_type_prompt/
     │                               #   _recheck_prompt
     ├── 0008_analysis_history.py    # analysis_history-Tabelle, automation_settings.analysis_history_keep (Standard 3)
-    └── 0009_pdf_versions.py        # document_versions, pdf_settings (Singleton), documents.pdf_version/analyzed_pdf_version
+    ├── 0009_pdf_versions.py        # document_versions, pdf_settings (Singleton), documents.pdf_version/analyzed_pdf_version
+    └── 0010_workflows.py           # workflows, vendor.workflow_id, documents.used_workflow_*/workflow_trace
 tests/                      # pytest (SQLite statt PostgreSQL, siehe tests/conftest.py — JSONB wird dort
                             #   als JSON kompiliert): `cd backend && pip install -r requirements-dev.txt && pytest`
 ```
@@ -687,6 +690,55 @@ Endpunkte (`/api/documents`): `GET /{id}/versions`, `GET /{id}/versions/{n}/prev
 1-basiert), `POST /{id}/pages/remove` (`remove_pages` ODER `keep_pages`, optional `note`), `POST /{id}/versions/{n}/restore`,
 `POST /auto-trim`; `GET|PUT /api/settings/pdf` (auch im Einstellungs-Backup).
 
+### Workflows (`services/workflow_service.py`, `services/workflow_runner.py`, `routers/workflows.py`)
+
+Ein **Workflow** legt als Graph fest, welche Schritte die KI-Analyse eines Belegs durchläuft und welche Systemprompts dabei gelten (Editor wie
+bei n8n, siehe Frontend). Er ist optional: **ohne Standard-Workflow läuft der klassische Ablauf** (`_analyze_single_inner`, Phasen 1–4).
+
+**Auswahl** (`_db_resolve_workflow` in `documents.py`, pro Dokument, in `_analyze_single_inner` ganz am Anfang): 1. explizit gewählter
+Workflow (`workflow_id` im Task-Payload bzw. in `EnqueueRequest`/`AnalyzeRequest`) → 2. Workflow des Lieferanten (`vendor.workflow_id`; der
+Lieferant wird über den **extrahierten Namen** `invoice_extractions.vendor_id` — ohne Groß/Klein — in der Tabelle `vendor` gesucht, greift also nur,
+wenn der Beleg schon einmal analysiert wurde, z.B. bei erneuter Analyse; es gibt in diesem Projekt keine FK von der Extraktion zum Lieferanten) →
+3. Standard-Workflow (`workflows.is_default`, höchstens einer) → 4. klassischer Ablauf.
+
+**Worker-Integration:** Der Task-Payload (`workflow_tasks.payload`) transportiert nur die ID (`workflow_id`, optional) — `AIDispatcherClient._handle_process_document`
+reicht sie an `_analyze_single(doc_id, server.id, system_prompt_id, workflow_id)` weiter. Der Workflow-Lauf teilt die KI-Konfiguration (`server.id`) des
+Workers; ein Knoten kann eine andere KI-Konfiguration erzwingen (`ai_config_id`). **KI-Verbindungsfehler** (Timeout/429/Netz) in einem Knoten brechen den Lauf mit
+`ai_unavailable` ab (Worker reiht neu ein, Beleg wird **nicht** auf `error` gesetzt) — wie im klassischen Ablauf.
+
+**Kürzen vor der Kapazitätsprüfung:** `worker.prepare_pdf_for_task` → `documents._db_prepare_for_capacity`: im Workflow-Modus zählen nur die **führenden**
+„PDF kürzen"-Knoten (`workflow_service.leading_trim_pages`, direkt hinter Start), sonst die globale Auto-Kürzen-Einstellung. Die globale Einstellung gilt im Workflow-Modus nicht.
+
+**Graph** (JSON in `workflows.graph`, React-Flow-kompatibel): `{"nodes": [{id, type, position, data: {label, config}}], "edges": [{id, source, target, sourceHandle}]}`.
+
+| Typ | Konfiguration | Wirkung |
+|---|---|---|
+| `start` | – | Einstieg (genau einer) |
+| `trim_pages` | `max_pages` | neue PDF-Version mit den ersten N Seiten (`pdf_edit_service.auto_trim`) |
+| `detect_type` | `system_prompt_id?` | Dokumententyp erkennen (leer = Dokumententyp-Prompt aus den Einstellungen; **ohne beides Fehler** — es gibt keinen Code-Fallback) |
+| `branch` | `field`, `op`, `value` | Ja/Nein-Weiche (`true`/`false`); Felder `document_type`, `supplier_name`, `page_count`, `validation_status` |
+| `extract` | `system_prompt_id?`, `ai_config_id?` | Rechnungsdaten extrahieren (leer = gewählter/Standard-Prompt bzw. -KI) |
+| `validate` | `auto_correct`, `ai_recheck` | Plausibilitätsprüfung (`_plausibility_pass`), Stufen einzeln abschaltbar |
+| `end` | – | Ende |
+
+Regeln (`validate_graph`, beim Speichern erzwungen → HTTP 422): genau ein Start ohne Eingang; jeder Ausgang höchstens **eine** Kante (sequenzieller Ablauf);
+keine Zyklen; Verzweigung nur mit `true`/`false`; Operatoren passend zum Feld. Nur Warnungen: nicht erreichbare Knoten, offene Verzweigungsausgänge, keine
+Extraktion, Prüfung vor Extraktion, fehlende Prompt-/KI-IDs. Fehlt eine Kante, endet der Ablauf dort.
+
+**Nachvollziehbarkeit** (am Dokument): `used_workflow_id/_name`, `used_workflow_graph` (Snapshot, bleibt nach Ändern/Löschen des Workflows erhalten),
+`workflow_trace` (pro Knoten: Status, Dauer, Detail, bei Weiche der Ausgang), dazu `used_*_prompt`. Beim Start jeder Analyse werden diese Felder zurückgesetzt
+(`save_used_prompts`); sie sind Teil des Snapshots der **Analyse-Historie**. Fehler in einem Knoten → Status `error` mit Knotenname in `documents.raw_response`.
+
+Endpunkte: `GET|POST /api/workflows`, `GET /api/workflows/templates` (Standard, Nur Extraktion, Erst kürzen), `POST /api/workflows/validate`,
+`GET|PUT|DELETE /api/workflows/{id}`, `POST /{id}/set-default|clear-default|duplicate`, `PUT /api/vendors/{id}/workflow`. Workflow löschen setzt Lieferanten-Zuordnungen auf `NULL`.
+
+**Neuer Knotentyp:** Konfigurationsmodell in `CONFIG_MODELS` + Eintrag in `NODE_TYPES`/`output_handles` (`workflow_service.py`), Handler in `HANDLERS`
+(`workflow_runner.py`), Darstellung in `components/workflows/nodeMeta.ts` und Formular im `Inspector` (`WorkflowEditor.tsx`), Typ in `WorkflowNodeType` (`api.ts`).
+
+Frontend: `/settings/workflows` (Liste, Standard setzen, duplizieren, aus Vorlage) und `/settings/workflows/[id]` (React-Flow-Editor `@xyflow/react`, exakt
+gepinnt: Palette, Zeichenfläche, Eigenschaften je Knoten, Live-Prüfung); Belege: Dropdown „Workflow" in der Analyse-Leiste, KI-Modal zeigt Workflow + Ablaufprotokoll
+(`UsedWorkflow`); Lieferanten: Spalte „Workflow". **Neues npm-Paket → nach dem Update den Frontend-Container neu starten** (`npm install` läuft im Startkommando).
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:
@@ -1052,7 +1104,7 @@ Behandelt sowohl `number` als auch Strings wie `"719,99 €"`:
 ### Wichtige Abhängigkeiten
 
 ```
-next 16.2.4, react 19, typescript 6, tailwindcss 4, axios
+next 16.2.4, react 19, typescript 6, tailwindcss 4, axios, @xyflow/react 12.12.0
 ```
 
 ---
