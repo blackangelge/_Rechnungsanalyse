@@ -23,6 +23,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Pager from "@/components/common/Pager";
 import AnalysisHistoryPanel from "@/components/belege/AnalysisHistoryPanel";
 import PdfEditModal from "@/components/belege/PdfEditModal";
 import {
@@ -44,8 +45,8 @@ import {
 
 // ─── Konstante ───────────────────────────────────────────────────────────────
 
-/** Maximale Anzahl Dokumente pro Seite in der Tabelle. */
-const PAGE_SIZE = 100;
+/** Standard-Seitengröße der serverseitig paginierten Tabelle (wählbar 25–200). */
+const DEFAULT_PAGE_SIZE = 50;
 
 // ─── Hilfsfunktionen ────────────────────────────────────────────────────────
 
@@ -272,20 +273,24 @@ export default function BelegePage() {
   const [activeFilters, setActiveFilters] = useState<DocumentFilter>({});
 
   // Daten
+  // Serverseitig paginiert: nur die aktuelle Seite liegt im Browser
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [yearOptions, setYearOptions] = useState<number[]>([]);
+  const [supplierOptions, setSupplierOptions] = useState<string[]>([]);
+  // Aktuelle Seite/Größe/Filter für Timer und Callbacks (Refs, damit der Auto-Refresh die Seite NICHT zurücksetzt)
+  const pageRef = useRef(0);
+  const pageSizeRef = useRef(DEFAULT_PAGE_SIZE);
+  const activeFiltersRef = useRef<DocumentFilter>({});
   const [batches, setBatches] = useState<ImportBatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  // Erst nach explizitem "Filter anwenden" laden — bei sehr vielen Belegen (z.B. 40.000+)
-  // würde ein automatisches Laden aller Dokumente beim Seitenaufruf hängen/fehlschlagen.
-  const [hasLoaded, setHasLoaded] = useState(false);
 
   // Auswahl
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(0);
 
   // PDF-Vorschau (Split-View)
   const [previewDocId, setPreviewDocId] = useState<number | null>(null);
@@ -311,20 +316,32 @@ export default function BelegePage() {
   // Analyse
   const [analyzing, setAnalyzing] = useState(false);
 
-  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // ─── Laden ──────────────────────────────────────────────────────────────
 
-  const loadDocuments = useCallback(async (filters: DocumentFilter) => {
+  /**
+   * Lädt eine Seite der Belegliste. Ohne `pageIdx` bleibt die AKTUELLE Seite (pageRef) erhalten —
+   * so setzt der Auto-Refresh eine geblätterte Liste nicht auf Seite 1 zurück.
+   */
+  const loadDocuments = useCallback(async (filters: DocumentFilter, pageIdx?: number): Promise<DocumentItem[]> => {
     setLoading(true);
     setError(null);
     try {
-      const docs = await documentsApi.list(filters);
-      setDocuments(docs);
-      setCurrentPage(0);
+      let target = pageIdx ?? pageRef.current;
+      let res = await documentsApi.listPage(filters, target, pageSizeRef.current);
+      const lastPage = Math.max(0, Math.ceil(res.total / pageSizeRef.current) - 1);
+      if (target > lastPage) {          // z.B. nach dem Löschen des letzten Belegs der letzten Seite
+        target = lastPage;
+        res = await documentsApi.listPage(filters, target, pageSizeRef.current);
+      }
+      pageRef.current = target;
+      setPage(target);
+      setDocuments(res.items);
+      setTotal(res.total);
+      return res.items;
     } catch (err) {
       setError(extractApiError(err, "Fehler beim Laden der Belege"));
       console.error(err);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -337,6 +354,13 @@ export default function BelegePage() {
     } catch (err) {
       console.error("Fehler beim Laden der Imports:", err);
     }
+    try {
+      const options = await documentsApi.filterOptions();
+      setYearOptions(options.years);
+      setSupplierOptions(options.suppliers);
+    } catch (err) {
+      console.error("Fehler beim Laden der Filter-Optionen:", err);
+    }
     // Workflows sind optional — ohne Workflows bleibt die Auswahl leer ("automatisch")
     try {
       setWorkflows(await workflowsApi.list());
@@ -346,20 +370,43 @@ export default function BelegePage() {
   }, []);
 
   useEffect(() => {
-    loadOptions();
-  }, [loadOptions]);
-
-  // Auto-Refresh bei processing-Dokumenten — nur wenn bereits geladen wurde
-  useEffect(() => {
-    const hasProcessing = hasLoaded && documents.some((d) => d.status === "processing");
-    if (hasProcessing && !refreshTimerRef.current) {
-      refreshTimerRef.current = setInterval(() => loadDocuments(activeFilters), 5000);
-    } else if (!hasProcessing && refreshTimerRef.current) {
-      clearInterval(refreshTimerRef.current);
-      refreshTimerRef.current = null;
+    // Direktlink, z.B. /belege?doc_id=42 (aus den Tasks/Logs): ID ins Suchfeld "Beleg-ID" eintragen und
+    // sofort danach filtern. Auch der ältere Parameter ?id= wird verstanden. Optional include_deleted=1.
+    // (Aus window.location statt useSearchParams gelesen: kein Suspense nötig, und der erste Render
+    // bleibt identisch zum Server-Render → keine Hydration-Abweichung.)
+    const params = new URLSearchParams(window.location.search);
+    const idParam = (params.get("doc_id") ?? params.get("id") ?? "").trim();
+    const initial: DocumentFilter = {};
+    if (/^\d+$/.test(idParam)) {
+      initial.doc_id = parseInt(idParam, 10);
+      setFilterDocId(idParam);
+      if (params.get("include_deleted") === "1") {
+        initial.include_deleted = true;
+        setIncludeDeleted(true);
+      }
+      setActiveFilters(initial);
     }
-    return () => { if (refreshTimerRef.current) { clearInterval(refreshTimerRef.current); refreshTimerRef.current = null; } };
-  }, [documents, activeFilters, loadDocuments, hasLoaded]);
+    activeFiltersRef.current = initial;
+    loadDocuments(initial, 0);      // nur die erste Seite — schnell, auch bei sehr vielen Belegen
+    loadOptions();
+  }, [loadDocuments, loadOptions]);
+
+  // Auto-Refresh, solange Dokumente verarbeitet werden. Lädt die AKTUELLE Seite neu (pageRef) —
+  // ein Seitenwechsel wird dadurch nicht zurückgesetzt. Geprüft wird auch, ob irgendwo (nicht nur
+  // auf dieser Seite) noch Dokumente verarbeitet werden (z.B. nach "KI-Analyse starten").
+  const [watchProcessing, setWatchProcessing] = useState(false);
+  const hasProcessingOnPage = documents.some((d) => d.status === "processing");
+  useEffect(() => {
+    if (!hasProcessingOnPage && !watchProcessing) return;
+    const timer = setInterval(async () => {
+      await loadDocuments(activeFiltersRef.current);
+      try {
+        const busy = await documentsApi.listPage({ status: "processing" }, 0, 1);
+        if (busy.total === 0) setWatchProcessing(false);
+      } catch { /* nächster Tick */ }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [hasProcessingOnPage, watchProcessing, loadDocuments]);
 
   // ─── Filter-Logik ─────────────────────────────────────────────────────────
 
@@ -388,13 +435,25 @@ export default function BelegePage() {
     return f;
   }
 
+  /** Hält doc_id/include_deleted in der Adresszeile synchron (teilbar, Neuladen-sicher) */
+  function syncUrl(f: DocumentFilter) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("id");
+    if (f.doc_id !== undefined && !Number.isNaN(f.doc_id)) url.searchParams.set("doc_id", String(f.doc_id));
+    else url.searchParams.delete("doc_id");
+    if (f.doc_id !== undefined && f.include_deleted) url.searchParams.set("include_deleted", "1");
+    else url.searchParams.delete("include_deleted");
+    window.history.replaceState(null, "", url.pathname + url.search);
+  }
+
   function applyFilters() {
     const f = buildFilters();
+    syncUrl(f);
     setActiveFilters(f);
+    activeFiltersRef.current = f;
     setSelectedIds(new Set());
     setPreviewDocId(null);
-    setHasLoaded(true);
-    loadDocuments(f);
+    loadDocuments(f, 0);
   }
 
   function resetFilters() {
@@ -402,13 +461,39 @@ export default function BelegePage() {
     setFilterTotalMin(""); setFilterTotalMax(""); setFilterPageMin(""); setFilterPageMax("");
     setSelectedBatchIds(new Set()); setSelectedDocTypeIds(new Set()); setIncludeDeleted(false);
     setFilterKi(""); setFilterSupplierName(""); setFilterDocId(""); setFilterValidation("");
-    setActiveFilters({});
+    const f: DocumentFilter = {};
+    syncUrl(f);
+    setActiveFilters(f);
+    activeFiltersRef.current = f;
     setSelectedIds(new Set());
     setPreviewDocId(null);
-    // Zurück in den Ausgangszustand — Belege werden erst nach erneutem "Filter anwenden"
-    // wieder geladen, kein automatisches Nachladen aller Dokumente.
-    setDocuments([]);
-    setHasLoaded(false);
+    loadDocuments(f, 0);
+  }
+
+  function goToPage(p: number) {
+    const last = Math.max(0, Math.ceil(total / pageSize) - 1);
+    const target = Math.min(Math.max(0, p), last);
+    setPreviewDocId(null);
+    loadDocuments(activeFilters, target);
+  }
+
+  async function changePageSize(size: number) {
+    pageSizeRef.current = size;                      // für das Laden sofort wirksam
+    await loadDocuments(activeFilters, 0);
+    setPageSize(size);                               // Anzeige erst umstellen, wenn die Daten dazu da sind
+  }
+
+  /** Alle Treffer (über alle Seiten) auswählen */
+  const [selectingAll, setSelectingAll] = useState(false);
+  async function selectAllHits() {
+    setSelectingAll(true);
+    try {
+      setSelectedIds(new Set(await documentsApi.ids(activeFilters)));
+    } catch (err) {
+      setError(extractApiError(err, "Treffer konnten nicht ausgewählt werden"));
+    } finally {
+      setSelectingAll(false);
+    }
   }
 
   // ─── Auswahl ──────────────────────────────────────────────────────────────
@@ -444,6 +529,7 @@ export default function BelegePage() {
       );
       setSuccessMsg(result.message);
       setSelectedIds(new Set());
+      setWatchProcessing(true);
       await loadDocuments(activeFilters);
     } catch (err: unknown) {
       setError(extractApiError(err, "Fehler beim Einreihen der KI-Analyse"));
@@ -566,9 +652,17 @@ export default function BelegePage() {
 
   async function navigateInfos(delta: number) {
     const idx = documents.findIndex((d) => d.id === infosDocId);
-    const nextIdx = idx + delta;
-    if (nextIdx < 0 || nextIdx >= documents.length) return;
-    await openView(documents[nextIdx].id, "infos");
+    if (idx < 0) return;
+    let target: DocumentItem | undefined = documents[idx + delta];
+    if (!target) {
+      // Seitengrenze: angrenzende Seite laden und am Rand weitermachen
+      const newPage = page + (delta > 0 ? 1 : -1);
+      if (newPage < 0 || newPage * pageSize >= total) return;
+      const docs = await loadDocuments(activeFilters, newPage);
+      target = delta > 0 ? docs[0] : docs[docs.length - 1];
+    }
+    if (!target) return;
+    await openView(target.id, "infos");
   }
 
   // ─── Ableitungen ──────────────────────────────────────────────────────────
@@ -576,17 +670,14 @@ export default function BelegePage() {
   const activeDocs = documents.filter((d) => !d.soft_deleted);
   const allSelected = activeDocs.length > 0 && selectedIds.size === activeDocs.length;
   const someSelected = selectedIds.size > 0 && selectedIds.size < activeDocs.length;
-  const availableYears = Array.from(
-    new Set(documents.map((d) => d.year).filter((y): y is number => y !== null))
-  ).sort((a, b) => b - a);
-  const availableSuppliers = Array.from(
-    new Set(documents.map((d) => d.supplier_name).filter((s): s is string => !!s))
-  ).sort((a, b) => a.localeCompare(b, "de"));
+  const availableYears = yearOptions;
+  const availableSuppliers = supplierOptions;
   const infosIdx = infosDocId !== null ? documents.findIndex((d) => d.id === infosDocId) : -1;
 
-  // Pagination
-  const totalPages = Math.ceil(documents.length / PAGE_SIZE);
-  const pagedDocs = documents.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+  // Pagination (serverseitig)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const rangeFrom = total === 0 ? 0 : page * pageSize + 1;
+  const rangeTo = Math.min((page + 1) * pageSize, total);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -781,16 +872,16 @@ export default function BelegePage() {
               <div className="h-5 w-px bg-gray-200" />
               {infosIdx >= 0 && (
                 <span className="text-sm text-gray-500">
-                  Beleg <span className="font-semibold text-gray-800">{infosIdx + 1}</span>
-                  <span className="text-gray-400"> / {documents.length}</span>
+                  Beleg <span className="font-semibold text-gray-800">{(page * pageSize + infosIdx + 1).toLocaleString("de-DE")}</span>
+                  <span className="text-gray-400"> / {total.toLocaleString("de-DE")}</span>
                 </span>
               )}
               <div className="ml-auto flex items-center gap-2">
-                <button onClick={() => navigateInfos(-1)} disabled={infosIdx <= 0 || viewLoading}
+                <button onClick={() => navigateInfos(-1)} disabled={page * pageSize + infosIdx <= 0 || viewLoading}
                   className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
                   ← Vorherige
                 </button>
-                <button onClick={() => navigateInfos(1)} disabled={infosIdx >= documents.length - 1 || viewLoading}
+                <button onClick={() => navigateInfos(1)} disabled={page * pageSize + infosIdx >= total - 1 || viewLoading}
                   className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
                   Nächste →
                 </button>
@@ -842,29 +933,14 @@ export default function BelegePage() {
               </div>
             )}
           </div>
-        ) : !hasLoaded ? (
-          /* ── Ausgangszustand: noch nicht geladen ── */
-          <div className="rounded-lg border border-dashed border-gray-300 bg-white px-6 py-16 text-center shadow-sm">
-            <p className="text-sm text-gray-500">
-              Belege werden erst nach Klick auf „Filter anwenden" geladen — bei sehr vielen
-              Dokumenten würde ein automatisches Laden aller Belege hängen bleiben.
-            </p>
-            <button
-              onClick={applyFilters}
-              className="mt-4 rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-            >
-              Filter anwenden
-            </button>
-          </div>
         ) : (
           <>
-            {/* Anzahl + Pagination-Info */}
-            <div className="mb-2 flex items-center justify-between text-sm text-gray-500">
-              <span>{loading ? "Lade..." : `${documents.length} Beleg${documents.length !== 1 ? "e" : ""} gefunden`}</span>
-              {totalPages > 1 && (
-                <span>Seite {currentPage + 1} von {totalPages} ({PAGE_SIZE} pro Seite)</span>
-              )}
-            </div>
+            {/* Anzahl + Blätterleiste (oben) */}
+            <Pager testId="pager-top" loading={loading} total={total} page={page} pageSize={pageSize}
+              totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo}
+              selectedCount={selectedIds.size} selectingAll={selectingAll}
+              onSelectAll={selectAllHits} onClearSelection={() => setSelectedIds(new Set())}
+              onPage={goToPage} onPageSize={changePageSize} />
 
             {/* Tabelle */}
             <div className={`overflow-x-auto rounded-lg border bg-white shadow-sm ${showPreview ? "w-1/2" : "w-full"}`}>
@@ -903,14 +979,14 @@ export default function BelegePage() {
                   {!loading && documents.length === 0 && (
                     <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">Keine Belege gefunden</td></tr>
                   )}
-                  {pagedDocs.map((doc) => {
+                  {documents.map((doc) => {
                     const isDeleted = doc.soft_deleted;
                     const isActivePreview = previewDocId === doc.id;
                     const isActiveInfos = infosDocId === doc.id;
                     const docTypeName = getDocTypeName(doc.document_type);
 
                     return (
-                      <tr key={doc.id}
+                      <tr key={doc.id} data-testid="row"
                         className={[
                           isDeleted ? "bg-red-50 opacity-60"
                             : isActiveInfos ? "bg-blue-100 ring-1 ring-inset ring-blue-200"
@@ -1050,54 +1126,12 @@ export default function BelegePage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="mt-4 flex items-center justify-center gap-2">
-                <button
-                  onClick={() => setCurrentPage(0)}
-                  disabled={currentPage === 0}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                >
-                  «
-                </button>
-                <button
-                  onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-                  disabled={currentPage === 0}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                >
-                  ‹
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i)
-                  .filter((i) => Math.abs(i - currentPage) <= 2)
-                  .map((i) => (
-                    <button
-                      key={i}
-                      onClick={() => setCurrentPage(i)}
-                      className={`rounded border px-3 py-1.5 text-sm transition-colors ${
-                        i === currentPage
-                          ? "border-blue-600 bg-blue-600 text-white"
-                          : "border-gray-300 text-gray-600 hover:bg-gray-50"
-                      }`}
-                    >
-                      {i + 1}
-                    </button>
-                  ))}
-                <button
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
-                  disabled={currentPage >= totalPages - 1}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                >
-                  ›
-                </button>
-                <button
-                  onClick={() => setCurrentPage(totalPages - 1)}
-                  disabled={currentPage >= totalPages - 1}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                >
-                  »
-                </button>
-              </div>
-            )}
+            {/* Blätterleiste (unten) */}
+            <div className="mt-3">
+              <Pager testId="pager-bottom" loading={loading} total={total} page={page} pageSize={pageSize}
+                totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo} compact
+                onPage={goToPage} onPageSize={changePageSize} />
+            </div>
 
             {/* PDF-Vorschau */}
             {showPreview && createPortal(

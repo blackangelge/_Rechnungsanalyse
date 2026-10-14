@@ -8,7 +8,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DocumentItem, documentsApi } from "@/lib/api";
 
 const PAGE_SIZE = 50;
@@ -46,6 +46,10 @@ export default function DocumentsTable({ documents, onRefresh }: Props) {
   const [page, setPage] = useState(0);
 
   const totalPages = Math.ceil(documents.length / PAGE_SIZE);
+  // Schrumpft die Liste (z.B. nach dem Löschen), nicht ins Leere zeigen — aber auch nie auf Seite 1 zurückspringen
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages - 1) setPage(totalPages - 1);
+  }, [totalPages, page]);
   const pageDocs = documents.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   async function saveComment(docId: number) {

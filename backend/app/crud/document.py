@@ -18,7 +18,8 @@ import json
 import logging
 from decimal import Decimal
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
+from sqlalchemy.orm import Session, defer, joinedload
 
 from app.models.document import Document
 from app.models.import_batch import ImportBatch
@@ -160,91 +161,135 @@ def get_by_id_with_details(db: Session, doc_id: int) -> Document | None:
     )
 
 
-def get_all_filtered(
-    db: Session,
-    company: str | None = None,
-    year: int | None = None,
-    status: str | None = None,
-    total_min: float | None = None,
-    total_max: float | None = None,
-    page_min: int | None = None,
-    page_max: int | None = None,
-    batch_ids: list[int] | None = None,
-    include_deleted: bool = False,
-    has_extraction: bool | None = None,
-    supplier_name_filter: str | None = None,
-    doc_id: int | None = None,
-    document_type_ids: list[int] | None = None,
-    validation_statuses: list[str] | None = None,
-) -> list[Document]:
+_FILTER_KEYS = (
+    "company", "year", "status", "total_min", "total_max", "page_min", "page_max", "batch_ids",
+    "include_deleted", "has_extraction", "supplier_name_filter", "doc_id", "document_type_ids",
+    "validation_statuses",
+)
+
+
+def _filtered_query(db: Session, **f):
     """
-    Gibt eine gefilterte und sortierte (ID desc) Dokumentliste zurück.
+    Basisabfrage mit allen Filtern (ohne Eager-Loading, Sortierung und Paginierung) — gemeinsam
+    für Liste, Zähler und ID-Liste, damit alle drei garantiert dieselben Treffer meinen.
 
-    Joins werden nur bei Bedarf durchgeführt (performance-optimiert):
-    - InvoiceExtraction: nur wenn total_min/max, has_extraction oder supplier_name gesetzt
-    - ImportBatch: nur wenn company oder year gesetzt
-
-    Für die Listenansicht werden nur batch + extraction geladen (kein joinedload von
-    order_positions oder token_counts — das käme nur bei get_by_id_with_details).
+    Für Betrags-, KI-, Lieferanten- und Prüfstatus-Filter wird ein Outer Join auf
+    invoice_extractions gemacht (1:1 → keine Zeilenvervielfachung); Firma/Jahr kommen aus dem Import.
     """
-    query = db.query(Document).options(
-        joinedload(Document.batch),
-        joinedload(Document.extraction),
-    )
+    unknown = set(f) - set(_FILTER_KEYS)
+    if unknown:
+        raise TypeError(f"Unbekannte Filter: {sorted(unknown)}")
+    g = f.get
+    query = db.query(Document)
 
-    if not include_deleted:
+    if not g("include_deleted"):
         query = query.filter(Document.soft_deleted == False)  # noqa: E712
 
-    if batch_ids:
-        query = query.filter(Document.batch_id.in_(batch_ids))
+    if g("batch_ids"):
+        query = query.filter(Document.batch_id.in_(g("batch_ids")))
 
     needs_join = (
-        total_min is not None
-        or total_max is not None
-        or has_extraction is not None
-        or supplier_name_filter is not None
-        or bool(validation_statuses)
+        g("total_min") is not None
+        or g("total_max") is not None
+        or g("has_extraction") is not None
+        or g("supplier_name_filter") is not None
+        or bool(g("validation_statuses"))
     )
     if needs_join:
         query = query.outerjoin(InvoiceExtraction, Document.id == InvoiceExtraction.document_id)
 
-    if total_min is not None:
-        query = query.filter(InvoiceExtraction.total_amount_brutto >= Decimal(str(total_min)))
-    if total_max is not None:
-        query = query.filter(InvoiceExtraction.total_amount_brutto <= Decimal(str(total_max)))
-
-    if has_extraction is True:
+    if g("total_min") is not None:
+        query = query.filter(InvoiceExtraction.total_amount_brutto >= Decimal(str(g("total_min"))))
+    if g("total_max") is not None:
+        query = query.filter(InvoiceExtraction.total_amount_brutto <= Decimal(str(g("total_max"))))
+    if g("has_extraction") is True:
         query = query.filter(InvoiceExtraction.id.isnot(None))
-    elif has_extraction is False:
+    elif g("has_extraction") is False:
         query = query.filter(InvoiceExtraction.id.is_(None))
+    if g("validation_statuses"):
+        query = query.filter(InvoiceExtraction.validation_status.in_(g("validation_statuses")))
+    # vendor_id ist der Lieferantenname-String in der Extraktion
+    if g("supplier_name_filter"):
+        query = query.filter(InvoiceExtraction.vendor_id.ilike(f"%{g('supplier_name_filter')}%"))
 
-    if validation_statuses:
-        query = query.filter(InvoiceExtraction.validation_status.in_(validation_statuses))
-
-    # vendor_id ist der Lieferantenname-String in der neuen Extraktion
-    if supplier_name_filter:
-        query = query.filter(InvoiceExtraction.vendor_id.ilike(f"%{supplier_name_filter}%"))
-
-    # company/year über Batch-Join filtern
-    if company or year is not None:
+    if g("company") or g("year") is not None:
         query = query.join(ImportBatch, Document.batch_id == ImportBatch.id)
-        if company:
-            query = query.filter(ImportBatch.company_name.ilike(f"%{company}%"))
-        if year is not None:
-            query = query.filter(ImportBatch.year == year)
+        if g("company"):
+            query = query.filter(ImportBatch.company_name.ilike(f"%{g('company')}%"))
+        if g("year") is not None:
+            query = query.filter(ImportBatch.year == g("year"))
 
-    if status:
-        query = query.filter(Document.status == status)
-    if page_min is not None:
-        query = query.filter(Document.page_count >= page_min)
-    if page_max is not None:
-        query = query.filter(Document.page_count <= page_max)
-    if doc_id is not None:
-        query = query.filter(Document.id == doc_id)
-    if document_type_ids:
-        query = query.filter(Document.document_type.in_(document_type_ids))
+    if g("status"):
+        query = query.filter(Document.status == g("status"))
+    if g("page_min") is not None:
+        query = query.filter(Document.page_count >= g("page_min"))
+    if g("page_max") is not None:
+        query = query.filter(Document.page_count <= g("page_max"))
+    if g("doc_id") is not None:
+        query = query.filter(Document.id == g("doc_id"))
+    if g("document_type_ids"):
+        query = query.filter(Document.document_type.in_(g("document_type_ids")))
+    return query
 
-    return query.order_by(Document.id.desc()).all()
+
+def get_all_filtered(
+    db: Session,
+    limit: int | None = None,
+    offset: int = 0,
+    **filters,
+) -> list[Document]:
+    """
+    Gibt Dokumente (neueste zuerst) zurück, optional gefiltert und paginiert.
+
+    Für die Listenansicht werden die schweren Textspalten NICHT geladen (KI-Rohantwort,
+    Prüfdetails, Prompt-/Workflow-Snapshots) — bei tausenden Belegen machen sie sonst
+    hunderte MB aus, obwohl die Liste sie nie anzeigt. Wer in der Liste neue Felder braucht,
+    darf sie nicht aus `raw_response` lesen (dafür gibt es GET /{id}).
+    """
+    query = _filtered_query(db, **filters).options(
+        joinedload(Document.batch),
+        joinedload(Document.extraction)
+        .defer(InvoiceExtraction.raw_response)
+        .defer(InvoiceExtraction.validation_details),
+        defer(Document.raw_response),
+        defer(Document.used_system_prompt),
+        defer(Document.used_doc_type_prompt),
+        defer(Document.used_recheck_prompt),
+        defer(Document.used_workflow_graph),
+        defer(Document.workflow_trace),
+    ).order_by(Document.id.desc())
+    if offset:
+        query = query.offset(offset)
+    if limit:
+        query = query.limit(limit)
+    return query.all()
+
+
+def count_filtered(db: Session, **filters) -> int:
+    """Anzahl der Treffer (ohne Eager-Loading → schnell)."""
+    return _filtered_query(db, **filters).with_entities(func.count(Document.id)).scalar() or 0
+
+
+def get_ids_filtered(db: Session, **filters) -> list[int]:
+    """Alle Treffer-IDs (neueste zuerst) — z.B. für „alle Treffer auswählen"."""
+    rows = _filtered_query(db, **filters).with_entities(Document.id).order_by(Document.id.desc()).all()
+    return [r[0] for r in rows]
+
+
+def get_filter_options(db: Session) -> dict:
+    """
+    Werte für die Filter-Dropdowns (früher aus den geladenen Belegen abgeleitet — mit Paginierung
+    nicht mehr möglich): Jahre und Firmen der Imports mit nicht gelöschten Belegen, Lieferantennamen.
+    """
+    from app.models.vendor import Vendor
+
+    batch_ids = db.query(Document.batch_id).filter(Document.soft_deleted == False).distinct()  # noqa: E712
+    years = [r[0] for r in db.query(ImportBatch.year).filter(ImportBatch.id.in_(batch_ids))
+             .distinct().order_by(ImportBatch.year.desc()).all()]
+    companies = [r[0] for r in db.query(ImportBatch.company_name).filter(ImportBatch.id.in_(batch_ids))
+                 .distinct().order_by(ImportBatch.company_name).all()]
+    suppliers = [r[0] for r in db.query(Vendor.name).distinct().order_by(Vendor.name).all()]
+    return {"years": years, "companies": companies, "suppliers": suppliers}
 
 
 def save_extraction(

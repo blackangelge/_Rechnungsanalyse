@@ -286,7 +286,7 @@ export default function TasksPage() {
                   <td className="px-4 py-3 tabular-nums text-gray-700">
                     {docId != null ? (
                       <a
-                        href={`/belege?id=${docId}`}
+                        href={`/belege?doc_id=${docId}`}
                         className="text-blue-600 hover:underline"
                       >
                         Beleg #{docId}

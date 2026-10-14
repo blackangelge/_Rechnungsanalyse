@@ -739,6 +739,22 @@ Frontend: `/settings/workflows` (Liste, Standard setzen, duplizieren, aus Vorlag
 gepinnt: Palette, Zeichenfläche, Eigenschaften je Knoten, Live-Prüfung); Belege: Dropdown „Workflow" in der Analyse-Leiste, KI-Modal zeigt Workflow + Ablaufprotokoll
 (`UsedWorkflow`); Lieferanten: Spalte „Workflow". **Neues npm-Paket → nach dem Update den Frontend-Container neu starten** (`npm install` läuft im Startkommando).
 
+### Große Bestände: paginierte Belegliste (`crud/document.py`, `routers/documents.py`)
+
+Die Belege-Seite lädt **nur die aktuelle Seite** (Standard 50, wählbar 25–200); getestet mit 15.000 Belegen (Liste ≈ 27 ms statt 1,7 s).
+
+- `GET /api/documents?limit=&offset=` + Filter → Gesamtzahl im Header **`X-Total-Count`** (per `Access-Control-Expose-Headers` freigegeben).
+  Ohne `limit` werden weiterhin alle Treffer geliefert (alte Schnittstelle).
+- `GET /api/documents/ids` (+ Filter) → alle Treffer-IDs für „Alle N Treffer auswählen"; `GET /api/documents/filter-options` → Jahre/Firmen/Lieferanten.
+  Beide Routen stehen **vor** `/{doc_id}`.
+- Schwere Spalten (`raw_response`, `validation_details`, `used_*`, Workflow-Snapshots) werden in der Liste per `defer` nicht geladen —
+  dafür gibt es `GET /{id}`. `tests/test_document_list.py` prüft das per SQL-Mitschnitt.
+- Filter laufen über `_filtered_query` (Liste, Zähler, ID-Liste); neue Filter nur dort ergänzen und in `_FILTER_KEYS` eintragen.
+- Migration `0011_search_indexes`: B-Tree-Indizes + `pg_trgm`-GIN-Indizes für Teilstring-Suche (übersprungen, falls die Erweiterung nicht anlegbar ist).
+- Frontend: `Pager` oben/unten; Auto-Refresh lädt die **aktuelle** Seite neu (`pageRef`) statt auf Seite 1 zu springen. Direktlink
+  `/belege?doc_id=42` (auch `?id=42`, optional `&include_deleted=1`) füllt das Feld „Beleg-ID"; gelesen aus `window.location` im Mount-Effekt.
+- Neue Listen mit potenziell tausenden Zeilen immer serverseitig paginieren und schwere Spalten deferieren.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:
