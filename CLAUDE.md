@@ -755,6 +755,19 @@ Die Belege-Seite lädt **nur die aktuelle Seite** (Standard 50, wählbar 25–20
   `/belege?doc_id=42` (auch `?id=42`, optional `&include_deleted=1`) füllt das Feld „Beleg-ID"; gelesen aus `window.location` im Mount-Effekt.
 - Neue Listen mit potenziell tausenden Zeilen immer serverseitig paginieren und schwere Spalten deferieren.
 
+### Artikelsuche (`crud/position_search.py`, `routers/positions.py`, Seite `/artikel`)
+
+Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, sortierbar, mit Kennzahlen (getestet mit 75.000 Positionen, alle Abfragen < 300 ms).
+
+- `GET /api/positions` (Header `X-Total-Count`), `/summary` (Anzahl, Belege, Σ Gesamtpreis, Einzelpreis min/Ø/max, je Einheit), `/filter-options` (Einheiten).
+  Dieselben Filter für alle drei (`_filters` im Router, `_filtered` in der CRUD-Datei).
+- Filter: `q` (alle Wörter müssen in Bezeichnung, Beschreibung **oder** Artikelnummer vorkommen; `%`/`_` sind keine Platzhalter), `article_number`, `supplier_name`
+  (Teilstring auf `invoice_extractions.vendor_id` = Lieferantenname), `company`, `year` (aus dem Import), `batch_ids`, `document_id`, `invoice_number`, `unit`,
+  `unit_price_`/`total_price_`/`quantity_` `min|max`, `date_from|date_to`, `validation_status`, `include_deleted`.
+- Sortierung: leere Werte immer am Ende, `id` als Tie-Breaker → stabiles Blättern. Standard: neueste Belege zuerst.
+- Es werden nur Listenspalten gelesen (kein `raw_response`); Teilstring-Suche nutzt die `pg_trgm`-Indizes aus Migration 0011.
+- Frontend `app/artikel/page.tsx`: alle Filter stehen in der Adresszeile (`?q=…&unit=t`) → teilbar; Beleg-Link auf `/belege?doc_id=…`.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:
