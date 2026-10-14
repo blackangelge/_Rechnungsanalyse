@@ -804,6 +804,24 @@ der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
 - `find_or_create` (Analyse) erkennt weiterhin nur exakte IBAN/USt-IdNr./Namen — Schreibvarianten legen neue Lieferanten an, die später
   per Dublettensuche zusammengeführt werden können.
 
+### Benutzeranmeldung (`app/auth.py`, `services/auth_service.py`, `routers/auth.py`, Migration `0013_users`)
+
+Alle Daten-Endpunkte verlangen eine Anmeldung (`dependencies=[Depends(require_user)]` an jedem `include_router` in `main.py`);
+offen sind nur `/health`, `/docs` und `/api/auth/*`. **Neue Router in `main.py` immer mit `dependencies=_protected` registrieren.**
+Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`expose`) und ruft das Backend nicht auf — er braucht keine Anmeldung.
+
+- Benutzer kommen initial aus der `.env`: `INITIAL_ADMIN_USER`/`INITIAL_ADMIN_PASSWORD`, weitere in `INITIAL_USERS="name:pw;name2:pw2"`.
+  `seed_initial_users` läuft nach den Migrationen beim Backend-Start, legt **nur fehlende** Benutzer an und überschreibt vorhandene nicht
+  (in der Oberfläche geändertes Passwort bleibt). `FORCE_PASSWORD_RESET=true` = einmaliger Notfall-Reset (beendet auch die Sitzungen).
+  `AUTH_ENABLED=false` = Notausgang (Backend-Log warnt). Ohne jeden Benutzer loggt das Backend einen Fehler.
+- Passwörter: `hashlib.scrypt` (nur Standardbibliothek, kein neues Paket). Sitzung = serverseitiger Eintrag in `user_sessions` (SHA-256 des Tokens),
+  Cookie `ra_session` (httponly, samesite=lax, `COOKIE_SECURE` für HTTPS), `SESSION_DAYS` Tage gültig. Fehlversuche: 5 → 60 s Sperre je Benutzername.
+- Endpunkte: `POST /api/auth/login|logout|change-password`, `GET /api/auth/me` (`{auth_enabled, username}`).
+- Frontend: `components/auth/AppShell.tsx` (im Root-Layout) prüft `/api/auth/me`, leitet auf `/login?next=…` und zeigt die Navigation erst danach;
+  der axios-Interceptor in `lib/api.ts` leitet bei jedem 401 dorthin. Seiten: `/login`, `/settings/account` (Passwort ändern; Klick auf den Benutzernamen in der Navigation).
+- Tests: `tests/conftest.py` setzt `AUTH_ENABLED=false`; `tests/test_auth.py` schaltet es gezielt ein.
+- `alembic/env.py` ruft `fileConfig` nur noch auf, wenn kein Logging eingerichtet ist (sonst verstummen die Anwendungs-Logs nach der Migration im Backend-Prozess).
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:

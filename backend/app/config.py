@@ -69,6 +69,28 @@ class Settings(BaseSettings):
     # automatisch zurück auf 'pending' gesetzt wird.
     worker_lock_timeout_minutes: int = 30
 
+    # ── Benutzeranmeldung ────────────────────────────────────────────────────
+    # Notausgang: false schaltet die Anmeldung komplett ab (z.B. falls man sich ausgesperrt hat).
+    auth_enabled: bool = True
+
+    # Erster Benutzer; wird beim Start angelegt, falls er noch nicht existiert.
+    initial_admin_user: str | None = None
+    initial_admin_password: str | None = None
+
+    # Weitere Benutzer: "anna:passwort1;bert:passwort2" (getrennt durch ';', Name und Passwort
+    # durch den ersten ':'; das Passwort darf also ':' enthalten, aber kein ';').
+    initial_users: str | None = None
+
+    # true = Passwörter der in .env genannten Benutzer beim Start auf den .env-Wert zurücksetzen
+    # (Notfall bei vergessenem Passwort; danach wieder entfernen!). Beendet auch deren Sitzungen.
+    force_password_reset: bool = False
+
+    # Gültigkeit einer Anmeldung in Tagen
+    session_days: int = 14
+
+    # Cookie nur über HTTPS senden (nur aktivieren, wenn die Seite per HTTPS erreichbar ist)
+    cookie_secure: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

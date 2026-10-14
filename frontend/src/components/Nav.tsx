@@ -36,7 +36,13 @@ const MAIN_LINKS = [
   { href: "/logs",         label: "KI-Statistiken" },
 ];
 
-export default function Nav() {
+export default function Nav({
+  username = null,
+  onLogout,
+}: {
+  username?: string | null;
+  onLogout?: () => void;
+}) {
   const pathname = usePathname();
   const [jsOk, setJsOk] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -61,9 +67,9 @@ export default function Nav() {
 
   return (
     <nav className="border-b bg-white shadow-sm">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-3">
         {/* Logo */}
-        <Link href="/dashboard" className="text-lg font-bold tracking-tight text-blue-700">
+        <Link href="/dashboard" className="whitespace-nowrap text-lg font-bold tracking-tight text-blue-700">
           Rechnungsanalyse
           <span className={`ml-2 text-xs font-normal px-1.5 py-0.5 rounded ${jsOk ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
             {jsOk ? "JS ✓" : "JS ✗"}
@@ -71,7 +77,7 @@ export default function Nav() {
         </Link>
 
         {/* Navigationslinks */}
-        <ul className="flex items-center gap-1">
+        <ul className="flex flex-wrap items-center gap-1">
           {MAIN_LINKS.map(({ href, label }) => {
             const isActive = pathname === href || pathname.startsWith(href + "/");
             return (
@@ -135,6 +141,24 @@ export default function Nav() {
             )}
           </li>
         </ul>
+
+        {/* Angemeldeter Benutzer */}
+        {username && (
+          <div className="flex items-center gap-2 whitespace-nowrap text-sm text-gray-600">
+            <Link href="/settings/account" className="rounded px-2 py-1 hover:bg-gray-100" title="Passwort ändern">
+              {username}
+            </Link>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+              >
+                Abmelden
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </nav>
   );

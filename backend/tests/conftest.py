@@ -8,6 +8,8 @@ verbunden); die für die Tests relevanten Sessions werden auf SQLite umgebogen.
 import os
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
+# Die meisten Tests prüfen Fachlogik ohne Cookie; die Anmeldung testet test_auth.py gezielt
+os.environ.setdefault("AUTH_ENABLED", "false")
 
 import pytest
 from sqlalchemy import create_engine
