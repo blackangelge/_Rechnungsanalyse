@@ -30,6 +30,7 @@ class OrderPositionRead(BaseModel):
     article_number: str | None   # Artikelnummer des Lieferanten
     unit_price_netto: Decimal | None
     unit_price_brutto: Decimal | None
+    total_price: Decimal | None  # Gesamtpreis der Position (ggf. durch die Plausibilitätsprüfung korrigiert)
     tax: Decimal | None          # Steuerbetrag dieser Position
     quantity: Decimal | None
     unit: str | None             # Mengeneinheit (z.B. "Stück", "kg")
@@ -65,6 +66,8 @@ class InvoiceExtractionRead(BaseModel):
     payment_terms: str | None
     # KI-Rohdaten
     raw_response: str | None            # Vollständige KI-JSON-Antwort
+    # Plausibilitätsprüfung (Status; Details stehen am Dokument als `validation`)
+    validation_status: str | None = None
     created_at: datetime
     updated_at: datetime
 

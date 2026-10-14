@@ -139,6 +139,8 @@ app/
     │                       # extract_invoice_data/detect_document_type sind SYNCHRON (httpx.Client)
     │                       # reasoning-Parameter: nutzt build_reasoning_param() (siehe ai_reasoning.py)
     │                       # api_url wird über app.services.ai_url.build_ai_url() gebaut
+    ├── plausibility_service.py  # Plausibilitätsprüfung (reine Rechenlogik, keine DB/Netzwerk) — siehe
+    │                       #   Abschnitt „Plausibilitätsprüfung"
     ├── ai_url.py            # build_ai_url(ip_address, port) — EINZIGE korrekte Stelle für die
     │                       #   KI-Endpunkt-URL-Bildung, genutzt von ai_service.py, ai_test_service.py
     │                       #   UND worker/worker.py (dort als build_server_url re-exportiert)
@@ -173,8 +175,13 @@ alembic/
     ├── 0003_ip_address_length.py   # ai_clients.ip_address: String(20) → String(100)
     ├── 0004_ai_max_context_tokens.py  # ai_clients.max_context_tokens (nullable)
     ├── 0005_ai_port_optional.py    # ai_clients.port: NOT NULL → nullable
-    └── 0006_worker_settings.py     # automation_settings.worker_concurrency/
-                                    #   worker_poll_interval_seconds/worker_lock_timeout_minutes
+    ├── 0006_worker_settings.py     # automation_settings.worker_concurrency/
+    │                               #   worker_poll_interval_seconds/worker_lock_timeout_minutes
+    └── 0007_plausibility.py        # order_positions.total_price, invoice_extractions.validation_status/
+                                    #   validation_details, documents.used_system_prompt/_doc_type_prompt/
+                                    #   _recheck_prompt
+tests/                      # pytest (SQLite statt PostgreSQL, siehe tests/conftest.py — JSONB wird dort
+                            #   als JSON kompiliert): `cd backend && pip install -r requirements-dev.txt && pytest`
 ```
 
 ### Worker-Container (`app/worker/`)
@@ -582,6 +589,53 @@ Aggregierte Statistiken: `GET /api/logs/ki-stats` — gibt Summen und Durchschni
 | `analyzed_last_24h` | Belege mit `status IN ('done','error')`, deren letzter Status-Übergang ≤ 24 Std. her ist (`waiting_capacity` zählt NICHT — noch nicht abgeschlossen) | `documents.updated_at` |
 
 Frontend: zwei zusätzliche `StatCard`-Kacheln im Analyse-Statistiken-Bereich von `/logs` ("Verarbeitet (letzte 60 Min.)", "Analysiert (letzte 24 Std.)").
+
+### Plausibilitätsprüfung (`services/plausibility_service.py`)
+
+Läuft in `_analyze_single_inner` als **Phase 3c** nach der Extraktion (`_plausibility_pass` in `documents.py`),
+nur bei Eingangsrechnungen mit verwertbarer KI-Antwort — **vor** `_db_analyze_write`. Dreistufig:
+
+1. **Regeln + automatische Korrektur** (`validate_invoice`, ohne KI) — alle Werte werden gegeneinander durchgerechnet:
+   - Position: Menge × Einzelpreis ≙ Positionspreis (Positionsrabatt und abweichende Preiseinheit wie „Preis je t bei Menge in kg"
+     werden erkannt und nur als `info` gemeldet)
+   - Summe: Σ Positionspreise ≙ Netto, **oder** Brutto − Steuer, **oder** Brutto (Positionen brutto, z.B. Kassenbon); ein
+     ausgewiesener Gesamtrabatt wird berücksichtigt
+   - Netto ↔ Σ Positionen; Steuerbetrag ≙ Netto × Satz je Zeile der USt-Zusammenfassung; je Steuersatz: Σ Positionen mit diesem Satz
+     ≙ Nettobetrag der Zusammenfassung (in beide Richtungen); Netto + Steuer ≙ Brutto
+   - Passt die Summe nicht, wird nach der **kleinsten eindeutigen** Korrektur gesucht (1, dann 2 Positionen, Faktoren aus
+     Einheiten-Verhältnissen t/kg/g, l/ml/hl + 10/100/1000 und Kehrwerte). Mehrdeutig → es wird **nicht geraten**. Korrigiert wird
+     `total_price`; Originalwert steht in `validation_details.corrections`.
+   - **Brutto wird korrigiert** (`total_amount_brutto`), wenn Positionen ≙ Netto und Steuer ≙ Netto × Satz einander bestätigen, das
+     Brutto aber nicht zu Netto + Steuer passt; **fehlt** das Brutto, wird es berechnet. Netto/Steuer werden nie überschrieben.
+   - `validation_details.calc` = Durchrechnung als Zeilen `{label, expected, actual, status, note}` (Tabelle im Prüfpanel).
+2. **Zweite KI-Abfrage** (`ai_service.recheck_invoice_data`): nur wenn Stufe 1 `needs_review` ergibt. Systemprompt = normaler
+   Extraktionsprompt + Prüfhinweis + gefundene Auffälligkeiten + erste Auslesung. Ist die neue Auslesung plausibel → `ai_corrected`
+   (ersetzt die erste), sonst bleibt das Original.
+3. **Markierung** `needs_review` („Prüfen!") → manuelle Prüfung; Nutzer bestätigt mit `manual_ok`.
+
+**Keine Bestätigung für automatische Korrekturen:** `corrected` und `ai_corrected` gelten als **erledigt** (grün, kein Button); die
+Änderungen bleiben im Prüfpanel nachlesbar. Nur `needs_review` verlangt eine Entscheidung (bei zehntausenden Belegen ist eine
+Einzelbestätigung nicht leistbar). Neue Statuswerte, die Nutzerhandlung verlangen, sparsam einführen.
+
+`validation_status`: `ok` · `corrected` · `ai_corrected` · `needs_review` · `manual_ok` · `unchecked`; gespeichert in
+`invoice_extractions.validation_status` (+ `validation_details` als JSON-Text). Die KI darf pro Position optional `preiseinheit` liefern
+(steht nur im `raw_response`, **keine** DB-Spalte — daher nicht in `_map_new_format` mappen, sonst `TypeError` bei `OrderPosition(**pos)`).
+
+**Datenmodell:** Der Positions-Gesamtpreis (`order_positions.total_price`) wurde früher nicht gespeichert (nur im `raw_response`) — Migration
+0007 ergänzt ihn; `_map_new_format` füllt jetzt auch `total_amount_netto`/`total_tax_value` (Spalten gab es, wurden aber nie befüllt).
+
+Endpunkte: `POST /api/documents/{id}/validate` (Regeln erneut auf den gespeicherten Daten, frühere Korrekturen bleiben dokumentiert),
+`POST /api/documents/{id}/validation/confirm`, Filter `GET /api/documents?validation_status=needs_review` (mehrere möglich).
+
+**Gespeicherte Prompts:** Zu Beginn jeder Analyse (`_db_save_used_prompts`) wird der Wortlaut des verwendeten Extraktions- und
+Dokumententyp-Prompts in `documents.used_system_prompt` / `used_doc_type_prompt` gespeichert, der Nachprüfungs-Prompt in
+`used_recheck_prompt`. Sichtbar im KI-Modal der Belege-Seite (`UsedPrompts`).
+
+**Migration 0007 ist Pflicht** (läuft beim Backend-Start automatisch): ohne die neuen Spalten schlägt jede Dokument-Abfrage fehl.
+
+Frontend: Spalte „Prüfung" (`ValidationBadge`), Filter „Plausibilität", `ValidationPanel` oben in der Infos-Ansicht (Korrekturen,
+Auffälligkeiten, Durchrechnung, Ergebnis der zweiten KI-Abfrage, Buttons „Prüfung erneut ausführen" / „Als geprüft bestätigen" nur bei
+„Prüfen!"), Positionstabelle mit Gesamtpreis (korrigierte Werte grün).
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

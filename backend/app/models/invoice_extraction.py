@@ -50,6 +50,10 @@ class InvoiceExtraction(Base):
     cash_discount_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True) # Skonto-Betrag
     payment_terms: Mapped[str | None] = mapped_column(Text, nullable=True)             # Zahlungsbedingungen (Freitext)
     raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)              # Vollständige KI-JSON-Antwort
+    # Plausibilitätsprüfung: ok | corrected | ai_corrected | needs_review | manual_ok | unchecked
+    validation_status: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    # JSON: {"issues": [...], "corrections": [...], "calc": [...], "checks_run": n, ...}
+    validation_details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

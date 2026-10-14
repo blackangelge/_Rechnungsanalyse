@@ -276,6 +276,60 @@ export interface DocumentItem {
   invoice_number?: string | null;
   supplier_name?: string | null;
   has_extraction?: boolean;
+  /** Ergebnis der Plausibilitätsprüfung (nur bei Eingangsrechnungen) */
+  validation_status?: ValidationStatus | null;
+}
+
+/** ok = plausibel · corrected = automatisch korrigiert · ai_corrected = durch zweite
+ *  KI-Abfrage korrigiert · needs_review = manuelle Prüfung nötig · manual_ok = vom
+ *  Nutzer bestätigt · unchecked = nichts prüfbar */
+export type ValidationStatus =
+  | "ok" | "corrected" | "ai_corrected" | "needs_review" | "manual_ok" | "unchecked";
+
+export interface ValidationIssue {
+  code: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+  /** 0-basierter Positionsindex (null = betrifft die ganze Rechnung) */
+  position: number | null;
+  details: Record<string, unknown>;
+}
+
+/** Automatische Korrektur: Positionspreis (`position` gesetzt) oder Gesamtbetrag (`field: "total_amount"`) */
+export interface ValidationCorrection {
+  position?: number;
+  field: string;
+  from: number | null;
+  to: number;
+  factor?: number;
+  method: string;
+}
+
+/** Eine Zeile der „Durchrechnung": berechneter Wert (expected) ↔ Wert laut Rechnung (actual) */
+export interface ValidationCalcRow {
+  label: string;
+  expected: number | null;
+  actual: number | null;
+  status: "ok" | "warn";
+  note?: string | null;
+}
+
+export interface ValidationDetails {
+  status: ValidationStatus;
+  method?: "rules" | "ai_recheck";
+  issues: ValidationIssue[];
+  corrections: ValidationCorrection[];
+  checks_run: number;
+  /** Durchrechnung aller Werte (Positionen, Netto, Steuer je Satz, Brutto) */
+  calc?: ValidationCalcRow[];
+  confirmed_manually?: boolean;
+  recheck?: {
+    performed: boolean;
+    outcome?: "corrected" | "still_inconsistent" | "failed";
+    issues_before?: ValidationIssue[];
+    issues_after?: ValidationIssue[];
+    error?: string;
+  };
 }
 
 export interface OrderPosition {
@@ -287,6 +341,8 @@ export interface OrderPosition {
   article_number: string | null;
   unit_price_netto: number | null;
   unit_price_brutto: number | null;
+  /** Gesamtpreis der Position (ggf. durch die Plausibilitätsprüfung korrigiert) */
+  total_price: number | null;
   tax: number | null;
   quantity: number | null;
   unit: string | null;
@@ -308,6 +364,7 @@ export interface InvoiceExtraction {
   cash_discount_amount: number | null;
   payment_terms: string | null;
   raw_response: string | null;
+  validation_status?: ValidationStatus | null;
   created_at: string;
   updated_at: string;
 }
@@ -351,6 +408,12 @@ export interface DocumentDetail extends DocumentItem {
   ki_output_tokens: number | null;
   ki_reasoning_tokens: number | null;
   ki_total_duration: number | null;
+  /** Plausibilitätsprüfung: Details (Auffälligkeiten, Korrekturen, Durchrechnung) */
+  validation?: ValidationDetails | null;
+  /** Wortlaut der bei der letzten Analyse verwendeten Systemprompts */
+  used_system_prompt?: string | null;
+  used_doc_type_prompt?: string | null;
+  used_recheck_prompt?: string | null;
 }
 
 /**
@@ -372,6 +435,7 @@ export interface DocumentFilter {
   supplier_name?: string;
   doc_id?: number;
   document_type_ids?: number[];
+  validation_status?: ValidationStatus[];
 }
 
 export interface AnalyzeRequest {
@@ -394,6 +458,12 @@ export const documentsApi = {
     apiClient.post<DocumentDetail>(`/api/documents/${id}/restore`).then((r) => r.data),
   analyze: (data: AnalyzeRequest) =>
     apiClient.post<{ started: number; message: string }>("/api/documents/analyze", data).then((r) => r.data),
+  /** Plausibilitätsprüfung auf den gespeicherten Daten erneut ausführen */
+  revalidate: (id: number) =>
+    apiClient.post<DocumentDetail>(`/api/documents/${id}/validate`).then((r) => r.data),
+  /** Prüfung nach manueller Kontrolle als "geprüft" bestätigen */
+  confirmValidation: (id: number) =>
+    apiClient.post<DocumentDetail>(`/api/documents/${id}/validation/confirm`).then((r) => r.data),
   enqueue: (documentIds: number[]) =>
     apiClient.post<{ enqueued: number; message: string }>("/api/documents/enqueue", { document_ids: documentIds }).then((r) => r.data),
 };

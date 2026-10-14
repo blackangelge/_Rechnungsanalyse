@@ -8,6 +8,8 @@ Router für Dokument-Verwaltung und KI-Analyse.
   GET    /api/documents               — Dokumentenliste mit optionalen Filtern
   POST   /api/documents/enqueue       — Dokumente in Worker-Warteschlange einreihen
   POST   /api/documents/analyze       — KI-Analyse direkt starten (Legacy-Pfad)
+  POST   /api/documents/{id}/validate — Plausibilitätsprüfung erneut ausführen
+  POST   /api/documents/{id}/validation/confirm — Prüfung manuell als "geprüft" bestätigen
   GET    /api/documents/{id}          — Dokument-Details (inkl. Extraktion + Token-Stats)
   GET    /api/documents/{id}/preview  — PDF-Datei direkt im Browser anzeigen
   PATCH  /api/documents/{id}/comment  — Freitext-Kommentar speichern
@@ -100,6 +102,7 @@ Sonstige Fehler (PDF-Rendering, DB-Commit, Extraktion):
 """
 
 import asyncio
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -114,7 +117,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.database import SessionLocal, get_db
 from app.schemas.document import DocumentCommentUpdate, DocumentDetail, DocumentListRead
-from app.services import ai_service, pdf_service
+from app.services import ai_service, pdf_service, plausibility_service
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +387,7 @@ def list_documents(
     supplier_name: Optional[str] = None,
     doc_id: Optional[int] = None,
     document_type_ids: Optional[list[int]] = Query(default=None),
+    validation_status: Optional[list[str]] = Query(default=None),
     # ── Datenbank-Session ────────────────────────────────────────────────────
     db: Session = Depends(get_db),
 ):
@@ -411,6 +415,8 @@ def list_documents(
         doc_id:            Exakte Dokument-ID (für Direktsuche)
         document_type_ids: Liste von Dokumententyp-IDs
                            (Query-Array: ?document_type_ids=1&document_type_ids=3)
+        validation_status: Plausibilitätsstatus, mehrere möglich (z.B. "needs_review" = manuell prüfen;
+                           Query-Array: ?validation_status=corrected&validation_status=ai_corrected)
         db:                Datenbank-Session (via FastAPI-Dependency injiziert).
 
     Returns:
@@ -433,6 +439,7 @@ def list_documents(
         supplier_name_filter=supplier_name,
         doc_id=doc_id,
         document_type_ids=document_type_ids,
+        validation_statuses=validation_status,
     )
 
 
@@ -901,6 +908,7 @@ def _db_analyze_write(
     raw_response: str,
     ki_stats: dict | None = None,
     document_type_id: int | None = None,
+    validation: dict | None = None,
 ) -> None:
     """
     ANALYSE-SCHRITT 4: KI-Ergebnisse in der DB speichern und Dokument abschließen.
@@ -941,6 +949,7 @@ def _db_analyze_write(
         raw_response:      Vollständige KI-Antwort als String (JSON oder Fehlertext).
         ki_stats:          Token-Statistiken aus dem KI-Aufruf (kann None sein).
         document_type_id:  Erkannter Dokumententyp (None wenn nicht ermittelt).
+        validation:        Ergebnis der Plausibilitätsprüfung (None = nicht geprüft).
     """
     # ── Phase 1: Extraktion speichern (eigene Session) ────────────────────────
     db1 = SessionLocal()
@@ -953,6 +962,7 @@ def _db_analyze_write(
             positions=order_positions,
             raw_response=raw_response,
             ki_stats=ki_stats,
+            validation=validation,
         )
         extraction_ok = True   # Nur True wenn save_extraction ohne Exception durchläuft
 
@@ -1117,6 +1127,131 @@ def _is_ai_conn_error(raw: str | None) -> bool:
     return bool(raw and any(raw.startswith(p) for p in _AI_CONN_ERROR_PREFIXES))
 
 
+# ─── Plausibilitätsprüfung (Phase 3c) ─────────────────────────────────────────
+
+# Alle Präfixe, mit denen ai_service.py eine fehlgeschlagene KI-Antwort kennzeichnet
+_KI_ERROR_PREFIXES = (
+    "KI überlastet:", "KI-Fehler:", "KI-Timeout",
+    "KI-Verbindungsfehler", "Unerwarteter KI-Fehler",
+)
+
+
+def _parse_raw(raw_response: str | None) -> dict | None:
+    """Parst die gespeicherte KI-Antwort sicher (None bei leerem/ungültigem JSON)."""
+    if not raw_response:
+        return None
+    try:
+        data = json.loads(raw_response)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _db_save_used_prompts(
+    doc_id: int, system_prompt: str | None, doc_type_prompt: str | None
+) -> None:
+    """Speichert den Wortlaut der verwendeten Systemprompts (eigene Session)."""
+    db = SessionLocal()
+    try:
+        crud.document.save_used_prompts(db, doc_id, system_prompt, doc_type_prompt)
+    except Exception as exc:
+        # Prompt-Snapshot ist Zusatzinformation — ein Fehler hier darf die Analyse nicht abbrechen
+        db.rollback()
+        logger.warning("Systemprompts für #%d nicht gespeichert: %s", doc_id, exc)
+    finally:
+        db.close()
+
+
+def _db_save_recheck_prompt(doc_id: int, prompt: str) -> None:
+    db = SessionLocal()
+    try:
+        crud.document.save_recheck_prompt(db, doc_id, prompt)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Nachprüfungs-Prompt für #%d nicht gespeichert: %s", doc_id, exc)
+    finally:
+        db.close()
+
+
+async def _plausibility_pass(
+    doc_id: int,
+    images_b64: list,
+    config_proxy,
+    base_prompt: str | None,
+    extracted_fields: dict,
+    order_positions: list,
+    raw_response: str,
+    ki_stats: dict,
+) -> tuple[dict, list, str, dict, dict | None]:
+    """
+    Plausibilitätsprüfung in drei Stufen:
+      1. rechnerische Prüfung inkl. automatischer Einheiten-Korrektur (ohne KI)
+      2. bei Auffälligkeiten: zweite KI-Abfrage mit Prüfhinweisen
+      3. besteht auch diese nicht: Status "needs_review" (manuelle Bearbeitung)
+
+    Gibt (fields, positions, raw_response, ki_stats, validation_dict) zurück.
+    validation_dict ist None, wenn nichts zu prüfen war (KI-Fehler / leeres Ergebnis).
+    Wirft nie — ein Fehler in der Prüfung darf die Analyse nicht abbrechen.
+    """
+    if raw_response.startswith(_KI_ERROR_PREFIXES) or not (extracted_fields or order_positions):
+        return extracted_fields, order_positions, raw_response, ki_stats, None
+    try:
+        return await _plausibility_pass_inner(
+            doc_id, images_b64, config_proxy, base_prompt,
+            extracted_fields, order_positions, raw_response, ki_stats,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Plausibilitätsprüfung #%d fehlgeschlagen: %s", doc_id, exc)
+        return extracted_fields, order_positions, raw_response, ki_stats, None
+
+
+async def _plausibility_pass_inner(
+    doc_id, images_b64, config_proxy, base_prompt,
+    extracted_fields, order_positions, raw_response, ki_stats,
+):
+    ps = plausibility_service
+    result = await asyncio.to_thread(
+        ps.validate_invoice, extracted_fields, order_positions, _parse_raw(raw_response), True
+    )
+    validation = result.to_dict()
+    validation["method"] = "rules"
+    if result.status != ps.STATUS_NEEDS_REVIEW:
+        return extracted_fields, order_positions, raw_response, ki_stats, validation
+
+    # ── Stufe 2: zweite KI-Abfrage ───────────────────────────────────────────
+    issue_texts = [i.message for i in result.blocking_issues]
+    logger.info("Plausibilität #%d: %d Auffälligkeit(en) → zweite KI-Abfrage",
+                doc_id, len(issue_texts))
+    f2, p2, raw2, stats2, recheck_prompt = await asyncio.to_thread(
+        ai_service.recheck_invoice_data,
+        images_b64, config_proxy, base_prompt, issue_texts, raw_response,
+    )
+    await asyncio.to_thread(_db_save_recheck_prompt, doc_id, recheck_prompt)
+    merged_stats = _merge_ki_stats(ki_stats or {}, stats2 or {})
+    validation["recheck"] = {"performed": True, "issues_before": [i.to_dict() for i in result.issues]}
+
+    if raw2.startswith(_KI_ERROR_PREFIXES) or not (f2 or p2):
+        validation["recheck"]["outcome"] = "failed"
+        validation["recheck"]["error"] = raw2[:300]
+        return extracted_fields, order_positions, raw_response, merged_stats, validation
+
+    result2 = await asyncio.to_thread(ps.validate_invoice, f2, p2, _parse_raw(raw2))
+    if result2.status in (ps.STATUS_OK, ps.STATUS_CORRECTED):
+        validation2 = result2.to_dict()
+        validation2["status"] = ps.STATUS_AI_CORRECTED
+        validation2["method"] = "ai_recheck"
+        validation2["recheck"] = {
+            "performed": True, "outcome": "corrected",
+            "issues_before": [i.to_dict() for i in result.issues],
+        }
+        return f2, p2, raw2, merged_stats, validation2
+
+    # Auch die zweite Auslesung ist nicht plausibel → Original behalten, markieren
+    validation["recheck"]["outcome"] = "still_inconsistent"
+    validation["recheck"]["issues_after"] = [i.to_dict() for i in result2.issues]
+    return extracted_fields, order_positions, raw_response, merged_stats, validation
+
+
 async def _analyze_single(
     doc_id: int,
     ai_config_id: int,
@@ -1210,6 +1345,13 @@ async def _analyze_single_inner(
     doc_type_prompt_text: str | None = data["doc_type_prompt_text"]
     system_prompt_text: str | None = data["system_prompt_text"]
     document_types: list[dict] = data["document_types"]
+
+    # Wortlaut der verwendeten Prompts am Dokument festhalten (Nachvollziehbarkeit).
+    # Der Typ-Prompt zählt nur, wenn die zweistufige Analyse wirklich läuft.
+    await asyncio.to_thread(
+        _db_save_used_prompts, doc_id, system_prompt_text,
+        doc_type_prompt_text if (doc_type_prompt_text and document_types) else None,
+    )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANALYSE-SCHRITT 2: PDF in Bilder umwandeln (Rendering)
@@ -1353,7 +1495,8 @@ async def _analyze_single_inner(
             config_proxy,       # Dieselbe KI-Konfiguration
             system_prompt_text, # Inhalt des Extraktionsprompts (type=1)
         )
-        del images_b64   # Base64-Bilder freigeben — nach KI-Aufruf nicht mehr gebraucht
+        # Bilder bleiben noch erhalten: die Plausibilitätsprüfung (Phase 3c) braucht sie
+        # ggf. für eine zweite KI-Abfrage.
 
         # ── Verbindungsfehler bei der Extraktion prüfen ──────────────────────
         if _is_ai_conn_error(raw_response):
@@ -1386,7 +1529,7 @@ async def _analyze_single_inner(
             config_proxy,       # KI-Verbindungsparameter
             system_prompt_text, # Extraktionsprompt (oder None für KI-eigenen Prompt)
         )
-        del images_b64   # Bilder nach KI-Aufruf freigeben
+        # Bilder bleiben noch erhalten (siehe Pfad B: zweite KI-Abfrage der Plausibilitätsprüfung)
 
         # ── Verbindungsfehler prüfen ──────────────────────────────────────────
         if _is_ai_conn_error(raw_response):
@@ -1402,11 +1545,19 @@ async def _analyze_single_inner(
     # Dieser Schritt wird nur erreicht wenn die Extraktion erfolgreich war
     # (oder mit KI-Fehlerantwort, aber ohne Verbindungsfehler).
     # _db_analyze_write setzt das Dokument auf "done" oder "error".
+    # ── Phase 3c: Plausibilitätsprüfung (Regeln → zweite KI-Abfrage → Markierung) ──
+    (extracted_fields, order_positions, raw_response,
+     ki_stats, validation) = await _plausibility_pass(
+        doc_id, images_b64, config_proxy, system_prompt_text,
+        extracted_fields, order_positions, raw_response, ki_stats,
+    )
+    del images_b64   # Bilder freigeben — nicht mehr gebraucht
+
     await asyncio.to_thread(
         _db_analyze_write,
         doc_id, original_filename, batch_id, data["ai_model_name"],
         page_count, extracted_fields, order_positions, raw_response,
-        ki_stats, document_type_id,
+        ki_stats, document_type_id, validation,
     )
     return "ok"
 
@@ -1502,6 +1653,62 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
     if doc is None:
         raise HTTPException(status_code=404, detail="Dokument nicht gefunden")
     return doc
+
+
+@router.post("/{doc_id}/validate", response_model=DocumentDetail)
+def revalidate_document(doc_id: int, db: Session = Depends(get_db)):
+    """
+    Führt die rechnerische Plausibilitätsprüfung auf den gespeicherten Daten
+    erneut aus (ohne KI). Eindeutige Einheitenfehler werden dabei — wie bei der
+    Analyse — automatisch korrigiert. Frühere Korrekturen bleiben dokumentiert.
+    """
+    doc = crud.document.get_by_id_with_details(db, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Dokument nicht gefunden")
+    if doc.extraction is None:
+        raise HTTPException(status_code=400, detail="Keine Rechnungsdaten zum Prüfen vorhanden")
+
+    ps = plausibility_service
+    ext = doc.extraction
+    positions = [
+        {
+            "quantity": p.quantity, "unit": p.unit, "unit_price": p.unit_price_netto,
+            "total_price": p.total_price, "discount": p.discount,
+        }
+        for p in doc.order_positions
+    ]
+    fields = {"total_amount": ext.total_amount_brutto, "discount_amount": ext.discount_amount}
+    result = ps.validate_invoice(fields, positions, _parse_raw(ext.raw_response))
+    validation = result.to_dict()
+    validation["method"] = "rules"
+
+    previous = doc.validation or {}
+    previous_corrections = previous.get("corrections") or []
+    if previous_corrections:
+        validation["corrections"] = previous_corrections + validation["corrections"]
+        if result.status in (ps.STATUS_OK, ps.STATUS_CORRECTED):
+            validation["status"] = previous.get("status") if previous.get("status") in (
+                ps.STATUS_CORRECTED, ps.STATUS_AI_CORRECTED
+            ) else ps.STATUS_CORRECTED
+    if previous.get("recheck"):
+        validation["recheck"] = previous["recheck"]
+
+    crud.document.update_validation(
+        db, doc_id, validation, corrected_positions=result.corrections
+    )
+    return crud.document.get_by_id_with_details(db, doc_id)
+
+
+@router.post("/{doc_id}/validation/confirm", response_model=DocumentDetail)
+def confirm_validation(doc_id: int, db: Session = Depends(get_db)):
+    """Markiert die Extraktion nach manueller Kontrolle als geprüft (Status manual_ok)."""
+    doc = crud.document.get_by_id_with_details(db, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Dokument nicht gefunden")
+    if doc.extraction is None:
+        raise HTTPException(status_code=400, detail="Keine Rechnungsdaten vorhanden")
+    crud.document.confirm_validation(db, doc_id)
+    return crud.document.get_by_id_with_details(db, doc_id)
 
 
 @router.get("/{doc_id}/preview")

@@ -30,6 +30,7 @@ import {
   DocumentType,
   DOCUMENT_TYPES,
   ImportBatch,
+  ValidationStatus,
   documentsApi,
   extractApiError,
   getDocTypeName,
@@ -83,6 +84,35 @@ function KiBadge({ hasExtraction }: { hasExtraction: boolean }) {
  * Dropdown-Checkbox-Komponente zur Mehrfachauswahl von Import-Batches.
  * Schließt sich automatisch bei Klick außerhalb (mousedown-Listener).
  */
+
+const VALIDATION_STYLES: Record<ValidationStatus, { label: string; cls: string; hint: string }> = {
+  ok: { label: "OK", cls: "bg-green-100 text-green-700", hint: "Alle Prüfungen bestanden" },
+  // Automatisch korrigierte Belege sind ERLEDIGT (grün) — sie verlangen keine Bestätigung; die Änderungen
+  // bleiben im Prüfpanel nachlesbar. Nur "Prüfen!" braucht eine Entscheidung des Nutzers.
+  corrected: { label: "Korrigiert", cls: "bg-emerald-100 text-emerald-800", hint: "Automatisch (rechnerisch) korrigiert — keine Aktion nötig" },
+  ai_corrected: { label: "KI-korrigiert", cls: "bg-emerald-100 text-emerald-800", hint: "Durch zweite KI-Abfrage korrigiert — keine Aktion nötig" },
+  needs_review: { label: "Prüfen!", cls: "bg-red-100 text-red-700", hint: "Nicht plausibel — bitte manuell prüfen" },
+  manual_ok: { label: "Geprüft", cls: "bg-blue-100 text-blue-700", hint: "Manuell als geprüft bestätigt" },
+  unchecked: { label: "–", cls: "bg-gray-100 text-gray-500", hint: "Nicht prüfbar (keine Beträge/Positionen)" },
+};
+
+function ValidationBadge({ status }: { status: ValidationStatus | null | undefined }) {
+  if (!status) return <span className="text-gray-400">–</span>;
+  const v = VALIDATION_STYLES[status];
+  if (!v) return <span className="text-gray-400">{status}</span>;
+  return (
+    <span title={v.hint} className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${v.cls}`}>
+      {v.label}
+    </span>
+  );
+}
+
+/** Filter-Presets für die Plausibilitätsprüfung → Backend-Statuswerte */
+const VALIDATION_FILTERS: Record<string, { label: string; statuses: ValidationStatus[] }> = {
+  needs_review: { label: "Manuell prüfen", statuses: ["needs_review"] },
+  corrected: { label: "Automatisch korrigiert", statuses: ["corrected", "ai_corrected"] },
+  ok: { label: "In Ordnung", statuses: ["ok", "manual_ok"] },
+};
 
 function BatchMultiSelect({
   batches,
@@ -233,6 +263,7 @@ export default function BelegePage() {
   const [filterKi, setFilterKi] = useState<"" | "ja" | "nein">("");
   const [filterSupplierName, setFilterSupplierName] = useState("");
   const [filterDocId, setFilterDocId] = useState("");
+  const [filterValidation, setFilterValidation] = useState("");
   const [activeFilters, setActiveFilters] = useState<DocumentFilter>({});
 
   // Daten
@@ -331,6 +362,9 @@ export default function BelegePage() {
     if (filterKi === "nein") f.has_extraction = false;
     if (filterSupplierName.trim()) f.supplier_name = filterSupplierName.trim();
     if (filterDocId.trim()) f.doc_id = parseInt(filterDocId.trim(), 10);
+    if (filterValidation && VALIDATION_FILTERS[filterValidation]) {
+      f.validation_status = VALIDATION_FILTERS[filterValidation].statuses;
+    }
     return f;
   }
 
@@ -347,7 +381,7 @@ export default function BelegePage() {
     setFilterYear(""); setFilterStatus("");
     setFilterTotalMin(""); setFilterTotalMax(""); setFilterPageMin(""); setFilterPageMax("");
     setSelectedBatchIds(new Set()); setSelectedDocTypeIds(new Set()); setIncludeDeleted(false);
-    setFilterKi(""); setFilterSupplierName(""); setFilterDocId("");
+    setFilterKi(""); setFilterSupplierName(""); setFilterDocId(""); setFilterValidation("");
     setActiveFilters({});
     setSelectedIds(new Set());
     setPreviewDocId(null);
@@ -573,6 +607,16 @@ export default function BelegePage() {
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
             </div>
             <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-600">Plausibilität</label>
+              <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
+                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-44">
+                <option value="">Alle</option>
+                {Object.entries(VALIDATION_FILTERS).map(([key, v]) => (
+                  <option key={key} value={key}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Betrag von (€)</label>
               <input type="number" value={filterTotalMin} onChange={(e) => setFilterTotalMin(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -691,7 +735,7 @@ export default function BelegePage() {
                     <p className="text-xs text-gray-500">{viewedDoc.company} {viewedDoc.year} · #{viewedDoc.id}</p>
                   </div>
                   <div className="p-5">
-                    <InfosView doc={viewedDoc} />
+                    <InfosView doc={viewedDoc} onDocChange={setViewedDoc} />
                   </div>
                 </div>
                 <div className="w-1/2 shrink-0 rounded-xl border bg-white shadow-sm overflow-hidden">
@@ -752,6 +796,7 @@ export default function BelegePage() {
                     <th className="px-3 py-3 text-right font-medium text-gray-600">Betrag</th>
                     <th className="px-3 py-3 text-left font-medium text-gray-600">Status</th>
                     <th className="px-3 py-3 text-left font-medium text-gray-600">KI</th>
+                    <th className="px-3 py-3 text-left font-medium text-gray-600">Prüfung</th>
                     {!showPreview && (
                       <>
                         <th className="px-3 py-3 text-left font-medium text-gray-600">Dokumententyp</th>
@@ -764,10 +809,10 @@ export default function BelegePage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {loading && documents.length === 0 && (
-                    <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">Wird geladen...</td></tr>
+                    <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">Wird geladen...</td></tr>
                   )}
                   {!loading && documents.length === 0 && (
-                    <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">Keine Belege gefunden</td></tr>
+                    <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">Keine Belege gefunden</td></tr>
                   )}
                   {pagedDocs.map((doc) => {
                     const isDeleted = doc.soft_deleted;
@@ -816,6 +861,7 @@ export default function BelegePage() {
                         </td>
                         <td className="px-3 py-2.5"><StatusBadge status={doc.status} /></td>
                         <td className="px-3 py-2.5"><KiBadge hasExtraction={doc.has_extraction ?? false} /></td>
+                        <td className="px-3 py-2.5"><ValidationBadge status={doc.validation_status} /></td>
 
                         {!showPreview && (
                           <>
@@ -1099,6 +1145,7 @@ export default function BelegePage() {
                       InvoiceExtraction, z.B. waiting_capacity — dort steht der Grund als
                       Klartext, nicht als KI-JSON-Antwort. */}
                   <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response ?? null} />
+                  <UsedPrompts doc={viewedDoc} />
                 </>
               )}
               {!viewLoading && !viewedDoc && (
@@ -1155,7 +1202,13 @@ function KiRawView({ rawResponse }: { rawResponse: string | null }) {
  * fmt(): Wandelt Zahlen und deutsche Dezimalstring-Formate in €-Beträge um.
  */
 
-function InfosView({ doc }: { doc: DocumentDetail }) {
+function InfosView({
+  doc,
+  onDocChange,
+}: {
+  doc: DocumentDetail;
+  onDocChange: (doc: DocumentDetail) => void;
+}) {
   const ext = doc.extraction;
 
   let raw: Record<string, unknown> | null = null;
@@ -1209,6 +1262,8 @@ function InfosView({ doc }: { doc: DocumentDetail }) {
 
   return (
     <div>
+      <ValidationPanel doc={doc} onChange={onDocChange} />
+
       {/* Lieferant */}
       <Section title="Lieferant">
         <Row label="Name" value={lieferant?.name} />
@@ -1300,6 +1355,7 @@ function InfosView({ doc }: { doc: DocumentDetail }) {
                   <th className="px-3 py-2 text-right">Menge</th>
                   <th className="px-3 py-2 text-left">Einheit</th>
                   <th className="px-3 py-2 text-right">Einzelpreis</th>
+                  <th className="px-3 py-2 text-right">Gesamtpreis</th>
                   <th className="px-3 py-2 text-right">Steuersatz</th>
                   <th className="px-3 py-2 text-left">Nachlass</th>
                 </tr>
@@ -1321,6 +1377,24 @@ function InfosView({ doc }: { doc: DocumentDetail }) {
                           <td className="px-3 py-2 text-right tabular-nums">{pos.menge != null ? String(pos.menge) : "–"}</td>
                           <td className="px-3 py-2 text-gray-500">{String(pos.mengeneinheit ?? "–")}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{pos.einzelpreis != null ? fmt(pos.einzelpreis) : "–"}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {(() => {
+                              // Gespeicherter (ggf. durch die Plausibilitätsprüfung korrigierter) Gesamtpreis
+                              const stored = doc.order_positions.find((p) => p.position_index === i)?.total_price;
+                              const original = pos.gesamtpreis;
+                              const shown = stored ?? original;
+                              const changed = stored != null && original != null
+                                && Math.abs(Number(stored) - Number(String(original).replace(",", "."))) > 0.004;
+                              return (
+                                <span
+                                  className={changed ? "font-medium text-emerald-700" : ""}
+                                  title={changed ? `Korrigiert (laut KI-Auslesung: ${fmt(original)})` : undefined}
+                                >
+                                  {shown != null ? fmt(shown) : "–"}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums">{pos.steuersatz != null ? `${pos.steuersatz} %` : "–"}</td>
                           <td className="px-3 py-2 text-xs text-gray-500">{nachlassStr || "–"}</td>
                         </tr>
@@ -1334,6 +1408,7 @@ function InfosView({ doc }: { doc: DocumentDetail }) {
                         <td className="px-3 py-2 text-right tabular-nums">{pos.quantity != null ? String(pos.quantity) : "–"}</td>
                         <td className="px-3 py-2 text-gray-500">{pos.unit ?? "–"}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{pos.unit_price_netto != null ? fmt(pos.unit_price_netto) : "–"}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{pos.total_price != null ? fmt(pos.total_price) : "–"}</td>
                         <td className="px-3 py-2 text-right">{pos.tax != null ? `${pos.tax} %` : "–"}</td>
                         <td className="px-3 py-2 text-xs text-gray-500">{pos.discount ?? "–"}</td>
                       </tr>
@@ -1347,6 +1422,182 @@ function InfosView({ doc }: { doc: DocumentDetail }) {
       {!ext && (
         <p className="text-sm text-gray-400">Keine Extraktionsdaten vorhanden.</p>
       )}
+    </div>
+  );
+}
+
+// ─── Plausibilitätsprüfung (Infos-Ansicht) ────────────────────────────────────
+
+function ValidationPanel({
+  doc,
+  onChange,
+}: {
+  doc: DocumentDetail;
+  onChange: (doc: DocumentDetail) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const status = doc.validation_status;
+  const v = doc.validation;
+  if (!doc.extraction || !status) return null;
+
+  async function run(action: "revalidate" | "confirm") {
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = action === "revalidate"
+        ? await documentsApi.revalidate(doc.id)
+        : await documentsApi.confirmValidation(doc.id);
+      onChange(updated);
+    } catch (e) {
+      setErr(extractApiError(e, "Aktion fehlgeschlagen"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const fmtNum = (n: number) =>
+    new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(n);
+  const info = VALIDATION_STYLES[status];
+  const box =
+    status === "needs_review" ? "border-red-200 bg-red-50"
+    : status === "corrected" || status === "ai_corrected" ? "border-emerald-200 bg-emerald-50"
+    : status === "manual_ok" ? "border-blue-200 bg-blue-50"
+    : "border-green-200 bg-green-50";
+  const sevCls: Record<string, string> = {
+    error: "text-red-700", warning: "text-red-700", info: "text-gray-600",
+  };
+
+  return (
+    <div className={`mb-6 rounded-lg border p-4 ${box}`}>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Plausibilitätsprüfung</h3>
+        <ValidationBadge status={status} />
+        <span className="text-xs text-gray-500">{info?.hint}</span>
+      </div>
+
+      {(v?.corrections ?? []).length > 0 && (
+        <ul className="mb-2 space-y-1 text-sm text-amber-900">
+          {v!.corrections.map((c, i) => (
+            <li key={i}>
+              {c.field === "total_amount" ? (
+                <>
+                  ↻ Gesamtbetrag (Brutto){" "}
+                  {c.from == null ? "fehlte und wurde berechnet:" : <>von <b>{fmtNum(c.from)} €</b> auf</>}{" "}
+                  <b>{fmtNum(c.to)} €</b>{c.from == null ? "" : " korrigiert"} (Netto + Steuer)
+                </>
+              ) : (
+                <>
+                  ↻ Position {(c.position ?? 0) + 1}: Positionspreis von <b>{fmtNum(c.from ?? 0)} €</b> auf{" "}
+                  <b>{fmtNum(c.to)} €</b> korrigiert (Faktor {String(c.factor ?? "").replace(".", ",")})
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(v?.issues ?? []).length > 0 && (
+        <ul className="mb-2 space-y-1 text-sm">
+          {v!.issues.map((i, idx) => (
+            <li key={idx} className={sevCls[i.severity] ?? "text-gray-600"}>
+              {i.severity === "info" ? "ℹ" : "⚠"} {i.message}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(v?.calc ?? []).length > 0 && (
+        <details className="mb-2 rounded border border-gray-200 bg-white/70" data-testid="calc-details">
+          <summary className="cursor-pointer px-3 py-1.5 text-xs font-medium text-gray-700">
+            Durchrechnung ({v!.calc!.length} Prüfungen
+            {v!.calc!.some((r) => r.status === "warn") ? `, ${v!.calc!.filter((r) => r.status === "warn").length} auffällig` : ", alle stimmig"})
+          </summary>
+          <table className="w-full text-xs">
+            <thead className="border-t border-gray-200 bg-gray-50 text-left text-gray-500">
+              <tr>
+                <th className="px-3 py-1 font-medium">Prüfung</th>
+                <th className="px-3 py-1 text-right font-medium">Berechnet</th>
+                <th className="px-3 py-1 text-right font-medium">Laut Rechnung</th>
+                <th className="w-8 px-2 py-1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {v!.calc!.map((r, i) => (
+                <tr key={i} className={`border-t border-gray-100 ${r.status === "warn" ? "bg-red-50" : ""}`}>
+                  <td className="px-3 py-1 text-gray-700">
+                    {r.label}
+                    {r.note && <span className="block text-[11px] text-gray-400">{r.note}</span>}
+                  </td>
+                  <td className="px-3 py-1 text-right tabular-nums">{r.expected == null ? "–" : `${fmtNum(r.expected)} €`}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{r.actual == null ? "–" : `${fmtNum(r.actual)} €`}</td>
+                  <td className={`px-2 py-1 text-center font-bold ${r.status === "ok" ? "text-green-600" : "text-red-600"}`}>
+                    {r.status === "ok" ? "✓" : "✕"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+
+      {v?.recheck?.performed && (
+        <p className="mb-2 text-xs text-gray-600">
+          Zweite KI-Abfrage:{" "}
+          {v.recheck.outcome === "corrected" && "Auslesung korrigiert — jetzt plausibel."}
+          {v.recheck.outcome === "still_inconsistent" && "weiterhin nicht plausibel — ursprüngliche Auslesung behalten."}
+          {v.recheck.outcome === "failed" && `fehlgeschlagen${v.recheck.error ? ` (${v.recheck.error})` : ""}.`}
+        </p>
+      )}
+
+      {err && <p className="mb-2 text-xs text-red-600">{err}</p>}
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => run("revalidate")}
+          disabled={busy}
+          className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+        >
+          {busy ? "…" : "Prüfung erneut ausführen"}
+        </button>
+        {/* Nur Belege mit ungelöster Auffälligkeit brauchen eine Bestätigung — korrigierte nicht */}
+        {status === "needs_review" && (
+          <button
+            onClick={() => run("confirm")}
+            disabled={busy}
+            className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            Als geprüft bestätigen
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Verwendete Systemprompts (KI-Modal) ──────────────────────────────────────
+
+function UsedPrompts({ doc }: { doc: DocumentDetail }) {
+  const items: { title: string; text: string | null | undefined }[] = [
+    { title: "Systemprompt (Extraktion)", text: doc.used_system_prompt },
+    { title: "Systemprompt (Dokumententyp-Erkennung)", text: doc.used_doc_type_prompt },
+    { title: "Systemprompt (zweite KI-Abfrage / Plausibilität)", text: doc.used_recheck_prompt },
+  ];
+  const present = items.filter((i) => i.text);
+  if (present.length === 0) return null;
+  return (
+    <div className="mt-4 space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+        Bei dieser Analyse verwendete Prompts
+      </h3>
+      {present.map((i) => (
+        <details key={i.title} className="rounded-lg border border-gray-200 bg-gray-50">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-gray-700">{i.title}</summary>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-gray-200 p-3 text-xs text-gray-700">
+            {i.text}
+          </pre>
+        </details>
+      ))}
     </div>
   );
 }

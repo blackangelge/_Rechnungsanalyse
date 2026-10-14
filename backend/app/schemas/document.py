@@ -52,6 +52,7 @@ class DocumentListRead(DocumentRead):
     invoice_number: str | None = None      # InvoiceExtraction.invoice_number
     supplier_name: str | None = None       # InvoiceExtraction.vendor_id (Freitext-Name)
     has_extraction: bool = False           # True wenn InvoiceExtraction vorhanden
+    validation_status: str | None = None   # Plausibilität: ok|corrected|ai_corrected|needs_review|manual_ok|unchecked
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -110,6 +111,15 @@ class DocumentDetail(DocumentRead):
     ki_output_tokens: int | None = None      # Summe aller output_token_count-Einträge
     ki_reasoning_tokens: int | None = None   # Summe aller reasoning_count-Einträge
     ki_total_duration: float | None = None   # Summe aller time_spent_seconds-Einträge
+
+    # Plausibilitätsprüfung: Status + Details (Auffälligkeiten, Korrekturen, Durchrechnung)
+    validation_status: str | None = None
+    validation: dict | None = None
+
+    # Wortlaut der bei der letzten Analyse verwendeten Systemprompts
+    used_system_prompt: str | None = None
+    used_doc_type_prompt: str | None = None
+    used_recheck_prompt: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
