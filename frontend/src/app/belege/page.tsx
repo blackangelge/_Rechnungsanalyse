@@ -23,6 +23,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import AnalysisHistoryPanel from "@/components/belege/AnalysisHistoryPanel";
 import {
   DocumentDetail,
   DocumentFilter,
@@ -1263,6 +1264,7 @@ function InfosView({
   return (
     <div>
       <ValidationPanel doc={doc} onChange={onDocChange} />
+      <AnalysisHistoryPanel doc={doc} onChange={onDocChange} />
 
       {/* Lieferant */}
       <Section title="Lieferant">

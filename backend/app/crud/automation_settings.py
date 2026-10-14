@@ -52,6 +52,7 @@ def update(db: Session, data: AutomationSettingsUpdate) -> AutomationSettings:
     obj.worker_concurrency = data.worker_concurrency
     obj.worker_poll_interval_seconds = data.worker_poll_interval_seconds
     obj.worker_lock_timeout_minutes = data.worker_lock_timeout_minutes
+    obj.analysis_history_keep = data.analysis_history_keep
 
     db.commit()
     db.refresh(obj)

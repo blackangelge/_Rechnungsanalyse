@@ -41,6 +41,7 @@ class AutomationSettings(Base):
         CheckConstraint("worker_concurrency >= 1", name="ck_automation_settings_worker_concurrency"),
         CheckConstraint("worker_poll_interval_seconds >= 1", name="ck_automation_settings_worker_poll_interval"),
         CheckConstraint("worker_lock_timeout_minutes >= 1", name="ck_automation_settings_worker_lock_timeout"),
+        CheckConstraint("analysis_history_keep BETWEEN 0 AND 20", name="ck_automation_settings_history_keep"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)  # Immer 1 (Singleton)
@@ -63,6 +64,8 @@ class AutomationSettings(Base):
     # abgestürzt) und automatisch zurück auf 'pending' gesetzt wird. Sollte deutlich
     # über der maximalen KI-Antwortzeit liegen (siehe ai_service.REQUEST_TIMEOUT_SECONDS).
     worker_lock_timeout_minutes: Mapped[int] = mapped_column(Integer, default=30, server_default="30", nullable=False)
+    # Wie viele frühere Analyse-Stände je Beleg aufbewahrt werden (0 = Historie aus)
+    analysis_history_keep: Mapped[int] = mapped_column(Integer, default=3, server_default="3", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
