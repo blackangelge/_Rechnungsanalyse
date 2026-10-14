@@ -19,3 +19,4 @@ from app.models.analysis_history import AnalysisHistory  # noqa: F401
 from app.models.document_version import DocumentVersion  # noqa: F401
 from app.models.pdf_settings import PdfSettings  # noqa: F401
 from app.models.workflow import Workflow  # noqa: F401
+from app.models.user import User, UserSession  # noqa: F401

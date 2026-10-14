@@ -116,6 +116,21 @@ def _run_migrations() -> None:
         logger.error("✗ Fehler beim Ausführen der Datenbank-Migrationen: %s", exc, exc_info=True)
 
 
+def _seed_users() -> None:
+    """Legt die in der .env genannten Benutzer an (nach den Migrationen)."""
+    try:
+        from app.database import SessionLocal
+        from app.services import auth_service
+
+        db = SessionLocal()
+        try:
+            auth_service.seed_initial_users(db)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.error("✗ Benutzer aus der .env konnten nicht angelegt werden: %s", exc, exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 60)
@@ -143,6 +158,7 @@ async def lifespan(app: FastAPI):
     except asyncio.TimeoutError:
         logger.error("✗ Migration-Timeout nach 30 s — Backend startet trotzdem")
     logger.info("✓ Migration bereit")
+    await asyncio.to_thread(_seed_users)
     logger.info("✓ Backend bereit")
     yield
     logger.info("=" * 60)
@@ -224,28 +240,36 @@ app.add_middleware(
 
 
 # ── Router registrieren ─────────────────────────────────────────────────────
-from app.routers import ai_clients, batch, document_history, document_pdf, documents, logs, sse, vendors, workflows
+from fastapi import Depends
+
+from app.auth import require_user
+from app.routers import ai_clients, auth, batch, document_history, document_pdf, documents, logs, sse, vendors, workflows
 from app.routers import settings as settings_router
 from app.routers import imports as imports_router  # 'imports' ist ein Python-Keyword
 from app.routers import tasks
 from app.routers import positions as positions_router
 from app.routers import export_settings as export_settings_router
 
-app.include_router(ai_clients.router)                  # /api/ai-clients/*
-app.include_router(imports_router.router)              # /api/imports/*
-app.include_router(sse.router)                         # /api/imports/{id}/progress (SSE)
-app.include_router(documents.router)                   # /api/documents/*
-app.include_router(document_history.router)            # /api/documents/{id}/analysis-history
-app.include_router(document_pdf.router)                # /api/documents/{id}/versions|pages, /auto-trim
-app.include_router(settings_router.router)             # /api/settings/*
-app.include_router(settings_router.doc_types_router)   # /api/document-types
-app.include_router(logs.router)                        # /api/logs/*
-app.include_router(vendors.router)                     # /api/vendors/*
-app.include_router(workflows.router)                   # /api/workflows/*
-app.include_router(batch.router)                       # /api/batch/*
-app.include_router(tasks.router)                       # /api/tasks/*
-app.include_router(positions_router.router)            # /api/positions/* (Artikelsuche)
-app.include_router(export_settings_router.router)      # /api/settings/export
+# Anmeldung selbst (Login/Logout/me) ist offen bzw. prüft sich selbst
+app.include_router(auth.router)                        # /api/auth/*
+
+# Alle Daten-Endpunkte verlangen eine Anmeldung (bei AUTH_ENABLED=false wird nichts geprüft)
+_protected = [Depends(require_user)]
+app.include_router(ai_clients.router, dependencies=_protected)                   # /api/ai-clients/*
+app.include_router(imports_router.router, dependencies=_protected)               # /api/imports/*
+app.include_router(sse.router, dependencies=_protected)                          # /api/imports/{id}/progress (SSE)
+app.include_router(documents.router, dependencies=_protected)                    # /api/documents/*
+app.include_router(document_history.router, dependencies=_protected)             # /api/documents/{id}/analysis-history
+app.include_router(document_pdf.router, dependencies=_protected)                 # /api/documents/{id}/versions|pages, /auto-trim
+app.include_router(settings_router.router, dependencies=_protected)              # /api/settings/*
+app.include_router(settings_router.doc_types_router, dependencies=_protected)    # /api/document-types
+app.include_router(logs.router, dependencies=_protected)                         # /api/logs/*
+app.include_router(vendors.router, dependencies=_protected)                      # /api/vendors/*
+app.include_router(workflows.router, dependencies=_protected)                    # /api/workflows/*
+app.include_router(batch.router, dependencies=_protected)                        # /api/batch/*
+app.include_router(tasks.router, dependencies=_protected)                        # /api/tasks/*
+app.include_router(positions_router.router, dependencies=_protected)             # /api/positions/* (Artikelsuche)
+app.include_router(export_settings_router.router, dependencies=_protected)       # /api/settings/export
 
 
 # ── Health-Check ────────────────────────────────────────────────────────────

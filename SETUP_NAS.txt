@@ -69,8 +69,18 @@ Kein SSH / kein Terminal nötig.
     IMPORT_BASE_PATH=/volume1/docker/_rechnungsanalyse/import
     STORAGE_PATH=/volume1/docker/_rechnungsanalyse/storage
 
+    # Benutzeranmeldung (ohne Benutzer kann sich niemand anmelden!)
+    INITIAL_ADMIN_USER=admin
+    INITIAL_ADMIN_PASSWORD=ein_sicheres_passwort
+    # optional weitere Benutzer:  name:passwort;name2:passwort2
+    # INITIAL_USERS=anna:passwort1;bert:passwort2
+
   Wichtig:
     - POSTGRES_PASSWORD in DATABASE_URL muss identisch mit POSTGRES_PASSWORD sein
+    - Benutzer aus der .env werden beim Start des Backends angelegt, wenn es sie noch nicht gibt.
+      Das Passwort kann danach in der Oberfläche geändert werden (Klick auf den Benutzernamen oben rechts) und
+      wird beim Neustart nicht mehr überschrieben. Passwort vergessen: FORCE_PASSWORD_RESET=true setzen,
+      Backend neu starten, Variable wieder entfernen. Notausgang: AUTH_ENABLED=false.
     - IMPORT_BASE_PATH = Ordner, aus dem PDFs importiert werden (Quelle)
     - STORAGE_PATH     = Ordner, in dem importierte PDFs gespeichert werden (Ziel)
                          Unterordner werden automatisch angelegt: storage/Firma_Jahr/

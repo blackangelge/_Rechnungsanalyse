@@ -7,6 +7,7 @@ Importiert alle ORM-Modelle über app.models, damit Alembic sie beim
 Autogenerieren von Migrationen erkennt.
 """
 
+import logging
 from logging.config import fileConfig
 
 from alembic import context
@@ -15,8 +16,11 @@ from sqlalchemy import engine_from_config, pool
 # Alembic-Konfigurationsobjekt (liest alembic.ini)
 config = context.config
 
-# Python-Logging entsprechend alembic.ini konfigurieren
-if config.config_file_name is not None:
+# Python-Logging entsprechend alembic.ini konfigurieren — aber nur im eigenständigen Aufruf
+# (CLI). Läuft die Migration im Backend-Prozess (Start in main.py), ist das Logging schon
+# eingerichtet; fileConfig würde es zurücksetzen und alle Anwendungs-Logs (HTTP-Zeilen,
+# Hinweise zur Anmeldung) im Container-Protokoll verstummen lassen.
+if config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name)
 
 # Anwendungseinstellungen und Datenbankbasis laden

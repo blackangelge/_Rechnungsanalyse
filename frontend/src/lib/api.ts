@@ -41,6 +41,26 @@ apiClient.defaults.paramsSerializer = (params) => {
   return parts.join("&");
 };
 
+// Abgelaufene/fehlende Anmeldung: zur Anmeldeseite (außer bei den Auth-Aufrufen selbst,
+// die ihren 401 selbst anzeigen).
+apiClient.interceptors.response.use(
+  (r) => r,
+  (error) => {
+    const status = error?.response?.status;
+    const url: string = error?.config?.url ?? "";
+    if (
+      status === 401 &&
+      typeof window !== "undefined" &&
+      !url.includes("/api/auth/") &&
+      !window.location.pathname.startsWith("/login")
+    ) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.href = `/login?next=${next}`;
+    }
+    return Promise.reject(error);
+  },
+);
+
 export function extractApiError(err: unknown, fallback = "Unbekannter Fehler"): string {
   if (err && typeof err === "object") {
     const e = err as {
@@ -1181,5 +1201,19 @@ export const positionsApi = {
       .then((r) => r.data),
 };
 
-
 // ─── Anmeldung ───────────────────────────────────────────────────────────────
+
+export interface AuthInfo {
+  /** false = Anmeldung ist auf dem Server abgeschaltet (AUTH_ENABLED=false) */
+  auth_enabled: boolean;
+  username: string | null;
+}
+
+export const authApi = {
+  me: () => apiClient.get<AuthInfo>("/api/auth/me").then((r) => r.data),
+  login: (username: string, password: string) =>
+    apiClient.post<AuthInfo>("/api/auth/login", { username, password }).then((r) => r.data),
+  logout: () => apiClient.post("/api/auth/logout").then(() => undefined),
+  changePassword: (current_password: string, new_password: string) =>
+    apiClient.post("/api/auth/change-password", { current_password, new_password }).then(() => undefined),
+};
