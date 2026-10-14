@@ -109,7 +109,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -380,9 +380,7 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
     return EnqueueResponse(enqueued=count, message=msg + ".")
 
 
-@router.get("", response_model=list[DocumentListRead])
-def list_documents(
-    # ── Filter-Parameter ────────────────────────────────────────────────────
+def _document_filters(
     company: Optional[str] = None,
     year: Optional[int] = None,
     status: Optional[str] = None,
@@ -397,59 +395,56 @@ def list_documents(
     doc_id: Optional[int] = None,
     document_type_ids: Optional[list[int]] = Query(default=None),
     validation_status: Optional[list[str]] = Query(default=None),
-    # ── Datenbank-Session ────────────────────────────────────────────────────
+) -> dict:
+    """Gemeinsame Filter-Parameter für Liste, Anzahl und ID-Liste."""
+    return dict(
+        company=company, year=year, status=status, total_min=total_min, total_max=total_max,
+        page_min=page_min, page_max=page_max, batch_ids=batch_ids, include_deleted=include_deleted,
+        has_extraction=has_extraction, supplier_name_filter=supplier_name, doc_id=doc_id,
+        document_type_ids=document_type_ids, validation_statuses=validation_status,
+    )
+
+
+@router.get("", response_model=list[DocumentListRead])
+def list_documents(
+    response: Response,
+    filters: dict = Depends(_document_filters),
+    limit: Optional[int] = Query(default=None, ge=1, le=500, description="Seitengröße (leer = alle Treffer)"),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     """
-    Gibt alle Dokumente zurück — optional durch beliebige Kombination von Filtern eingeschränkt.
+    Gibt Dokumente zurück (neueste zuerst) — optional gefiltert und paginiert.
 
-    Alle Filter sind optional. Werden mehrere angegeben, werden sie mit AND verknüpft.
-    Die Abfrage verwendet joinedload für InvoiceExtraction und DocumentType, damit
-    keine N+1-Queries entstehen (eine DB-Abfrage für alle Dokumente statt eine pro Dokument).
+    **Mit `limit`/`offset` paginieren:** die Gesamtzahl der Treffer steht im Header `X-Total-Count`.
+    Ohne `limit` werden alle Treffer geliefert (alte Schnittstelle, nur für kleine Bestände);
+    bei vielen tausend Belegen bitte immer paginieren.
 
-    Filter-Parameter:
-        company:           Firmenname (Teilstring-Suche, aus ImportBatch.company_name)
-        year:              Importjahr (exakt, aus ImportBatch.year)
-        status:            Dokumentenstatus: "pending" | "processing" | "done" | "error"
-        total_min:         Mindest-Bruttobetrag (€) der Rechnung
-        total_max:         Maximal-Bruttobetrag (€) der Rechnung
-        page_min:          Minimale Seitenanzahl des PDFs
-        page_max:          Maximale Seitenanzahl des PDFs
-        batch_ids:         Liste von Import-Batch-IDs — nur Dokumente aus diesen Batches
-                           (Query-Array: ?batch_ids=1&batch_ids=2)
-        include_deleted:   Soft-gelöschte Dokumente einschließen (Standard: false)
-        has_extraction:    true = nur Dokumente mit KI-Extraktion,
-                           false = nur Dokumente ohne KI-Extraktion
-        supplier_name:     Lieferantenname-Suche (Teilstring, auf InvoiceExtraction.vendor_id)
-        doc_id:            Exakte Dokument-ID (für Direktsuche)
-        document_type_ids: Liste von Dokumententyp-IDs
-                           (Query-Array: ?document_type_ids=1&document_type_ids=3)
-        validation_status: Plausibilitätsstatus, mehrere möglich (z.B. "needs_review" = manuell prüfen;
-                           Query-Array: ?validation_status=corrected&validation_status=ai_corrected)
-        db:                Datenbank-Session (via FastAPI-Dependency injiziert).
+    Alle Filter sind optional und werden mit AND verknüpft:
+      company (Teilstring, Import), year, status, total_min/total_max (Brutto), page_min/page_max,
+      batch_ids (mehrere), include_deleted, has_extraction, supplier_name (Teilstring auf den extrahierten
+      Lieferantennamen), doc_id (exakt, Direktsuche), document_type_ids (mehrere),
+      validation_status (mehrere: ok, corrected, ai_corrected, needs_review, manual_ok, unchecked).
 
-    Returns:
-        Liste von DocumentListRead-Objekten (enthält Extraktion-Summary-Felder).
+    Die Liste lädt die schweren Spalten (KI-Rohantwort, Prüfdetails, Prompt-/Workflow-Snapshots) nicht;
+    dafür gibt es GET /{id}.
     """
-    # Alle Filter werden an die CRUD-Funktion durchgereicht,
-    # die daraus eine optimierte SQL-Abfrage baut.
-    return crud.document.get_all_filtered(
-        db,
-        company=company,
-        year=year,
-        status=status,
-        total_min=total_min,
-        total_max=total_max,
-        page_min=page_min,
-        page_max=page_max,
-        batch_ids=batch_ids,
-        include_deleted=include_deleted,
-        has_extraction=has_extraction,
-        supplier_name_filter=supplier_name,
-        doc_id=doc_id,
-        document_type_ids=document_type_ids,
-        validation_statuses=validation_status,
-    )
+    if limit is not None:
+        response.headers["X-Total-Count"] = str(crud.document.count_filtered(db, **filters))
+        response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+    return crud.document.get_all_filtered(db, limit=limit, offset=offset, **filters)
+
+
+@router.get("/ids", response_model=list[int])
+def list_document_ids(filters: dict = Depends(_document_filters), db: Session = Depends(get_db)):
+    """Alle Treffer-IDs zu denselben Filtern (für „Alle N Treffer auswählen" über alle Seiten)."""
+    return crud.document.get_ids_filtered(db, **filters)
+
+
+@router.get("/filter-options")
+def document_filter_options(db: Session = Depends(get_db)):
+    """Jahre, Firmen und Lieferantennamen für die Filter-Dropdowns."""
+    return crud.document.get_filter_options(db)
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)

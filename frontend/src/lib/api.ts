@@ -485,6 +485,25 @@ export interface AnalyzeRequest {
 export const documentsApi = {
   list: (filters?: DocumentFilter) =>
     apiClient.get<DocumentItem[]>("/api/documents/", { params: filters }).then((r) => r.data),
+  /**
+   * Eine Seite der Belegliste + Gesamtzahl (Header X-Total-Count). Die Belege-Seite lädt immer nur
+   * die aktuelle Seite — bei vielen tausend Belegen ist `list` (alle Treffer) zu langsam.
+   */
+  listPage: async (filters: DocumentFilter | undefined, page: number, pageSize: number) => {
+    const r = await apiClient.get<DocumentItem[]>("/api/documents/", {
+      params: { ...filters, limit: pageSize, offset: page * pageSize },
+    });
+    const header = Number(r.headers["x-total-count"]);
+    return { items: r.data, total: Number.isFinite(header) ? header : r.data.length };
+  },
+  /** Alle Treffer-IDs zu den Filtern (für „alle Treffer auswählen") */
+  ids: (filters?: DocumentFilter) =>
+    apiClient.get<number[]>("/api/documents/ids", { params: filters }).then((r) => r.data),
+  /** Werte für die Filter-Dropdowns, unabhängig von der geladenen Seite */
+  filterOptions: () =>
+    apiClient
+      .get<{ years: number[]; companies: string[]; suppliers: string[] }>("/api/documents/filter-options")
+      .then((r) => r.data),
   get: (id: number) =>
     apiClient.get<DocumentDetail>(`/api/documents/${id}`).then((r) => r.data),
   previewUrl: (id: number) => `${BASE}/api/documents/${id}/preview`,
