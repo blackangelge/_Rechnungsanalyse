@@ -37,3 +37,15 @@ def test_branched_chain_is_reported_with_file_names(tmp_path):
         _assert_single_head(sd)
     msg = str(exc.value)
     assert "2 Heads" in msg and "0002_stale" in msg and "0002_stale.py" in msg and "0013_users" in msg
+
+
+def test_placeholder_revisions_of_the_production_database_exist_and_precede_plausibility():
+    """
+    Die Produktiv-Datenbank ist auf 0008_token_count_ai_client gestempelt (eigene Revisionen, nie im Repo).
+    Fehlen sie, bricht jedes Upgrade mit „Can't locate revision" ab — und die Kette muss durch sie hindurchlaufen.
+    """
+    sd = _script_dir(BACKEND)
+    for rev in ("0007_export_config_table", "0008_token_count_ai_client"):
+        assert sd.get_revision(rev) is not None
+    chain = [r.revision for r in sd.walk_revisions("base", "head")]      # vom Head abwärts zur Basis
+    assert chain.index("0007_plausibility") < chain.index("0008_token_count_ai_client") < chain.index("0007_export_config_table")
