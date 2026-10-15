@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "0007_plausibility"
-down_revision = "0006_worker_settings"
+down_revision = "0008_token_count_ai_client"
 branch_labels = None
 depends_on = None
 
