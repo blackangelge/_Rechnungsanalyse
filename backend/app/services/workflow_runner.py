@@ -289,7 +289,7 @@ async def _h_normalize(cfg, ctx: RunContext):
     from app.services import plausibility_service as ps
     raw = docs_parse_raw(ctx.raw)
     result = ps.ValidationResult(status=ps.STATUS_UNCHECKED)
-    ps._normalize_mass_to_tonnes(result, ctx.positions, ps._raw_positions(raw), cfg.target)
+    ps._normalize_mass_to_tonnes(result, ctx.positions, ps._raw_positions(raw), cfg.target, cfg.mode)
     if ctx.validation is not None and result.normalizations:
         ctx.validation["normalizations"] = (ctx.validation.get("normalizations") or []) + result.normalizations
     n = len(result.normalizations)

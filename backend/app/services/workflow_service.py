@@ -56,6 +56,8 @@ class ValidateConfig(BaseModel):
 
 class NormalizeConfig(BaseModel):
     target: Literal["t", "kg"] = "t"         # Zieleinheit für Gewichte (Menge, Einheit und Einzelpreis werden umgerechnet)
+    # nur für Ziel t: "tonne_prices" = nur Positionen mit Preis je Tonne, "all" = alle Gewichtspositionen
+    mode: Literal["tonne_prices", "all"] = "tonne_prices"
 
 
 class RefineConfig(BaseModel):

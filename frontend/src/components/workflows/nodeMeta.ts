@@ -49,9 +49,9 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
   },
   normalize_units: {
     label: "Einheiten vereinheitlichen",
-    description: "Rechnet Gewichte (kg, g, t) auf eine Einheit um — Menge, Einheit und Einzelpreis (€ je Einheit).",
+    description: "Vereinheitlicht Gewichte (Tonnen/TO/to → t, kg → t) — Menge, Einheit und Einzelpreis (€ je Einheit). Standard: nur Positionen, die je Tonne bepreist sind.",
     head: "bg-teal-600 text-white", border: "border-teal-400",
-    defaultConfig: { target: "t" },
+    defaultConfig: { target: "t", mode: "tonne_prices" },
   },
   ai_refine: {
     label: "KI-Nachbearbeitung",

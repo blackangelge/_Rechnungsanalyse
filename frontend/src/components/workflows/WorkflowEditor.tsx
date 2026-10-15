@@ -107,7 +107,7 @@ function summary(type: WorkflowNodeType, cfg: WorkflowNodeConfig, lookups: Looku
       return [cfg.auto_correct ? "Auto-Korrektur" : null, cfg.ai_recheck ? "KI-Nachprüfung" : null]
         .filter(Boolean).join(" · ") || "nur prüfen";
     case "normalize_units":
-      return `Gewichte → ${cfg.target ?? "t"}`;
+      return `Gewichte → ${cfg.target ?? "t"}${(cfg.target ?? "t") === "t" && (cfg.mode ?? "tonne_prices") === "tonne_prices" ? " (nur Preis je t)" : ""}`;
     case "ai_refine":
       return `${promptName(cfg.system_prompt_id, "Prompt fehlt!")}${cfg.include_images === false ? " · ohne Bilder" : ""}`;
     case "branch":
@@ -254,6 +254,15 @@ function Inspector({
             onChange={(e) => onChange({ config: { target: e.target.value as "t" | "kg" } })}>
             <option value="t">Tonnen (t)</option>
             <option value="kg">Kilogramm (kg)</option>
+          </select>
+        </Field>
+      )}
+      {t === "normalize_units" && (cfg.target ?? "t") === "t" && (
+        <Field label="Welche Positionen?" hint="Preise je kg oder je g sollten nicht in Tonnen umgerechnet werden (z. B. Kleinmengen).">
+          <select className={inputCls} value={cfg.mode ?? "tonne_prices"}
+            onChange={(e) => onChange({ config: { mode: e.target.value as "tonne_prices" | "all" } })}>
+            <option value="tonne_prices">Nur Positionen mit Preis je Tonne (empfohlen)</option>
+            <option value="all">Alle Gewichtspositionen</option>
           </select>
         </Field>
       )}

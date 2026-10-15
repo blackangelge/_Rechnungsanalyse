@@ -316,10 +316,27 @@ def test_kg_positions_are_normalized_to_tonnes_with_price_per_tonne():
     assert r.normalizations[0]["from"]["unit"] == "kg" and not r.corrections
 
 
-def test_kg_price_per_kg_is_converted_to_price_per_tonne():
+def test_price_per_kg_is_not_converted_by_default_but_with_mode_all():
+    """Preis je kg (Kleinmengen): nicht in Tonnen umwandeln — außer ausdrücklich gewünscht (mode "all")."""
     pos = [{"quantity": 500, "unit": "kg", "unit_price": 0.40, "total_price": 200.0}]
     validate_invoice({"total_amount": 238.0}, pos, _raw(200.0))
+    assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (500, "kg", 0.40)
+    pos = [{"quantity": 500, "unit": "kg", "unit_price": 12.0, "total_price": 6.0}]
+    validate_invoice({"total_amount": 7.14}, pos, _raw(6.0, positions=[{"preiseinheit": "g"}]))    # Preis je g (falsch erfasst o. Ä.)
+    assert pos[0]["unit"] == "kg"
+    from app.services import plausibility_service as ps
+    pos = [{"quantity": 500, "unit": "kg", "unit_price": 0.40, "total_price": 200.0}]
+    res = ps.ValidationResult(status=STATUS_UNCHECKED)
+    ps._normalize_mass_to_tonnes(res, pos, [], "t", "all")
     assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (0.5, "t", 400.0)
+
+
+def test_tonne_spellings_are_unified_to_t():
+    for spelling in ("Tonnen", "TO", "to", "Tonne", "To.", "tn"):
+        pos = [{"quantity": 2, "unit": spelling, "unit_price": 450.0, "total_price": 900.0}]
+        r = validate_invoice({"total_amount": 1071.0}, pos, _raw(900.0))
+        assert pos[0]["unit"] == "t" and pos[0]["quantity"] == 2, spelling
+        assert r.normalizations and r.normalizations[0]["from"]["unit"] == spelling
 
 
 def test_normalization_skipped_when_product_does_not_match_and_off_without_auto_correct():
