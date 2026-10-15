@@ -830,6 +830,10 @@ der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
   `update_document_names` hier standardmäßig **an**: Belege der Quellen (und des Ziels bei geändertem Namen) erhalten den endgültigen Namen,
   sonst verlieren sie die Zuordnung (Belegzähler, Workflow-Auswahl). Der Originalwortlaut bleibt in `raw_response`.
 - `VendorRead.document_count` = nicht gelöschte Belege mit diesem Namen (`crud.vendor.get_document_counts`, nur in Liste und Dublettensuche befüllt).
+- **Suchoptionen** (`GET /api/vendors/duplicate-groups?criteria=…&name_check=&min_name_similarity=&similarity=&max_key_share=`): gesuchte Merkmale
+  einzeln wählbar; Standard `name_check=true` — IBAN/USt-IdNr./Steuernr.-Treffer verbinden nur Lieferanten mit Namensähnlichkeit ≥ 50 %
+  (sonst wirft eine falsch gelesene Nummer, z.B. die des Rechnungsempfängers, fremde Lieferanten in eine Gruppe — Union-Find verkettet
+  transitiv); `max_key_share` (Standard 10) ignoriert Nummern, die bei zu vielen Lieferanten vorkommen. Frontend: „⚙ Suchoptionen".
 - Frontend `/lieferanten`: „Dubletten suchen" (Gruppen mit Konfidenz und Gründen), Mehrfachauswahl → `components/suppliers/MergeModal.tsx`.
 - `find_or_create` (Analyse) erkennt weiterhin nur exakte IBAN/USt-IdNr./Namen — Schreibvarianten legen neue Lieferanten an, die später
   per Dublettensuche zusammengeführt werden können.
