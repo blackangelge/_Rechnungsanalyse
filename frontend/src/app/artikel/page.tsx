@@ -12,7 +12,7 @@ import {
 
 /** Alle Eingabefelder als Text; Schlüssel = API-Parameter (und URL-Parameter) */
 const EMPTY_FORM = {
-  q: "", article_number: "", supplier_name: "", company: "", year: "", batch_id: "", unit: "",
+  q: "", article_number: "", supplier_name: "", company: "", year: "", batch_id: "", unit: "", unit_group: "",
   invoice_number: "", unit_price_min: "", unit_price_max: "", total_price_min: "", total_price_max: "",
   quantity_min: "", quantity_max: "", date_from: "", date_to: "", document_id: "", include_hidden: "",
 };
@@ -113,6 +113,8 @@ export default function ArtikelPage() {
   const [years, setYears] = useState<number[]>([]);
   const [units, setUnits] = useState<{ unit: string; count: number }[]>([]);
   const [showMore, setShowMore] = useState(false);
+  const [showUnits, setShowUnits] = useState(false);
+  const [unitTable, setUnitTable] = useState<{ group: string; label: string; base_unit: string; units: { unit: string; factor: number }[] }[]>([]);
 
   // Aktueller Zustand für Callbacks (wie bei den Belegen: Blättern/Sortieren setzt nichts anderes zurück)
   const state = useRef({ applied: EMPTY_FORM as Form, pageSize: 50, sort: undefined as PositionSort | undefined, order: "desc" as "asc" | "desc" });
@@ -256,13 +258,51 @@ export default function ArtikelPage() {
               {units.map((u) => <option key={u.unit} value={u.unit}>{u.unit} ({u.count.toLocaleString("de-DE")})</option>)}
             </select>
           </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600">Einheitengruppe</label>
+            <select value={form.unit_group} onChange={set("unit_group")} className={`${field} w-44`} data-testid="unit-group">
+              <option value="">Alle</option>
+              <option value="mass">Gewicht (t, kg, g …)</option>
+              <option value="volume">Volumen (hl, l, ml …)</option>
+              <option value="length">Länge (km, m, cm …)</option>
+              <option value="area">Fläche (m²)</option>
+            </select>
+          </div>
           <button onClick={() => apply()} data-testid="apply"
             className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Suchen</button>
           <button onClick={reset} className="rounded border border-gray-300 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100">Zurücksetzen</button>
+          <button onClick={() => {
+            setShowUnits((v) => !v);
+            if (unitTable.length === 0) positionsApi.unitTable().then(setUnitTable).catch(() => undefined);
+          }} data-testid="units-toggle" className="text-sm text-blue-600 hover:underline">
+            {showUnits ? "Einheiten ausblenden" : "ⓘ Einheiten-Umrechnung"}
+          </button>
           <button onClick={() => setShowMore((v) => !v)} className="text-sm text-blue-600 hover:underline">
             {showMore ? "Weniger Filter" : "Mehr Filter"}
           </button>
         </div>
+
+        {showUnits && (
+          <div className="mt-3 rounded border border-blue-100 bg-blue-50/50 p-3 text-sm text-gray-700" data-testid="units-info">
+            <p className="mb-2 text-xs text-gray-500">
+              Mengen werden für Auswertungen in die Basiseinheit umgerechnet (in der Tabelle als „= …“ unter der Menge, Preis je
+              Basiseinheit = Positionspreis ÷ Menge). Die Rechnungswerte bleiben unverändert gespeichert. Stück, Paletten, Säcke u. Ä.
+              werden nicht umgerechnet.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {unitTable.map((g) => (
+                <div key={g.group}>
+                  <div className="font-medium">{g.label} <span className="text-xs font-normal text-gray-500">(Basis: {g.base_unit})</span></div>
+                  <ul className="text-xs text-gray-600">
+                    {g.units.map((u) => (
+                      <li key={u.unit}>1 {u.unit} = {u.factor.toLocaleString("de-DE", { maximumFractionDigits: 6 })} {g.base_unit}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {showMore && (
           <div className="mt-3 flex flex-wrap items-end gap-3 border-t pt-3" data-testid="more-filters">
@@ -358,7 +398,7 @@ export default function ArtikelPage() {
             <div className="text-xs text-gray-400">{eur(summary.unit_price_min, 4)} – {eur(summary.unit_price_max, 4)}</div>
           </div>
           <div className="rounded-lg border bg-white p-3 shadow-sm">
-            <div className="text-xs text-gray-500">Nach Einheit</div>
+            <div className="text-xs text-gray-500">Nach Einheit <span className="text-gray-400">(t/kg/g → kg, hl/l/ml → l)</span></div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {summary.by_unit.length === 0 && <span className="text-sm text-gray-300">–</span>}
               {summary.by_unit.slice(0, 5).map((u) => (
@@ -428,8 +468,20 @@ export default function ArtikelPage() {
                 <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-600">
                   <Highlight text={p.article_number} query={applied.q} />
                 </td>
-                <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{num(p.quantity)} {p.unit ?? ""}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{eur(p.unit_price, 4)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{num(p.quantity)} {p.unit ?? ""}
+                  {p.base_unit && (p.unit ?? "").trim().toLowerCase() !== p.base_unit && (
+                    <div className="text-xs text-gray-400" title="Umgerechnet in die Basiseinheit">
+                      = {num(p.base_quantity ?? null)} {p.base_unit}
+                    </div>
+                  )}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{eur(p.unit_price, 4)}
+                  {p.base_unit && p.base_unit_price != null && (
+                    <div className="text-xs text-gray-400" title="Positionspreis ÷ umgerechnete Menge">
+                      = {eur(p.base_unit_price, 4)} / {p.base_unit}
+                    </div>
+                  )}
+                </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right font-medium tabular-nums text-gray-900">{eur(p.total_price)}</td>
                 <td className="px-3 py-2 text-gray-700">
                   {p.supplier_name ?? "–"}

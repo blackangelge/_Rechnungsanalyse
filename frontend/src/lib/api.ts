@@ -1140,6 +1140,10 @@ export interface PositionHit {
   quantity: number | string | null;
   unit: string | null;
   unit_price: number | string | null;
+  /** Umrechnung in die Basiseinheit (kg, l, m, m²); null bei Stück/Verpackungen/unbekannter Einheit */
+  base_quantity?: number | string | null;
+  base_unit?: string | null;
+  base_unit_price?: number | string | null;
   total_price: number | string | null;
   discount: string | null;
   invoice_number: string | null;
@@ -1164,6 +1168,8 @@ export interface PositionFilter {
   document_id?: number;
   invoice_number?: string;
   unit?: string;
+  /** alle Einheiten einer Gruppe zusammen (t, kg, g … = mass) */
+  unit_group?: "mass" | "volume" | "length" | "area";
   unit_price_min?: number;
   unit_price_max?: number;
   total_price_min?: number;
@@ -1216,6 +1222,13 @@ export const positionsApi = {
   /** Kennzahlen zu denselben Filtern (Anzahl, Summe, Einzelpreis min/Ø/max, je Einheit) */
   summary: (filters: PositionFilter) =>
     apiClient.get<PositionSummary>("/api/positions/summary", { params: filters }).then((r) => r.data),
+
+  /** Umrechnungstabelle (1 t = 1000 kg …) */
+  unitTable: () =>
+    apiClient
+      .get<{ group: string; label: string; base_unit: string; units: { unit: string; factor: number }[] }[]>(
+        "/api/positions/unit-table")
+      .then((r) => r.data),
 
   /** Einheiten für das Filter-Dropdown */
   filterOptions: () =>

@@ -787,6 +787,10 @@ Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, s
 - Filter: `q` (alle Wörter müssen in Bezeichnung, Beschreibung **oder** Artikelnummer vorkommen; `%`/`_` sind keine Platzhalter), `article_number`, `supplier_name`
   (Teilstring auf `invoice_extractions.vendor_id` = Lieferantenname), `company`, `year` (aus dem Import), `batch_ids`, `document_id`, `invoice_number`, `unit`,
   `unit_price_`/`total_price_`/`quantity_` `min|max`, `date_from|date_to`, `validation_status`, `include_deleted`.
+- **Einheiten-Umrechnung** (`services/unit_conversion.py`, nutzt dieselbe Tabelle `_UNITS` wie die Plausibilitätsprüfung): Gewicht → kg, Volumen → l, Länge → m, Fläche → m².
+  Zur Abfragezeit in SQL (nichts gespeichert, gilt sofort für den Altbestand): Trefferfelder `base_quantity`, `base_unit`, `base_unit_price` (= Positionspreis ÷ Basismenge;
+  leer bei Stück/Verpackungen/unbekannten Einheiten); `/summary` fasst `by_unit` in der Basiseinheit zusammen (t + kg + g → kg); Filter `unit_group=mass|volume|length|area`;
+  `GET /api/positions/unit-table` liefert die Umrechnungstabelle (Oberfläche: „ⓘ Einheiten-Umrechnung"). Neue Einheit → in `_register(...)` ergänzen, nicht hier.
 - Sortierung: leere Werte immer am Ende, `id` als Tie-Breaker → stabiles Blättern. Standard: neueste Belege zuerst.
 - Es werden nur Listenspalten gelesen (kein `raw_response`); Teilstring-Suche nutzt die `pg_trgm`-Indizes aus Migration 0011.
 - Frontend `app/artikel/page.tsx`: alle Filter stehen in der Adresszeile (`?q=…&unit=t`) → teilbar; Beleg-Link auf `/belege?doc_id=…`.
