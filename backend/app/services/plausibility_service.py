@@ -515,7 +515,7 @@ def validate_invoice(
 # ─── interne Helfer ───────────────────────────────────────────────────────────
 
 def _normalize_mass_to_tonnes(
-    result: "ValidationResult", positions: list[dict], raw_pos: list[dict],
+    result: "ValidationResult", positions: list[dict], raw_pos: list[dict], target: str = "t",
 ) -> None:
     """
     Rechnet Gewichtspositionen (kg, g, …) auf Tonnen um — Menge, Einheit und Einzelpreis (€ je t), damit Datenbank,
@@ -523,22 +523,23 @@ def _normalize_mass_to_tonnes(
     (und im `raw_response`). Es wird nur umgerechnet, wenn Menge × neuer Preis weiterhin zum Positionspreis passt
     (Positionsrabatt berücksichtigt); sonst bleibt die Position unverändert.
     """
+    tf = 1000.0 if target == "t" else 1.0          # Faktor der Zieleinheit in kg
     for idx, pos in enumerate(positions):
         unit = parse_unit(pos.get("unit"))
         qty = _f(pos.get("quantity"))
         if unit is None or unit.dimension != "mass" or qty is None:
             continue
-        if abs(unit.factor - 1000.0) < 1e-9 and str(pos.get("unit")).strip().lower() in ("t", "to", "tonne", "tonnen"):
-            continue
-        qty_t = qty * unit.factor / 1000.0
+        if abs(unit.factor - tf) < 1e-9 and not re.match(r"^\s*\d", str(pos.get("unit"))):
+            continue                                                       # steht schon in der Zieleinheit
+        qty_t = qty * unit.factor / tf
         price, total = _f(pos.get("unit_price")), _f(pos.get("total_price"))
         new_price: float | None = None
         if price is not None:
             price_unit = parse_unit((raw_pos[idx] if idx < len(raw_pos) else {}).get("preiseinheit")) or unit
             candidates = []
             if price_unit.dimension == "mass":
-                candidates.append(price * 1000.0 / price_unit.factor)     # Preis bezog sich auf price_unit
-            candidates.append(price)                                      # Preis galt bereits je Tonne
+                candidates.append(price * tf / price_unit.factor)       # Preis bezog sich auf price_unit
+            candidates.append(price)                                      # Preis galt bereits je Zieleinheit
             if total is None:
                 new_price = candidates[0]
             else:
@@ -551,12 +552,12 @@ def _normalize_mass_to_tonnes(
                     continue                                              # passt nicht → nicht anfassen
         before = {"quantity": qty, "unit": pos.get("unit"), "unit_price": price}
         pos["quantity"] = round(qty_t, 6)
-        pos["unit"] = "t"
+        pos["unit"] = target
         if new_price is not None:
             pos["unit_price"] = round(new_price, 6)
         result.normalizations.append({
             "position": idx, "field": "normalize", "from": before,
-            "to": {"quantity": pos["quantity"], "unit": "t", "unit_price": pos.get("unit_price")},
+            "to": {"quantity": pos["quantity"], "unit": target, "unit_price": pos.get("unit_price")},
         })
 
 

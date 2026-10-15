@@ -47,6 +47,18 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
     head: "bg-rose-600 text-white", border: "border-rose-400",
     defaultConfig: { auto_correct: true, ai_recheck: true },
   },
+  normalize_units: {
+    label: "Einheiten vereinheitlichen",
+    description: "Rechnet Gewichte (kg, g, t) auf eine Einheit um — Menge, Einheit und Einzelpreis (€ je Einheit).",
+    head: "bg-teal-600 text-white", border: "border-teal-400",
+    defaultConfig: { target: "t" },
+  },
+  ai_refine: {
+    label: "KI-Nachbearbeitung",
+    description: "Die KI bearbeitet das bisherige Ergebnis mit einem eigenen Prompt erneut (z. B. Einheiten korrigieren, Felder ergänzen).",
+    head: "bg-fuchsia-600 text-white", border: "border-fuchsia-400",
+    defaultConfig: { system_prompt_id: null, ai_config_id: null, include_images: true },
+  },
   end: {
     label: "Ende",
     description: "Hier endet der Ablauf; das Ergebnis wird gespeichert.",
@@ -56,7 +68,7 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
 };
 
 export const NODE_ORDER: WorkflowNodeType[] = [
-  "trim_pages", "detect_type", "branch", "extract", "validate", "end",
+  "trim_pages", "detect_type", "branch", "extract", "validate", "normalize_units", "ai_refine", "end",
 ];
 
 export const BRANCH_FIELDS: Record<string, string> = {

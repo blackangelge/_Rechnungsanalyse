@@ -747,6 +747,8 @@ Workers; ein Knoten kann eine andere KI-Konfiguration erzwingen (`ai_config_id`)
 | `branch` | `field`, `op`, `value` | Ja/Nein-Weiche (`true`/`false`); Felder `document_type`, `supplier_name`, `page_count`, `validation_status` |
 | `extract` | `system_prompt_id?`, `ai_config_id?` | Rechnungsdaten extrahieren (leer = gewählter/Standard-Prompt bzw. -KI) |
 | `validate` | `auto_correct`, `ai_recheck` | Plausibilitätsprüfung (`_plausibility_pass`), Stufen einzeln abschaltbar |
+| `normalize_units` | `target` (`t`\|`kg`) | Gewichte (kg/g/t) in Menge, Einheit und Einzelpreis (€ je Einheit) auf eine Einheit umrechnen (`plausibility_service._normalize_mass_to_tonnes`); wirkt nur nach einer Extraktion |
+| `ai_refine` | `system_prompt_id` (Pflicht), `ai_config_id?`, `include_images` | KI-Nachbearbeitung: eigener Prompt + bisheriges Ergebnis (JSON) → ersetzt Felder/Positionen (Prüfstatus wird zurückgesetzt, danach erneut „Plausibilität prüfen“); liefert die KI nichts Verwertbares, bleiben die Daten unverändert |
 | `end` | – | Ende |
 
 Regeln (`validate_graph`, beim Speichern erzwungen → HTTP 422): genau ein Start ohne Eingang; jeder Ausgang höchstens **eine** Kante (sequenzieller Ablauf);

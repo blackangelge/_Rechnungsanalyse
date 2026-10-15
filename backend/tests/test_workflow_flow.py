@@ -301,7 +301,7 @@ def client(sqlite_session_factory):
 
 def test_api_crud_and_templates(client):
     tpls = client.get("/api/workflows/templates").json()
-    assert {t["key"] for t in tpls} == {"standard", "direct", "trimmed"}
+    assert {t["key"] for t in tpls} == {"standard", "direct", "trimmed", "tonnes"}
 
     r = client.post("/api/workflows", json={"name": "Aus Vorlage", "template": "standard"})
     assert r.status_code == 201
@@ -457,3 +457,58 @@ def test_worker_precheck_uses_workflow_trim_not_global_setting(env, monkeypatch)
     asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc2.id}))
     env.db.expire_all()
     assert env.db.get(type(doc2), doc2.id).page_count == limit
+
+
+def _chain(*nodes):
+    g = {"nodes": [workflow_service._node("start", "start", "Start", 0, 0)], "edges": []}
+    prev = "start"
+    for i, (ntype, cfg) in enumerate(nodes):
+        nid = f"n{i}"
+        g["nodes"].append(workflow_service._node(nid, ntype, ntype, 200 * (i + 1), 0, cfg))
+        g["edges"].append(workflow_service._edge(prev, nid))
+        prev = nid
+    g["nodes"].append(workflow_service._node("end", "end", "Ende", 200 * (len(nodes) + 1), 0))
+    g["edges"].append(workflow_service._edge(prev, "end"))
+    return g
+
+
+KG_POS = [{"quantity": 25880, "unit": "kg", "unit_price": 0.4211, "total_price": 10898.07}]
+
+
+def test_normalize_node_converts_kg_to_tonnes_or_back(env, monkeypatch):
+    FakeAI(monkeypatch, positions=KG_POS)
+    env.add_workflow(_chain(("extract", {}), ("normalize_units", {"target": "t"})), default=True)
+    doc = env.analyze(env.make_doc())
+    pos = doc.order_positions[0]
+    assert (float(pos.quantity), pos.unit, round(float(pos.unit_price_netto), 4)) == (25.88, "t", 421.1)
+    assert "1 Position(en) auf t umgerechnet" in doc.workflow_run[2]["detail"]
+
+
+def test_normalize_node_target_kg_and_skip_without_extraction(env, monkeypatch):
+    FakeAI(monkeypatch, positions=[{"quantity": 2, "unit": "t", "unit_price": 450.0, "total_price": 900.0}])
+    env.add_workflow(_chain(("extract", {}), ("normalize_units", {"target": "kg"})), default=True)
+    doc = env.analyze(env.make_doc())
+    pos = doc.order_positions[0]
+    assert (float(pos.quantity), pos.unit, float(pos.unit_price_netto)) == (2000.0, "kg", 0.45)
+    wf = env.add_workflow(_chain(("normalize_units", {})), name="ohne Extraktion", default=True)
+    assert "keine Extraktion" in env.analyze(env.make_doc(), workflow_id=wf.id).workflow_run[1]["detail"]
+
+
+def test_refine_node_reprocesses_previous_result_with_own_prompt(env, monkeypatch):
+    ai = FakeAI(monkeypatch)
+    sp = SystemPrompt(name="Nachbearbeitung", content="REFINE-PROMPT", type=2)
+    env.db.add(sp)
+    env.db.commit()
+    env.add_workflow(_chain(("extract", {}), ("ai_refine", {"system_prompt_id": sp.id})), default=True)
+    env.analyze(env.make_doc())
+    assert ai.names() == ["extract", "extract"]
+    assert ai.calls[1][2].startswith("REFINE-PROMPT") and "BISHERIGE AUSLESUNG" in ai.calls[1][2]
+
+
+def test_refine_node_without_prompt_fails_clearly_and_new_nodes_validate(env, monkeypatch):
+    FakeAI(monkeypatch)
+    env.add_workflow(_chain(("extract", {}), ("ai_refine", {})), default=True)
+    doc = env.analyze(env.make_doc())
+    assert doc.status == "error"
+    rep = workflow_service.validate_graph(_chain(("normalize_units", {}), ("extract", {})))
+    assert rep.ok and any("liegt vor jeder Extraktion" in w for w in rep.warnings)

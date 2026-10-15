@@ -7,7 +7,7 @@ Ein Workflow ist ein gerichteter Graph (JSON, kompatibel zu React Flow):
                 "data": {"label": "Start", "config": {...}}}, ...],
      "edges": [{"id": "e1", "source": "n1", "target": "n2", "sourceHandle": null}, ...]}
 
-Knotentypen: start · trim_pages · detect_type · branch · extract · validate · end.
+Knotentypen: start · trim_pages · detect_type · branch · extract · validate · normalize_units · ai_refine · end.
 Der Ablauf ist sequenziell: ab "start" wird immer genau ein Knoten nach dem anderen
 ausgeführt; nur "branch" verzweigt (Ausgang "true"/"false"). Jeder Ausgang darf höchstens
 eine ausgehende Kante haben, Zyklen sind verboten. Fehlt die Kante, endet der Ablauf.
@@ -26,7 +26,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 # ─── Knotentypen und ihre Konfiguration ───────────────────────────────────────
 
-NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "validate", "end")
+NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "validate", "normalize_units", "ai_refine", "end")
+# Knoten, die Extraktionsdaten bearbeiten (ohne vorherige Extraktion wirkungslos bzw. nur eingeschränkt)
+DATA_NODES = ("validate", "normalize_units")
 MAX_STEPS = 100   # Schutz gegen Endlosschleifen (Zyklen werden zusätzlich beim Speichern verboten)
 
 
@@ -52,6 +54,16 @@ class ValidateConfig(BaseModel):
     ai_recheck: bool = True                  # bei Auffälligkeit zweite KI-Abfrage
 
 
+class NormalizeConfig(BaseModel):
+    target: Literal["t", "kg"] = "t"         # Zieleinheit für Gewichte (Menge, Einheit und Einzelpreis werden umgerechnet)
+
+
+class RefineConfig(BaseModel):
+    system_prompt_id: int | None = None      # Prompt für die Nachbearbeitung (nötig)
+    ai_config_id: int | None = None          # None = bisherige/Standard-KI
+    include_images: bool = True              # PDF-Seiten mitsenden (sonst nur die bisherigen Daten)
+
+
 BranchField = Literal["document_type", "supplier_name", "page_count", "validation_status"]
 BranchOp = Literal["equals", "not_equals", "contains", "gt", "lt", "in"]
 
@@ -74,6 +86,7 @@ CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "start": EmptyConfig, "end": EmptyConfig, "trim_pages": TrimConfig,
     "detect_type": DetectConfig, "extract": ExtractConfig,
     "validate": ValidateConfig, "branch": BranchConfig,
+    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig,
 }
 
 # Ausgänge je Knotentyp
@@ -306,7 +319,7 @@ def _warn_validate_before_extract(rep: GraphReport, by_id: dict, outgoing: dict,
             continue
         seen.add((nid, extracted))
         ntype = by_id[nid].get("type")
-        if ntype == "validate" and not extracted and nid not in flagged:
+        if ntype in DATA_NODES and not extracted and nid not in flagged:
             flagged.add(nid)
             rep.warnings.append(f"'{_label(by_id[nid])}' liegt vor jeder Extraktion und wird übersprungen")
         extracted = extracted or ntype == "extract"
@@ -434,6 +447,17 @@ def templates() -> list[dict]:
             _edge("extract", "validate"), _edge("validate", "end"),
         ],
     }
+    tonnes = {
+        "nodes": [
+            _node("start", "start", "Start", 0, 60),
+            _node("extract", "extract", "Rechnungsdaten extrahieren", 240, 60),
+            _node("validate", "validate", "Plausibilität prüfen", 500, 60),
+            _node("units", "normalize_units", "Gewichte in Tonnen", 760, 60, {"target": "t"}),
+            _node("end", "end", "Fertig", 1000, 60),
+        ],
+        "edges": [_edge("start", "extract"), _edge("extract", "validate"), _edge("validate", "units"),
+                  _edge("units", "end")],
+    }
     return [
         {"key": "standard", "name": "Standard (wie bisher)",
          "description": "Dokumententyp erkennen → nur bei Eingangsrechnung extrahieren und prüfen.",
@@ -441,6 +465,9 @@ def templates() -> list[dict]:
         {"key": "direct", "name": "Nur Extraktion",
          "description": "Ohne Typerkennung: sofort extrahieren und prüfen.",
          "graph": direct},
+        {"key": "tonnes", "name": "Extraktion + Gewichte in Tonnen",
+         "description": "Extrahieren, prüfen und alle Gewichte (kg/g) einheitlich auf Tonnen umrechnen.",
+         "graph": tonnes},
         {"key": "trimmed", "name": "Erst kürzen, dann analysieren",
          "description": "Für lange PDFs, bei denen nur die erste Seite die Rechnung enthält.",
          "graph": trimmed},

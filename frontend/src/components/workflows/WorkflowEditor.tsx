@@ -106,6 +106,10 @@ function summary(type: WorkflowNodeType, cfg: WorkflowNodeConfig, lookups: Looku
     case "validate":
       return [cfg.auto_correct ? "Auto-Korrektur" : null, cfg.ai_recheck ? "KI-Nachprüfung" : null]
         .filter(Boolean).join(" · ") || "nur prüfen";
+    case "normalize_units":
+      return `Gewichte → ${cfg.target ?? "t"}`;
+    case "ai_refine":
+      return `${promptName(cfg.system_prompt_id, "Prompt fehlt!")}${cfg.include_images === false ? " · ohne Bilder" : ""}`;
     case "branch":
       return `${BRANCH_FIELDS[cfg.field ?? "document_type"]} ${BRANCH_OPS[cfg.op ?? "equals"]} ${cfg.value || "…"}`;
     default:
@@ -240,6 +244,40 @@ function Inspector({
             <input type="checkbox" className="mt-0.5" checked={cfg.ai_recheck ?? true}
               onChange={(e) => onChange({ config: { ai_recheck: e.target.checked } })} />
             <span>Bei Auffälligkeit zweite KI-Abfrage<span className="block text-xs text-gray-400">sonst Markierung zur manuellen Prüfung</span></span>
+          </label>
+        </>
+      )}
+
+      {t === "normalize_units" && (
+        <Field label="Gewichte umrechnen auf" hint="Menge, Einheit und Einzelpreis (€ je Einheit) der Positionen werden umgerechnet. Wirkt nach einer Extraktion.">
+          <select className={inputCls} value={cfg.target ?? "t"}
+            onChange={(e) => onChange({ config: { target: e.target.value as "t" | "kg" } })}>
+            <option value="t">Tonnen (t)</option>
+            <option value="kg">Kilogramm (kg)</option>
+          </select>
+        </Field>
+      )}
+
+      {t === "ai_refine" && (
+        <>
+          <Field label="Systemprompt (Anweisung)" hint="Pflicht. Das bisherige Ergebnis (JSON) wird automatisch angehängt; die KI soll im selben Format antworten.">
+            <select className={inputCls} value={cfg.system_prompt_id ?? ""}
+              onChange={(e) => onChange({ config: { system_prompt_id: num(e.target.value) } })}>
+              <option value="">— bitte wählen —</option>
+              {prompts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+          <Field label="KI-Konfiguration" hint="Leer = bisherige bzw. Standard-KI.">
+            <select className={inputCls} value={cfg.ai_config_id ?? ""}
+              onChange={(e) => onChange({ config: { ai_config_id: num(e.target.value) } })}>
+              <option value="">Wie bisher (Standard)</option>
+              {aiConfigs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+          <label className="mb-2 flex items-start gap-2 text-sm text-gray-700">
+            <input type="checkbox" className="mt-0.5" checked={cfg.include_images ?? true}
+              onChange={(e) => onChange({ config: { include_images: e.target.checked } })} />
+            <span>PDF-Seiten mitsenden<span className="block text-xs text-gray-400">aus = nur die bisherigen Daten, schneller und günstiger</span></span>
           </label>
         </>
       )}

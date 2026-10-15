@@ -805,7 +805,7 @@ export const logsApi = {
 // ─── Typen: Workflows ─────────────────────────────────────────────────────────
 
 export type WorkflowNodeType =
-  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "validate" | "end";
+  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "validate" | "normalize_units" | "ai_refine" | "end";
 
 export interface WorkflowNodeConfig {
   // trim_pages
@@ -813,6 +813,10 @@ export interface WorkflowNodeConfig {
   // detect_type / extract
   system_prompt_id?: number | null;
   ai_config_id?: number | null;
+  // normalize_units
+  target?: "t" | "kg";
+  // ai_refine
+  include_images?: boolean;
   // validate
   auto_correct?: boolean;
   ai_recheck?: boolean;
