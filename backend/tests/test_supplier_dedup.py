@@ -88,3 +88,27 @@ def test_sorting_high_first_and_no_duplicates_found():
 
 def test_empty_values_never_match():
     assert find_duplicate_groups([S(1, "Eins", iban="", vat_id="  "), S(2, "Zwei", iban=None, vat_id="")]) == []
+
+
+def test_criteria_limit_what_is_searched():
+    sup = [S(1, "ACME GmbH", iban="DE02120300000000202051"), S(2, "Acme AG", iban="DE02 1203 0000 0000 2020 51")]
+    assert find_duplicate_groups(sup, criteria=["iban"])[0].reasons == ["iban"]
+    assert find_duplicate_groups(sup, criteria=["vat_id"]) == []
+    assert find_duplicate_groups(sup, criteria=["name"])[0].reasons == ["name"]
+
+
+def test_shared_number_of_unrelated_names_is_not_chained_when_name_check_on():
+    # Eine falsch gelesene Steuernummer (z.B. die des Empfängers) darf Fremde nicht verbinden
+    sup = [S(1, "August Rüggeberg GmbH", tax_number="123/456/78901"),
+           S(2, "ENGIE Deutschland GmbH", tax_number="123/456/78901"),
+           S(3, "DKV EURO SERVICE GmbH", tax_number="123/456/78901"),
+           S(4, "DKV Euro Service GmbH & Co. KG", tax_number="123/456/78901")]
+    assert len(find_duplicate_groups(sup)[0].supplier_ids) == 4          # ohne Prüfung: alles in einer Gruppe
+    g = find_duplicate_groups(sup, min_name_similarity=0.5)
+    assert [x.supplier_ids for x in g] == [[3, 4]]
+
+
+def test_numbers_shared_by_too_many_suppliers_are_ignored():
+    sup = [S(i, f"Firma {i}x", vat_id="DE123456789") for i in range(1, 6)]
+    assert find_duplicate_groups(sup, max_key_share=4) == []
+    assert find_duplicate_groups(sup, max_key_share=5)

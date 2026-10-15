@@ -967,10 +967,26 @@ export interface VendorMergeResult {
   moved_bank_accounts: number;
 }
 
+export interface DuplicateSearchOptions {
+  criteria: string[];            // iban | vat_id | tax_number | name | name_similar
+  nameCheck: boolean;            // Nummern-Treffer nur bei ähnlichem Namen werten
+  minNameSimilarity: number;     // 0–1
+  similarity: number;            // Schwelle „ähnlicher Name“ (0.5–1)
+  maxKeyShare: number;           // Nummern, die bei mehr Lieferanten vorkommen, ignorieren
+}
+
 export const vendorsApi = {
   /** Dublettensuche (IBAN, USt-IdNr., Steuernummer, Name) — verändert nichts */
-  duplicateGroups: () =>
-    apiClient.get<DuplicateGroup[]>("/api/vendors/duplicate-groups").then((r) => r.data),
+  duplicateGroups: (opts?: DuplicateSearchOptions) =>
+    apiClient
+      .get<DuplicateGroup[]>("/api/vendors/duplicate-groups", {
+        params: opts && {
+          criteria: opts.criteria, name_check: opts.nameCheck, min_name_similarity: opts.minNameSimilarity,
+          similarity: opts.similarity, max_key_share: opts.maxKeyShare,
+        },
+        paramsSerializer: { indexes: null },
+      })
+      .then((r) => r.data),
   /** Lieferanten zusammenführen */
   merge: (data: VendorMergeRequest) =>
     apiClient.post<VendorMergeResult>("/api/vendors/merge", data).then((r) => r.data),

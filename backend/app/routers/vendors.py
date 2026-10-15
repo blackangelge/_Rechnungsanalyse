@@ -14,7 +14,7 @@ Lieferanten werden beim Anlegen automatisch dedupliziert (find_or_create in crud
 Diese Endpunkte dienen zur manuellen Verwaltung bestehender Einträge.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app import crud
@@ -75,14 +75,32 @@ class _DedupView:
 
 
 @router.get("/duplicate-groups", response_model=list[DuplicateGroupRead])
-def get_duplicate_groups(db: Session = Depends(get_db)):
+def get_duplicate_groups(
+    criteria: list[str] | None = Query(
+        default=None, description="Gesuchte Merkmale: iban, vat_id, tax_number, name, name_similar (leer = alle)"),
+    name_check: bool = Query(True, description="Nummern-Treffer nur bei ähnlichem Namen werten"),
+    min_name_similarity: float = Query(0.5, ge=0, le=1, description="Mindest-Namensähnlichkeit für name_check"),
+    similarity: float = Query(supplier_dedup.SIMILARITY_THRESHOLD, ge=0.5, le=1,
+                              description="Schwelle für „ähnlicher Name“"),
+    max_key_share: int = Query(10, ge=2, le=1000, description="Nummern, die bei mehr Lieferanten vorkommen, ignorieren"),
+    db: Session = Depends(get_db),
+):
     """
     Dublettensuche: gleiche IBAN / USt-IdNr. / Steuernummer (hohe Konfidenz), gleicher Name ohne
     Rechtsform (mittel), sehr ähnlicher Name (niedrig). Es wird nichts verändert.
     """
     by_id = {v.id: v for v in crud.vendor.get_all(db)}
     counts = crud.vendor.get_document_counts(db)
-    groups = supplier_dedup.find_duplicate_groups(_DedupView(v) for v in by_id.values())
+    unknown = set(criteria or []) - set(supplier_dedup.REASON_LABELS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unbekannte Merkmale: {sorted(unknown)}")
+    groups = supplier_dedup.find_duplicate_groups(
+        (_DedupView(v) for v in by_id.values()),
+        criteria=criteria or None,
+        min_name_similarity=min_name_similarity if name_check else 0.0,
+        max_key_share=max_key_share,
+        similarity_threshold=similarity,
+    )
     return [
         DuplicateGroupRead(
             suppliers=[_read(by_id[i], counts) for i in g.supplier_ids],

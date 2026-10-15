@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import MergeModal from "@/components/suppliers/MergeModal";
 import {
-  DuplicateGroup, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount, WorkflowListItem,
+  DuplicateGroup, DuplicateSearchOptions, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount, WorkflowListItem,
   vendorsApi, workflowsApi, extractApiError,
 } from "@/lib/api";
 
@@ -111,6 +111,11 @@ export default function LieferantenPage() {
   const [mergeVendors, setMergeVendors] = useState<Vendor[] | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [dupeLoading, setDupeLoading] = useState(false);
+  const [showDupeOptions, setShowDupeOptions] = useState(false);
+  const [dupeOpts, setDupeOpts] = useState<DuplicateSearchOptions>({
+    criteria: ["iban", "vat_id", "tax_number", "name", "name_similar"],
+    nameCheck: true, minNameSimilarity: 0.5, similarity: 0.88, maxKeyShare: 10,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -159,7 +164,7 @@ export default function LieferantenPage() {
     );
     await load();
     if (duplicates !== null) {          // Dublettenliste aktuell halten
-      try { setDuplicates(await vendorsApi.duplicateGroups()); } catch { /* bleibt sichtbar */ }
+      try { setDuplicates(await vendorsApi.duplicateGroups(dupeOpts)); } catch { /* bleibt sichtbar */ }
     }
   }
 
@@ -167,7 +172,7 @@ export default function LieferantenPage() {
     setDupeLoading(true);
     setSuccessMsg(null);
     try {
-      setDuplicates(await vendorsApi.duplicateGroups());
+      setDuplicates(await vendorsApi.duplicateGroups(dupeOpts));
     } catch (err) {
       setError(extractApiError(err, "Fehler bei der Dublettensuche"));
     } finally {
@@ -192,14 +197,85 @@ export default function LieferantenPage() {
           <h1 className="text-2xl font-bold text-gray-900">Lieferanten</h1>
           <p className="mt-1 text-sm text-gray-500">{vendors.length} Lieferant(en)</p>
         </div>
-        <button
-          onClick={handleFindDuplicates}
-          disabled={dupeLoading}
-          className="rounded bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
-        >
-          {dupeLoading ? "Suche..." : "🔍 Dubletten suchen"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowDupeOptions((v) => !v)}
+            data-testid="dupe-options-toggle"
+            className="rounded border border-amber-400 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50"
+          >
+            ⚙ Suchoptionen
+          </button>
+          <button
+            onClick={handleFindDuplicates}
+            disabled={dupeLoading || dupeOpts.criteria.length === 0}
+            className="rounded bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+          >
+            {dupeLoading ? "Suche..." : "🔍 Dubletten suchen"}
+          </button>
+        </div>
       </div>
+
+      {showDupeOptions && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-white p-4 text-sm" data-testid="dupe-options">
+          <h2 className="mb-2 font-semibold text-gray-800">Was soll als Dublette gelten?</h2>
+          <div className="mb-3 grid gap-1 sm:grid-cols-2">
+            {([
+              ["iban", "Gleiche IBAN"],
+              ["vat_id", "Gleiche USt-IdNr."],
+              ["tax_number", "Gleiche Steuernummer"],
+              ["name", "Gleicher Name (ohne Rechtsform wie GmbH, KG …)"],
+              ["name_similar", "Ähnlicher Name (Tippfehler, andere Schreibweise)"],
+            ] as const).map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={dupeOpts.criteria.includes(key)}
+                  onChange={(e) => setDupeOpts((o) => ({
+                    ...o,
+                    criteria: e.target.checked ? [...o.criteria, key] : o.criteria.filter((c) => c !== key),
+                  }))}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <label className="mb-2 flex items-center gap-2">
+            <input
+              type="checkbox" checked={dupeOpts.nameCheck}
+              onChange={(e) => setDupeOpts((o) => ({ ...o, nameCheck: e.target.checked }))}
+            />
+            Bei IBAN / USt-IdNr. / Steuernummer zusätzlich ähnlichen Namen verlangen
+            <span className="text-xs text-gray-500">(verhindert Fehltreffer durch falsch gelesene Nummern)</span>
+          </label>
+          {dupeOpts.nameCheck && (
+            <label className="mb-2 ml-6 flex items-center gap-2">
+              Mindest-Namensähnlichkeit: <strong>{Math.round(dupeOpts.minNameSimilarity * 100)} %</strong>
+              <input
+                type="range" min={0.1} max={0.95} step={0.05} value={dupeOpts.minNameSimilarity}
+                onChange={(e) => setDupeOpts((o) => ({ ...o, minNameSimilarity: Number(e.target.value) }))}
+              />
+            </label>
+          )}
+          {dupeOpts.criteria.includes("name_similar") && (
+            <label className="mb-2 flex items-center gap-2">
+              Schwelle „ähnlicher Name“: <strong>{Math.round(dupeOpts.similarity * 100)} %</strong>
+              <input
+                type="range" min={0.6} max={1} step={0.01} value={dupeOpts.similarity}
+                onChange={(e) => setDupeOpts((o) => ({ ...o, similarity: Number(e.target.value) }))}
+              />
+            </label>
+          )}
+          <label className="flex items-center gap-2">
+            Nummern ignorieren, die bei mehr als
+            <input
+              type="number" min={2} max={1000} value={dupeOpts.maxKeyShare}
+              onChange={(e) => setDupeOpts((o) => ({ ...o, maxKeyShare: Math.max(2, Number(e.target.value) || 2) }))}
+              className="w-16 rounded border border-gray-300 px-1 py-0.5"
+            />
+            Lieferanten vorkommen
+          </label>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 rounded bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
@@ -224,7 +300,11 @@ export default function LieferantenPage() {
           </div>
           {duplicates.length > 0 && (
             <p className="mb-3 text-xs text-amber-700">
-              Verglichen werden IBAN, USt-IdNr., Steuernummer und Name (ohne Rechtsform, auch ähnliche Schreibweisen).
+              Gesucht nach: {dupeOpts.criteria.map((c) => ({
+                iban: "IBAN", vat_id: "USt-IdNr.", tax_number: "Steuernummer",
+                name: "Name", name_similar: "ähnlicher Name",
+              }[c] ?? c)).join(", ")}
+              {dupeOpts.nameCheck ? " (Nummern nur bei ähnlichem Namen)" : ""}.
               Es wird nichts automatisch zusammengeführt — du entscheidest je Gruppe.
             </p>
           )}

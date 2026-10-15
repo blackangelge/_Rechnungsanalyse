@@ -79,8 +79,18 @@ def test_duplicate_groups_use_every_bank_account(client, world):
     d.bank_accounts = [VendorBankAccount(iban="DE89 3704 0044 0532 0130 00")]       # = zweite IBAN von b
     world.db.add(d)
     world.db.commit()
-    g = client.get("/api/vendors/duplicate-groups").json()
+    g = client.get("/api/vendors/duplicate-groups", params={"name_check": "false"}).json()
     assert len(g) == 1 and [s["id"] for s in g[0]["suppliers"]] == [world.a.id, world.b.id, d.id]
+    # mit Namensprüfung (Standard) bleibt der namentlich fremde Lieferant draußen
+    g = client.get("/api/vendors/duplicate-groups").json()
+    assert [s["id"] for s in g[0]["suppliers"]] == [world.a.id, world.b.id]
+
+
+def test_duplicate_groups_criteria_filter(client, world):
+    assert client.get("/api/vendors/duplicate-groups", params={"criteria": ["vat_id"]}).json() == []
+    g = client.get("/api/vendors/duplicate-groups", params={"criteria": ["iban"]}).json()
+    assert len(g) == 1 and g[0]["reasons"] == ["iban"]
+    assert client.get("/api/vendors/duplicate-groups", params={"criteria": ["bogus"]}).status_code == 422
 
 
 def test_merge_fills_gaps_moves_bank_accounts_and_documents(client, world):
