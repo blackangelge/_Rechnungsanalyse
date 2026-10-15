@@ -20,7 +20,7 @@ from app.models.invoice_extraction import InvoiceExtraction
 from app.models.order_position import OrderPosition
 
 FILTER_KEYS = (
-    "q", "article_number", "supplier_name", "company", "year", "batch_ids",
+    "q", "article_number", "supplier_name", "supplier_exact", "company", "year", "batch_ids",
     "document_id", "invoice_number", "unit", "unit_price_min", "unit_price_max",
     "total_price_min", "total_price_max", "quantity_min", "quantity_max",
     "date_from", "date_to", "validation_statuses", "include_hidden", "include_deleted",
@@ -80,7 +80,12 @@ def _filtered(db: Session, entities: list, **f) -> Query:
     if g("article_number"):
         query = query.filter(OrderPosition.article_number.ilike(_like(g("article_number").strip()), escape="\\"))
     if g("supplier_name"):
-        query = query.filter(InvoiceExtraction.vendor_id.ilike(_like(g("supplier_name").strip()), escape="\\"))
+        name = g("supplier_name").strip()
+        if g("supplier_exact"):
+            # Auswahl aus der Lieferantenliste: exakter Name → nutzt den B-Tree-Index (viel schneller als ILIKE '%…%')
+            query = query.filter(InvoiceExtraction.vendor_id == name)
+        else:
+            query = query.filter(InvoiceExtraction.vendor_id.ilike(_like(name), escape="\\"))
     if g("company"):
         query = query.filter(ImportBatch.company_name.ilike(_like(g("company").strip()), escape="\\"))
     if g("year") is not None:
@@ -134,8 +139,18 @@ def search(db: Session, limit: int, offset: int = 0, sort: str | None = None,
     return query.offset(offset).limit(limit).all()
 
 
-def count(db: Session, **filters) -> int:
-    return _filtered(db, [func.count(OrderPosition.id)], **filters).scalar() or 0
+COUNT_CAP = 10_000
+
+
+def count(db: Session, cap: int | None = None, **filters) -> int:
+    """
+    Trefferzahl. Mit ``cap`` wird nur bis zu ``cap + 1`` gezählt (Rückgabe > cap ⇒ „mehr als cap Treffer") — bei sehr
+    breiten Filtern über Millionen Positionen kostet das exakte Zählen sonst Sekunden bis Minuten.
+    """
+    if cap is None:
+        return _filtered(db, [func.count(OrderPosition.id)], **filters).scalar() or 0
+    limited = _filtered(db, [OrderPosition.id], **filters).limit(cap + 1).subquery()
+    return db.query(func.count()).select_from(limited).scalar() or 0
 
 
 def summary(db: Session, **filters) -> dict:

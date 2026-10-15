@@ -28,6 +28,7 @@ from app.schemas.import_batch import (
     ImportBatchWithDocuments,
     ImportVisibilityUpdate,
 )
+from app.services.query_guard import clear_all_caches
 from app.services.import_service import (
     _run_import_io,
     list_pdf_files,
@@ -319,6 +320,7 @@ def set_imports_visibility(payload: ImportVisibilityUpdate, db: Session = Depend
             detail="Import(s) nicht gefunden: " + ", ".join(f"#{i}" for i in missing),
         )
     changed = crud.import_batch.set_hidden(db, payload.ids, payload.hidden)
+    clear_all_caches()          # Auswahllisten und Kennzahlen sofort neu berechnen
     logger.info(
         "%d Import(s) %s: %s", len(existing), "ausgeblendet" if payload.hidden else "eingeblendet",
         ", ".join(f"#{i}" for i in sorted(existing)),
@@ -688,6 +690,7 @@ def delete_import(batch_id: int, db: Session = Depends(get_db)):
 
     # DB-Eintrag löschen (CASCADE zu Dokumenten, Extraktionen, Positionen)
     crud.import_batch.delete(db, batch_id)
+    clear_all_caches()
 
 
 # ─── GET /api/imports/{batch_id}/export ──────────────────────────────────────

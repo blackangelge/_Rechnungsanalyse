@@ -348,20 +348,23 @@ export default function BelegePage() {
     }
   }, []);
 
-  const loadOptions = useCallback(async () => {
+  /** Import-/Jahr-/Lieferanten-Auswahl: ausgeblendete Imports nur, wenn „Ausgeblendete Imports einbeziehen" aktiv ist. */
+  const loadImportOptions = useCallback(async (withHidden: boolean) => {
     try {
-      const allBatches = await importsApi.list({ include_hidden: true });   // ausgeblendete bleiben im Import-Filter wählbar
-      setBatches(allBatches);
+      setBatches(await importsApi.list({ include_hidden: withHidden }));
     } catch (err) {
       console.error("Fehler beim Laden der Imports:", err);
     }
     try {
-      const options = await documentsApi.filterOptions(true);
+      const options = await documentsApi.filterOptions(withHidden);
       setYearOptions(options.years);
       setSupplierOptions(options.suppliers);
     } catch (err) {
       console.error("Fehler beim Laden der Filter-Optionen:", err);
     }
+  }, []);
+
+  const loadOptions = useCallback(async () => {
     // Workflows sind optional — ohne Workflows bleibt die Auswahl leer ("automatisch")
     try {
       setWorkflows(await workflowsApi.list());
@@ -391,6 +394,9 @@ export default function BelegePage() {
     loadDocuments(initial, 0);      // nur die erste Seite — schnell, auch bei sehr vielen Belegen
     loadOptions();
   }, [loadDocuments, loadOptions]);
+
+  // Auswahllisten folgen dem Schalter „Ausgeblendete Imports einbeziehen"
+  useEffect(() => { loadImportOptions(includeHidden); }, [loadImportOptions, includeHidden]);
 
   // Auto-Refresh, solange Dokumente verarbeitet werden. Lädt die AKTUELLE Seite neu (pageRef) —
   // ein Seitenwechsel wird dadurch nicht zurückgesetzt. Geprüft wird auch, ob irgendwo (nicht nur
@@ -963,14 +969,14 @@ export default function BelegePage() {
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
                     </th>
                     <th className="px-3 py-3 text-left font-medium text-gray-600">#</th>
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">Firma</th>
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">Jahr</th>
+                    {!showPreview && <th className="px-3 py-3 text-left font-medium text-gray-600">Firma</th>}
+                    {!showPreview && <th className="px-3 py-3 text-left font-medium text-gray-600">Jahr</th>}
                     <th className="px-3 py-3 text-left font-medium text-gray-600">Dateiname</th>
-                    <th className="px-3 py-3 text-right font-medium text-gray-600">Seiten</th>
-                    <th className="px-3 py-3 text-right font-medium text-gray-600">Betrag</th>
+                    {!showPreview && <th className="px-3 py-3 text-right font-medium text-gray-600">Seiten</th>}
+                    {!showPreview && <th className="px-3 py-3 text-right font-medium text-gray-600">Betrag</th>}
                     <th className="px-3 py-3 text-left font-medium text-gray-600">Status</th>
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">KI</th>
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">Prüfung</th>
+                    {!showPreview && <th className="px-3 py-3 text-left font-medium text-gray-600">KI</th>}
+                    <th className="px-3 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Prüfung</th>
                     {!showPreview && (
                       <>
                         <th className="px-3 py-3 text-left font-medium text-gray-600">Dokumententyp</th>
@@ -1013,10 +1019,10 @@ export default function BelegePage() {
                         </td>
 
                         <td className="px-3 py-2.5 text-gray-500 tabular-nums">{doc.id}</td>
-                        <td className="px-3 py-2.5 font-medium text-gray-900">{doc.company ?? "–"}</td>
-                        <td className="px-3 py-2.5 text-gray-700">{doc.year ?? "–"}</td>
+                        {!showPreview && <td className="px-3 py-2.5 font-medium text-gray-900">{doc.company ?? "–"}</td>}
+                        {!showPreview && <td className="px-3 py-2.5 text-gray-700">{doc.year ?? "–"}</td>}
 
-                        <td className="px-3 py-2.5 text-gray-700 max-w-xs">
+                        <td className={`px-3 py-2.5 text-gray-700 ${showPreview ? "max-w-[9rem]" : "max-w-xs"}`}>
                           <div className="flex items-center gap-2">
                             <span className="truncate" title={doc.original_filename}>{doc.original_filename}</span>
                             {isDeleted && (
@@ -1027,7 +1033,7 @@ export default function BelegePage() {
                           </div>
                         </td>
 
-                        <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">
+                        {!showPreview && <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">
                           {doc.page_count > 0 ? doc.page_count : "–"}
                           {(doc.pdf_version ?? 1) > 1 && (
                             <span
@@ -1042,13 +1048,13 @@ export default function BelegePage() {
                               v{doc.pdf_version}
                             </span>
                           )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">
+                        </td>}
+                        {!showPreview && <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">
                           {formatCurrency(doc.total_amount)}
-                        </td>
-                        <td className="px-3 py-2.5"><StatusBadge status={doc.status} /></td>
-                        <td className="px-3 py-2.5"><KiBadge hasExtraction={doc.has_extraction ?? false} /></td>
-                        <td className="px-3 py-2.5"><ValidationBadge status={doc.validation_status} /></td>
+                        </td>}
+                        <td className="px-3 py-2.5 whitespace-nowrap"><StatusBadge status={doc.status} /></td>
+                        {!showPreview && <td className="px-3 py-2.5"><KiBadge hasExtraction={doc.has_extraction ?? false} /></td>}
+                        <td className="px-3 py-2.5 whitespace-nowrap"><ValidationBadge status={doc.validation_status} /></td>
 
                         {!showPreview && (
                           <>
@@ -1069,7 +1075,7 @@ export default function BelegePage() {
                         )}
 
                         <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-nowrap whitespace-nowrap">
                             {!isDeleted && (
                               <button
                                 onClick={() => setPreviewDocId(isActivePreview ? null : doc.id)}
@@ -1082,7 +1088,7 @@ export default function BelegePage() {
                                   !doc.stored_filename ? "opacity-30 cursor-not-allowed" : "",
                                 ].join(" ")}
                               >
-                                {isActivePreview ? "Vorschau aus" : "PDF"}
+                                {isActivePreview ? "✕ PDF" : "PDF"}
                               </button>
                             )}
 

@@ -29,6 +29,7 @@ function toFilter(form: Form): PositionFilter {
     const raw = form[k].trim();
     if (!raw) return;
     if (k === "batch_id") f.batch_ids = [Number(raw)];
+    else if (k === "supplier_name") { f.supplier_name = raw; f.supplier_exact = true; }   // aus der Auswahlliste → exakt
     else if (k === "include_hidden") f.include_hidden = true;
     else if (NUMERIC.includes(k)) {
       const n = Number(raw.replace(",", "."));
@@ -100,6 +101,12 @@ export default function ArtikelPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  const [capped, setCapped] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const searchSeq = useRef(0);       // verwirft Antworten veralteter Suchen
+  const summarySeq = useRef(0);
 
   const [suppliers, setSuppliers] = useState<string[]>([]);
   const [batches, setBatches] = useState<ImportBatch[]>([]);
@@ -111,28 +118,59 @@ export default function ArtikelPage() {
   const state = useRef({ applied: EMPTY_FORM as Form, pageSize: 50, sort: undefined as PositionSort | undefined, order: "desc" as "asc" | "desc" });
   state.current = { applied, pageSize, sort, order };
 
-  const load = useCallback(async (f: Form, p: number, size: number, s: PositionSort | undefined, o: "asc" | "desc", withSummary: boolean) => {
-    setLoading(true);
-    setError(null);
+  /** Kennzahlen separat laden — sie dürfen die Tabelle nie blockieren (bei sehr vielen Positionen dauern sie länger). */
+  const loadSummary = useCallback(async (f: Form) => {
+    const seq = ++summarySeq.current;
+    setSummaryLoading(true);
+    setSummaryError(null);
     try {
-      const filter = toFilter(f);
-      const [res, sum] = await Promise.all([
-        positionsApi.search(filter, p, size, s, o),
-        withSummary ? positionsApi.summary(filter) : Promise.resolve(null),
-      ]);
-      setItems(res.items);
-      setTotal(res.total);
-      setPage(p);
-      if (sum) setSummary(sum);
-      setSearched(true);
+      const sum = await positionsApi.summary(toFilter(f));
+      if (seq === summarySeq.current) setSummary(sum);
     } catch (err) {
-      setError(extractApiError(err, "Fehler bei der Artikelsuche"));
+      if (seq === summarySeq.current) {
+        setSummary(null);
+        setSummaryError(extractApiError(err, "Kennzahlen konnten nicht berechnet werden"));
+      }
     } finally {
-      setLoading(false);
+      if (seq === summarySeq.current) setSummaryLoading(false);
     }
   }, []);
 
-  // Start: Optionen laden; URL-Parameter (z.B. ?q=Kalk) übernehmen und sofort suchen
+  const load = useCallback(async (f: Form, p: number, size: number, s: PositionSort | undefined, o: "asc" | "desc", withSummary: boolean) => {
+    const seq = ++searchSeq.current;
+    setLoading(true);
+    setError(null);
+    if (withSummary) loadSummary(f);
+    try {
+      const res = await positionsApi.search(toFilter(f), p, size, s, o);
+      if (seq !== searchSeq.current) return;
+      setItems(res.items);
+      setTotal(res.total);
+      setCapped(res.capped);
+      setPage(p);
+      setSearched(true);
+    } catch (err) {
+      if (seq !== searchSeq.current) return;
+      setError(extractApiError(err, "Fehler bei der Artikelsuche"));
+      setSearched(true);
+    } finally {
+      if (seq === searchSeq.current) setLoading(false);
+    }
+  }, [loadSummary]);
+
+  /** Auswahllisten (Import, Lieferant, Jahr, Einheit) — unabhängig von der Suche; ausgeblendete Imports nur auf Wunsch. */
+  const loadOptions = useCallback(async (includeHidden: boolean) => {
+    setOptionsLoading(true);
+    const [b, o, u] = await Promise.all([
+      importsApi.list({ include_hidden: includeHidden }).catch(() => [] as ImportBatch[]),
+      documentsApi.filterOptions(includeHidden).catch(() => ({ years: [] as number[], companies: [] as string[], suppliers: [] as string[] })),
+      positionsApi.filterOptions().catch(() => ({ units: [] as { unit: string; count: number }[] })),
+    ]);
+    setBatches(b); setSuppliers(o.suppliers ?? []); setYears(o.years); setUnits(u.units);
+    setOptionsLoading(false);
+  }, []);
+
+  // Start: URL-Parameter (z.B. ?q=Kalk) übernehmen und sofort suchen; die Auswahllisten laden parallel im Hintergrund
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const initial = { ...EMPTY_FORM };
@@ -141,12 +179,11 @@ export default function ArtikelPage() {
     setApplied(initial);
     if (Object.values(initial).some(Boolean)) setShowMore(true);
     load(initial, 0, 50, undefined, "desc", true);
-    Promise.all([
-      importsApi.list({ include_hidden: true }).catch(() => [] as ImportBatch[]),
-      documentsApi.filterOptions(true).catch(() => ({ years: [] as number[], companies: [] as string[], suppliers: [] as string[] })),
-      positionsApi.filterOptions().catch(() => ({ units: [] as { unit: string; count: number }[] })),
-    ]).then(([b, o, u]) => { setBatches(b); setSuppliers(o.suppliers ?? []); setYears(o.years); setUnits(u.units); });
   }, [load]);
+
+  // Auswahllisten neu laden, wenn „Ausgeblendete Imports einbeziehen" umgeschaltet wird
+  const includeHiddenOptions = form.include_hidden === "1";
+  useEffect(() => { loadOptions(includeHiddenOptions); }, [loadOptions, includeHiddenOptions]);
 
   function apply(next: Form = form) {
     setApplied(next);
@@ -201,7 +238,7 @@ export default function ArtikelPage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-gray-600">Lieferant</label>
             <select value={form.supplier_name} onChange={set("supplier_name")} className={`${field} w-52`} data-testid="supplier">
-              <option value="">Alle Lieferanten</option>
+              <option value="">{optionsLoading && suppliers.length === 0 ? "Wird geladen…" : "Alle Lieferanten"}</option>
               {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
@@ -279,10 +316,32 @@ export default function ArtikelPage() {
         )}
       </div>
 
-      {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700" data-testid="error">{error}</div>}
+      {capped && !error && (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="capped">
+          Mehr als {total.toLocaleString("de-DE")} Treffer — angezeigt werden die ersten {total.toLocaleString("de-DE")}.
+          Mit Lieferant, Jahr oder einem genaueren Suchwort lässt sich das Ergebnis eingrenzen.
+        </div>
+      )}
 
-      {/* ── Kennzahlen ─────────────────────────────────────────────── */}
-      {summary && searched && (
+      {/* ── Kennzahlen (laden getrennt von der Tabelle) ────────────── */}
+      {summaryLoading && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="summary-loading">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="rounded-lg border bg-white p-3 shadow-sm">
+              <div className="mb-2 h-3 w-24 animate-pulse rounded bg-gray-200" />
+              <div className="mb-1.5 h-6 w-36 animate-pulse rounded bg-gray-200" />
+              <div className="h-3 w-28 animate-pulse rounded bg-gray-100" />
+            </div>
+          ))}
+        </div>
+      )}
+      {!summaryLoading && summaryError && !error && (
+        <div className="mb-4 rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-500" data-testid="summary-error">
+          Kennzahlen: {summaryError}
+        </div>
+      )}
+      {!summaryLoading && summary && searched && (
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="summary">
           <div className="rounded-lg border bg-white p-3 shadow-sm">
             <div className="text-xs text-gray-500">Treffer</div>
@@ -315,7 +374,19 @@ export default function ArtikelPage() {
 
       {/* ── Tabelle ────────────────────────────────────────────────── */}
       {pager("pager-top")}
-      <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+      <div className="relative overflow-x-auto rounded-lg border bg-white shadow-sm">
+        {loading && (
+          <div className="absolute inset-x-0 top-0 z-10 h-1 overflow-hidden bg-blue-100" data-testid="loading-bar">
+            <div className="h-1 w-1/3 animate-[slide_1.1s_ease-in-out_infinite] rounded bg-blue-500" />
+          </div>
+        )}
+        {loading && items.length > 0 && (
+          <div className="absolute inset-0 z-[5] flex items-start justify-center bg-white/60 pt-16" data-testid="loading-overlay">
+            <div className="flex items-center gap-2 rounded-md border bg-white px-4 py-2 text-sm text-gray-600 shadow">
+              <span className="inline-block animate-spin">⟳</span> Suche läuft …
+            </div>
+          </div>
+        )}
         <table className="min-w-full divide-y divide-gray-200 text-sm" data-testid="results">
           <thead className="bg-gray-50">
             <tr>
@@ -331,7 +402,19 @@ export default function ArtikelPage() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading && items.length === 0 && (
-              <tr><td colSpan={COLUMNS.length} className="px-4 py-8 text-center text-gray-400">Wird geladen...</td></tr>
+              <>
+                <tr data-testid="loading-text"><td colSpan={COLUMNS.length} className="px-4 pt-6 pb-2 text-center text-sm text-gray-500">
+                  <span className="mr-2 inline-block animate-spin">⟳</span>
+                  Artikel werden geladen … bei sehr vielen Positionen kann das einen Moment dauern.
+                </td></tr>
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={`sk${i}`} data-testid="skeleton-row">
+                    {COLUMNS.map((c) => (
+                      <td key={c.key} className="px-3 py-3"><div className="h-3.5 animate-pulse rounded bg-gray-100" style={{ width: `${55 + ((i * 7 + c.key.length * 5) % 40)}%` }} /></td>
+                    ))}
+                  </tr>
+                ))}
+              </>
             )}
             {!loading && searched && items.length === 0 && (
               <tr><td colSpan={COLUMNS.length} className="px-4 py-8 text-center text-gray-400">Keine Artikel gefunden</td></tr>

@@ -7,3 +7,8 @@
       focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500;
   }
 }
+
+@keyframes slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}

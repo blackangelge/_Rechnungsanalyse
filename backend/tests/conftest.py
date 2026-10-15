@@ -27,6 +27,14 @@ def _jsonb_as_json(type_, compiler, **kw):  # workflow_tasks.payload u.a.
     return "JSON"
 
 
+@pytest.fixture(autouse=True)
+def _clear_query_caches():
+    from app.services.query_guard import clear_all_caches
+    clear_all_caches()
+    yield
+    clear_all_caches()
+
+
 @pytest.fixture()
 def sqlite_session_factory(monkeypatch):
     engine = create_engine(

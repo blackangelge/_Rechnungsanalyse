@@ -118,6 +118,7 @@ from app import crud
 from app.database import SessionLocal, get_db
 from app.schemas.document import DocumentCommentUpdate, DocumentDetail, DocumentListRead
 from app.services import ai_service, pdf_edit_service, pdf_service, plausibility_service
+from app.services.query_guard import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -442,10 +443,15 @@ def list_document_ids(filters: dict = Depends(_document_filters), db: Session = 
     return crud.document.get_ids_filtered(db, **filters)
 
 
+_filter_options_cache = TTLCache(ttl_seconds=120)
+
+
 @router.get("/filter-options")
 def document_filter_options(include_hidden: bool = False, db: Session = Depends(get_db)):
     """Jahre, Firmen und Lieferantennamen für die Filter-Dropdowns (ausgeblendete Imports nur auf Wunsch)."""
-    return crud.document.get_filter_options(db, include_hidden=include_hidden)
+    return _filter_options_cache.get_or_compute(
+        include_hidden, lambda: crud.document.get_filter_options(db, include_hidden=include_hidden)
+    )
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
