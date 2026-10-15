@@ -148,7 +148,7 @@ def extract_invoice_data(
         logger.error(msg)
         return {}, [], msg, {}
 
-    active_system_prompt = system_prompt_text
+    active_system_prompt = with_unit_rules(system_prompt_text)
     endpoint_type = getattr(config, "endpoint_type", "openai") or "openai"
     base = config.api_url.rstrip("/")
     reasoning = getattr(config, "reasoning", "off") or "off"
@@ -288,6 +288,25 @@ def extract_invoice_data(
         len(order_positions),
     )
     return extracted_fields, order_positions, raw_text, ki_stats
+
+
+UNIT_RULES = (
+    "\n\nZUSATZREGELN ZU MENGEN UND EINHEITEN (immer beachten):\n"
+    "- Übernimm `menge` und `mengeneinheit` EXAKT so, wie sie in der Mengenspalte der Rechnung stehen. "
+    "Rechne nichts um (z.B. Spalte \"Menge / kg\" mit \"25.880,00\" → menge 25880, mengeneinheit \"kg\"; "
+    "nicht 25,88 und nicht \"t\").\n"
+    "- Beachte deutsche Zahlen: \"25.880,00\" = 25880 (Punkt = Tausender, Komma = Dezimal).\n"
+    "- Gib je Position zusätzlich `preiseinheit` an: die Einheit, auf die sich der Einzelpreis bezieht "
+    "(z.B. \"t\" bei \"407,60 /t\", \"kg\" bei \"0,41 €/kg\", \"100 Stück\" bei \"Preis je 100\"). "
+    "Steht keine Preiseinheit da, lass sie leer.\n"
+    "- `einzelpreis` ist der Preis wie gedruckt (bezogen auf die Preiseinheit), `gesamtpreis` der gedruckte Positionsbetrag."
+)
+
+
+def with_unit_rules(prompt: str | None) -> str:
+    """Hängt die Einheiten-Zusatzregeln an den Extraktionsprompt (einmalig; nicht, wenn der Prompt `preiseinheit` schon behandelt)."""
+    base = prompt or ""
+    return base if "preiseinheit" in base.lower() else base + UNIT_RULES
 
 
 def build_recheck_prompt(

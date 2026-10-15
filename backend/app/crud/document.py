@@ -436,6 +436,7 @@ def update_validation(
     Schreibt ein (neues) Prüfergebnis in die Extraktion und übernimmt die dabei entstandenen
     Korrekturen in die Daten (`corrected_positions` = ValidationResult.corrections):
       • {"position": idx, "to": wert}            → order_positions.total_price
+      • {"position": idx, "field": "unit", "to": einheit} → order_positions.unit
       • {"field": "total_amount", "to": wert}    → invoice_extractions.total_amount_brutto
     """
     extraction = (
@@ -454,7 +455,10 @@ def update_validation(
                 .first()
             )
             if pos is not None:
-                pos.total_price = Decimal(str(corr["to"]))
+                if corr.get("field") == "unit":
+                    pos.unit = str(corr["to"])
+                else:
+                    pos.total_price = Decimal(str(corr["to"]))
         elif corr.get("field") == "total_amount":
             extraction.total_amount_brutto = Decimal(str(corr["to"]))
     extraction.validation_status = validation.get("status")
