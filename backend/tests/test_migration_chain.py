@@ -47,5 +47,5 @@ def test_placeholder_revisions_of_the_production_database_exist_and_precede_plau
     sd = _script_dir(BACKEND)
     for rev in ("0007_export_config_table", "0008_token_count_ai_client"):
         assert sd.get_revision(rev) is not None
-    chain = [r.revision for r in sd.walk_revisions("base", "head")]
-    assert chain.index("0008_token_count_ai_client") < chain.index("0007_plausibility")
+    chain = [r.revision for r in sd.walk_revisions("base", "head")]      # vom Head abwärts zur Basis
+    assert chain.index("0007_plausibility") < chain.index("0008_token_count_ai_client") < chain.index("0007_export_config_table")
