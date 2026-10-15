@@ -10,6 +10,9 @@ KI-Antwort (`invoice_extractions.raw_response`) rekonstruieren:
   2. die Regelprüfung (`plausibility_service.validate_invoice`, inkl. automatischer Korrektur
      eindeutiger Fehler) laufen lassen und das Ergebnis speichern
 
+Zusätzlicher Modus `normalize_units`: rechnet bei ALLEN fertigen Belegen die Gewichtspositionen auf Tonnen um (Menge, Einheit,
+Einzelpreis je t), ohne Prüfstatus/-details anzufassen.
+
 Es gibt keine zweite KI-Abfrage: Belege mit Status „Prüfen!" können danach gezielt neu analysiert werden.
 Der Lauf arbeitet in einem Hintergrund-Thread in Blöcken (Keyset über die Extraktions-ID), hält den
 Fortschritt im Speicher und lässt sich abbrechen; ein abgebrochener oder unterbrochener Lauf wird einfach
@@ -109,9 +112,33 @@ def backfill_extraction(
 
     from app.crud import document as crud_document     # lokal: vermeidet Importzyklus beim App-Start
     crud_document.update_validation(
-        db, extraction.document_id, validation, corrected_positions=result.corrections, commit=False
+        db, extraction.document_id, validation, corrected_positions=result.corrections + result.normalizations, commit=False
     )
     return {"outcome": result.status, "filled_prices": filled, "corrections": len(result.corrections)}
+
+
+def normalize_extraction(extraction: InvoiceExtraction, positions: list[OrderPosition]) -> int:
+    """
+    Nur Einheiten vereinheitlichen (Gewicht → t) — Prüfstatus und -details bleiben unberührt.
+    Rückgabe: Anzahl umgerechneter Positionen. Kein Commit.
+    """
+    raw = _parse_raw(extraction.raw_response) or {}
+    raw_pos = raw.get("positionen") if isinstance(raw.get("positionen"), list) else []
+    raw_pos = [p if isinstance(p, dict) else {} for p in raw_pos]
+    pos_dicts = [
+        {"quantity": p.quantity, "unit": p.unit, "unit_price": p.unit_price_netto,
+         "total_price": p.total_price, "discount": p.discount}
+        for p in positions
+    ]
+    result = plausibility_service.ValidationResult(status=plausibility_service.STATUS_UNCHECKED)
+    plausibility_service._normalize_mass_to_tonnes(result, pos_dicts, raw_pos)
+    for n in result.normalizations:
+        pos, to = positions[n["position"]], n["to"]
+        pos.quantity = _dec(to["quantity"])
+        pos.unit = to["unit"]
+        if to.get("unit_price") is not None:
+            pos.unit_price_netto = _dec(to["unit_price"])
+    return len(result.normalizations)
 
 
 # ─── Hintergrund-Lauf ─────────────────────────────────────────────────────────
@@ -121,9 +148,10 @@ _cancel = threading.Event()
 _state: dict = {"running": False}
 
 
-def _empty_state(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, total: int) -> dict:
+def _empty_state(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, total: int,
+                 normalize_units: bool = False) -> dict:
     return {
-        "running": True, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
+        "running": True, "normalize_units": normalize_units, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
         "total": total, "processed": 0, "filled_prices": 0, "corrections": 0,
         "outcomes": {}, "error_count": 0, "errors": [],
         "cancelled": False, "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": None,
@@ -135,38 +163,39 @@ def get_state() -> dict:
         return json.loads(json.dumps(_state))
 
 
-def _base_query(db: Session, batch_ids: list[int] | None):
-    """Fertig analysierte, nicht gelöschte Belege mit Extraktion, aber ohne Prüfstatus."""
+def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False):
+    """Fertig analysierte, nicht gelöschte Belege mit Extraktion; ohne Prüfstatus (außer im Modus „Einheiten“)."""
     q = (
         db.query(InvoiceExtraction.id)
         .join(Document, Document.id == InvoiceExtraction.document_id)
         .filter(
-            InvoiceExtraction.validation_status.is_(None),
             Document.soft_deleted == False,  # noqa: E712
             Document.status == "done",
         )
     )
+    if not normalize_units:
+        q = q.filter(InvoiceExtraction.validation_status.is_(None))
     if batch_ids:
         q = q.filter(Document.batch_id.in_(batch_ids))
     return q
 
 
-def count_pending(batch_ids: list[int] | None = None) -> int:
+def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False) -> int:
     db = SessionLocal()
     try:
-        return _base_query(db, batch_ids).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
+        return _base_query(db, batch_ids, normalize_units).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
     finally:
         db.close()
 
 
-def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None) -> None:
+def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normalize_units: bool = False) -> None:
     last_id = 0
     try:
         while not _cancel.is_set():
             db = SessionLocal()
             try:
                 ids = [
-                    r[0] for r in _base_query(db, batch_ids)
+                    r[0] for r in _base_query(db, batch_ids, normalize_units)
                     .filter(InvoiceExtraction.id > last_id)
                     .order_by(InvoiceExtraction.id).limit(CHUNK_SIZE).all()
                 ]
@@ -184,9 +213,13 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None) -> None
                     if _cancel.is_set():
                         break
                     try:
-                        info = backfill_extraction(
-                            db, ext, by_doc.get(ext.document_id, []), auto_correct=auto_correct
-                        )
+                        if normalize_units:
+                            n = normalize_extraction(ext, by_doc.get(ext.document_id, []))
+                            info = {"outcome": "normalized" if n else "unchanged", "filled_prices": 0, "corrections": n}
+                        else:
+                            info = backfill_extraction(
+                                db, ext, by_doc.get(ext.document_id, []), auto_correct=auto_correct
+                            )
                         with _lock:
                             _state["outcomes"][info["outcome"]] = _state["outcomes"].get(info["outcome"], 0) + 1
                             _state["filled_prices"] += info["filled_prices"]
@@ -224,16 +257,16 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None) -> None
 
 
 def start(dry_run: bool = False, auto_correct: bool = True, batch_ids: list[int] | None = None,
-          background: bool = True) -> dict:
+          background: bool = True, normalize_units: bool = False) -> dict:
     """Startet einen Lauf. Läuft schon einer, wird er nicht gestartet (RuntimeError)."""
-    total = count_pending(batch_ids)
+    total = count_pending(batch_ids, normalize_units)
     with _lock:
         if _state.get("running"):
             raise RuntimeError("Es läuft bereits eine Nachrüstung")
         _cancel.clear()
         _state.clear()
-        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total))
-    args = (dry_run, auto_correct, batch_ids)
+        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units))
+    args = (dry_run, auto_correct, batch_ids, normalize_units)
     if background:
         threading.Thread(target=_run, args=args, name="validation-backfill", daemon=True).start()
     else:

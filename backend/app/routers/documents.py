@@ -1834,7 +1834,7 @@ def revalidate_document(doc_id: int, db: Session = Depends(get_db)):
         validation["recheck"] = previous["recheck"]
 
     crud.document.update_validation(
-        db, doc_id, validation, corrected_positions=result.corrections
+        db, doc_id, validation, corrected_positions=result.corrections + result.normalizations
     )
     return crud.document.get_by_id_with_details(db, doc_id)
 
