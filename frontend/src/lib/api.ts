@@ -815,6 +815,7 @@ export interface WorkflowNodeConfig {
   ai_config_id?: number | null;
   // normalize_units
   target?: "t" | "kg";
+  mode?: "tonne_prices" | "all";
   // ai_refine
   include_images?: boolean;
   // validate

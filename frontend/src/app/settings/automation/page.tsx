@@ -116,7 +116,7 @@ function ValidationBackfill() {
   async function start(dryRun: boolean) {
     if (!dryRun && normalizeUnits && !confirm(
       `Gewichtseinheiten bei ${state?.pending?.toLocaleString("de-DE") ?? "allen"} Belegen auf Tonnen vereinheitlichen?\n\n` +
-      "Menge, Einheit und Einzelpreis (€ je t) der Positionen werden in der Datenbank umgerechnet (kg → t). " +
+      "Nur Positionen, die je Tonne bepreist sind (Preiseinheit t), werden umgerechnet (kg → t, Tonnen/TO/to → t); Preise je kg/g bleiben unverändert. " +
       "Die ursprünglichen Werte bleiben in der gespeicherten KI-Antwort erhalten. Prüfstatus bleiben unverändert.",
     )) return;
     if (!dryRun && !normalizeUnits && !confirm(
@@ -156,7 +156,7 @@ function ValidationBackfill() {
         </label>
         <label className="flex items-center gap-1.5">
           <input type="radio" checked={normalizeUnits} disabled={state?.running} onChange={() => setNormalizeUnits(true)} />
-          Einheiten auf Tonnen vereinheitlichen (kg → t, alle Belege)
+          Einheiten auf Tonnen vereinheitlichen (nur Positionen mit Preis je Tonne; Tonnen/TO/to → t)
         </label>
       </div>
       <p className="mb-4 text-sm text-gray-700" data-testid="backfill-pending">

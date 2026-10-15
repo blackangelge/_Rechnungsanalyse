@@ -477,7 +477,7 @@ KG_POS = [{"quantity": 25880, "unit": "kg", "unit_price": 0.4211, "total_price":
 
 def test_normalize_node_converts_kg_to_tonnes_or_back(env, monkeypatch):
     FakeAI(monkeypatch, positions=KG_POS)
-    env.add_workflow(_chain(("extract", {}), ("normalize_units", {"target": "t"})), default=True)
+    env.add_workflow(_chain(("extract", {}), ("normalize_units", {"target": "t", "mode": "all"})), default=True)
     doc = env.analyze(env.make_doc())
     pos = doc.order_positions[0]
     assert (float(pos.quantity), pos.unit, round(float(pos.unit_price_netto), 4)) == (25.88, "t", 421.1)
@@ -512,3 +512,10 @@ def test_refine_node_without_prompt_fails_clearly_and_new_nodes_validate(env, mo
     assert doc.status == "error"
     rep = workflow_service.validate_graph(_chain(("normalize_units", {}), ("extract", {})))
     assert rep.ok and any("liegt vor jeder Extraktion" in w for w in rep.warnings)
+
+
+def test_normalize_node_default_mode_leaves_kg_priced_positions_alone(env, monkeypatch):
+    FakeAI(monkeypatch, positions=KG_POS)          # Preis je kg (keine Preiseinheit t) → bleibt
+    env.add_workflow(_chain(("extract", {}), ("normalize_units", {})), default=True)
+    pos = env.analyze(env.make_doc()).order_positions[0]
+    assert (float(pos.quantity), pos.unit) == (25880.0, "kg")

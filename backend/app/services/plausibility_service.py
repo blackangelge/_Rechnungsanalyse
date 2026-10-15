@@ -49,7 +49,7 @@ def _register(dimension: str, factor: float, *names: str) -> None:
         _UNITS[n] = (dimension, factor)
 
 
-_register("mass", 1000.0, "t", "to", "tonne", "tonnen", "tonn")
+_register("mass", 1000.0, "t", "to", "tonne", "tonnen", "tonn", "tn")
 _register("mass", 1.0, "kg", "kilo", "kilogramm")
 _register("mass", 0.001, "g", "gramm")
 _register("mass", 0.000001, "mg")
@@ -516,12 +516,22 @@ def validate_invoice(
 
 def _normalize_mass_to_tonnes(
     result: "ValidationResult", positions: list[dict], raw_pos: list[dict], target: str = "t",
+    mode: str = "tonne_prices",
 ) -> None:
     """
-    Rechnet Gewichtspositionen (kg, g, …) auf Tonnen um — Menge, Einheit und Einzelpreis (€ je t), damit Datenbank,
-    Excel-Export und Auswertungen einheitlich in t vorliegen. Die Originalwerte stehen in `normalizations`
-    (und im `raw_response`). Es wird nur umgerechnet, wenn Menge × neuer Preis weiterhin zum Positionspreis passt
-    (Positionsrabatt berücksichtigt); sonst bleibt die Position unverändert.
+    Vereinheitlicht Gewichtspositionen auf eine Einheit — Menge, Einheit und Einzelpreis (€ je Zieleinheit), damit Datenbank,
+    Excel-Export und Auswertungen einheitlich vorliegen. Originalwerte stehen in `normalizations` (und im `raw_response`).
+    Es wird nur umgerechnet, wenn Menge × neuer Preis weiterhin zum Positionspreis passt (Positionsrabatt berücksichtigt);
+    sonst bleibt die Position unverändert.
+
+    Schreibweisen wie „Tonnen“, „TO“, „to“ gelten als Tonne und werden zu „t“ (bzw. „kg“) vereinheitlicht.
+
+    mode (nur für Zieleinheit t):
+      • "tonne_prices" (Standard): nur Positionen, die **je Tonne bepreist** sind (Preiseinheit t, oder Menge ohnehin in t).
+        Positionen mit Preis je kg/g (oder unbekannter Preiseinheit bei Menge in kg/g) bleiben unverändert — dort wäre
+        „0,0005 t zu 12.000 €/t“ unsinnig.
+      • "all": alle Gewichtspositionen.
+    Für die Zieleinheit kg wird immer alles umgerechnet.
     """
     tf = 1000.0 if target == "t" else 1.0          # Faktor der Zieleinheit in kg
     for idx, pos in enumerate(positions):
@@ -529,16 +539,28 @@ def _normalize_mass_to_tonnes(
         qty = _f(pos.get("quantity"))
         if unit is None or unit.dimension != "mass" or qty is None:
             continue
+        price_unit = parse_unit((raw_pos[idx] if idx < len(raw_pos) else {}).get("preiseinheit"))
+        if target == "t" and mode == "tonne_prices":
+            ref = price_unit if price_unit is not None else unit
+            if ref.dimension != "mass" or abs(ref.factor - 1000.0) > 1e-9:
+                continue                                                   # Preis je kg/g/… → nicht anfassen
         if abs(unit.factor - tf) < 1e-9 and not re.match(r"^\s*\d", str(pos.get("unit"))):
+            if str(pos.get("unit")).strip() != target:                      # „Tonnen“, „TO“ … → „t“
+                result.normalizations.append({
+                    "position": idx, "field": "normalize",
+                    "from": {"quantity": qty, "unit": pos.get("unit"), "unit_price": _f(pos.get("unit_price"))},
+                    "to": {"quantity": qty, "unit": target, "unit_price": _f(pos.get("unit_price"))},
+                })
+                pos["unit"] = target
             continue                                                       # steht schon in der Zieleinheit
         qty_t = qty * unit.factor / tf
         price, total = _f(pos.get("unit_price")), _f(pos.get("total_price"))
         new_price: float | None = None
         if price is not None:
-            price_unit = parse_unit((raw_pos[idx] if idx < len(raw_pos) else {}).get("preiseinheit")) or unit
+            pu = price_unit or unit
             candidates = []
-            if price_unit.dimension == "mass":
-                candidates.append(price * tf / price_unit.factor)       # Preis bezog sich auf price_unit
+            if pu.dimension == "mass":
+                candidates.append(price * tf / pu.factor)               # Preis bezog sich auf pu
             candidates.append(price)                                      # Preis galt bereits je Zieleinheit
             if total is None:
                 new_price = candidates[0]
