@@ -42,6 +42,7 @@ import {
   getDocTypeName,
   importsApi,
 } from "@/lib/api";
+import WorkflowTraceView from "@/components/belege/WorkflowTraceView";
 
 // ─── Konstante ───────────────────────────────────────────────────────────────
 
@@ -1796,21 +1797,7 @@ function UsedWorkflow({ doc }: { doc: DocumentDetail }) {
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
         Verwendeter Workflow: {doc.used_workflow_name}
       </h3>
-      <ol className="space-y-1 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
-        {run.map((t, i) => (
-          <li key={`${t.node_id}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
-            <span className={t.status === "error" ? "text-red-600" : "text-green-600"}>{t.status === "error" ? "✕" : "✓"}</span>
-            <span className="font-medium text-gray-800">{t.label}</span>
-            {t.branch && (
-              <span className={`rounded px-1.5 text-xs font-semibold ${t.branch === "true" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                {t.branch === "true" ? "Ja" : "Nein"}
-              </span>
-            )}
-            <span className="text-xs text-gray-400">{t.duration_s.toLocaleString("de-DE")} s</span>
-            {t.detail && <span className={`text-xs ${t.status === "error" ? "text-red-600" : "text-gray-500"}`}>— {t.detail}</span>}
-          </li>
-        ))}
-      </ol>
+      <WorkflowTraceView run={run} />
       {doc.used_workflow && (
         <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50">
           <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-gray-700">Workflow-Definition (Snapshot der Analyse)</summary>

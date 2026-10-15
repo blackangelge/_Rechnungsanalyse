@@ -883,14 +883,34 @@ export interface WorkflowValidation {
 }
 
 /** Ein Eintrag im Ablaufprotokoll einer Analyse */
+/** Datenstand im Ablauf (vor/nach einem Knoten bzw. aus der Datenbank) */
+export interface WorkflowSnapshot {
+  document_type?: string | null;
+  page_count?: number | null;
+  extracted?: boolean;
+  validation_status?: string | null;
+  fields?: Record<string, string | number | boolean | null>;
+  positions?: Record<string, string | number | null>[];
+  positions_total?: number;
+  validation?: { issues: string[]; corrections: unknown[]; normalizations: unknown[] };
+}
+
 export interface WorkflowTraceEntry {
   node_id: string;
-  type: WorkflowNodeType;
+  /** "saved" = abschließender Eintrag „In Datenbank gespeichert" */
+  type: WorkflowNodeType | "saved";
   label: string;
   status: "ok" | "error";
   duration_s: number;
   detail: string | null;
   branch: "true" | "false" | null;
+  config?: Record<string, unknown>;
+  input?: WorkflowSnapshot;
+  output?: WorkflowSnapshot;
+  /** Änderungen dieses Knotens an den Daten (leer = nichts verändert) */
+  changes?: { path: string; from: unknown; to: unknown }[];
+  /** Prompt/Antwort der KI und Hinweise des Knotens */
+  io?: { prompt?: string | null; response?: string | null; model?: string | null; notes?: string[] };
 }
 
 export const workflowsApi = {

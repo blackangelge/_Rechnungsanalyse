@@ -755,6 +755,11 @@ Regeln (`validate_graph`, beim Speichern erzwungen → HTTP 422): genau ein Star
 keine Zyklen; Verzweigung nur mit `true`/`false`; Operatoren passend zum Feld. Nur Warnungen: nicht erreichbare Knoten, offene Verzweigungsausgänge, keine
 Extraktion, Prüfung vor Extraktion, fehlende Prompt-/KI-IDs. Fehlt eine Kante, endet der Ablauf dort.
 
+**Datenfluss je Knoten** (`workflow_trace`, Ansicht `components/belege/WorkflowTraceView.tsx` im KI-Modal der Belege): Jeder Ablaufeintrag enthält zusätzlich `config`, `input`/`output` (Datenstand vor/nach dem Knoten:
+Felder, Positionen — max. 100 —, Prüfstatus/-meldungen), `changes` (`diff_snapshots`: Pfad/vorher/nachher — leer = Knoten hat nichts verändert) und `io` (`prompt`, `response`, `model`, `notes`; Prompt/Antwort auf 20.000 Zeichen gekürzt).
+Knoten legen Prompt/Antwort/Hinweise in `ctx.node_io` ab (Engine setzt es je Knoten zurück); `normalize_units` und `branch` erklären in `notes`, warum etwas (nicht) geschah. Der letzte Eintrag `type: "saved"`
+(„In Datenbank gespeichert“) liest die Positionen nach dem Speichern aus der Datenbank (Gegenprobe). Das Protokoll wächst dadurch auf einige 10 KB je Beleg (nur bei Workflow-Analysen).
+
 **Nachvollziehbarkeit** (am Dokument): `used_workflow_id/_name`, `used_workflow_graph` (Snapshot, bleibt nach Ändern/Löschen des Workflows erhalten),
 `workflow_trace` (pro Knoten: Status, Dauer, Detail, bei Weiche der Ausgang), dazu `used_*_prompt`. Beim Start jeder Analyse werden diese Felder zurückgesetzt
 (`save_used_prompts`); sie sind Teil des Snapshots der **Analyse-Historie**. Fehler in einem Knoten → Status `error` mit Knotenname in `documents.raw_response`.
