@@ -306,3 +306,33 @@ def test_same_units_or_unknown_price_unit_are_untouched():
     assert validate_invoice({"total_amount": 23.8}, pos, _raw(20.0, positions=[{"preiseinheit": "t"}])).status == STATUS_OK
     pos = [{"quantity": 2, "unit": "t", "unit_price": 10.0, "total_price": 20.0}]
     assert validate_invoice({"total_amount": 23.8}, pos, _raw(20.0)).status == STATUS_OK
+
+
+def test_kg_positions_are_normalized_to_tonnes_with_price_per_tonne():
+    """Rechnung: 25.880 kg zu 421,10 je t = 10.898,07 → in der Datenbank 25,88 t zu 421,10 €/t."""
+    pos = [{"quantity": 25880, "unit": "kg", "unit_price": 421.10, "total_price": 10898.07}]
+    r = validate_invoice({"total_amount": 12968.7}, pos, _raw(10898.07, positions=[{"preiseinheit": "t"}]))
+    assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (25.88, "t", 421.10)
+    assert r.normalizations[0]["from"]["unit"] == "kg" and not r.corrections
+
+
+def test_kg_price_per_kg_is_converted_to_price_per_tonne():
+    pos = [{"quantity": 500, "unit": "kg", "unit_price": 0.40, "total_price": 200.0}]
+    validate_invoice({"total_amount": 238.0}, pos, _raw(200.0))
+    assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (0.5, "t", 400.0)
+
+
+def test_normalization_skipped_when_product_does_not_match_and_off_without_auto_correct():
+    pos = [{"quantity": 500, "unit": "kg", "unit_price": 0.40, "total_price": 777.0}]
+    validate_invoice({"total_amount": 100.0}, pos, _raw(777.0))
+    assert pos[0]["unit"] == "kg"
+    pos = [{"quantity": 500, "unit": "kg", "unit_price": 0.40, "total_price": 200.0}]
+    validate_invoice({"total_amount": 238.0}, pos, _raw(200.0), auto_correct=False)
+    assert pos[0]["unit"] == "kg"
+
+
+def test_tonnes_and_non_mass_units_are_left_alone():
+    pos = [{"quantity": 2, "unit": "t", "unit_price": 10.0, "total_price": 20.0},
+           {"quantity": 3, "unit": "Stück", "unit_price": 1.0, "total_price": 3.0}]
+    r = validate_invoice({"total_amount": 27.37}, pos, _raw(23.0))
+    assert r.normalizations == [] and pos[0]["unit"] == "t" and pos[1]["unit"] == "Stück"

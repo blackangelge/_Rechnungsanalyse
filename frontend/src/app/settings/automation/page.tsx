@@ -90,6 +90,7 @@ function PdfTrimSettings() {
 
 const OUTCOME_LABELS: Record<string, string> = {
   ok: "In Ordnung", corrected: "Automatisch korrigiert", needs_review: "Prüfen!",
+  normalized: "Auf Tonnen umgerechnet", unchanged: "Unverändert (keine Gewichtseinheit / nicht umrechenbar)",
   unchecked: "Nicht prüfbar", skipped_no_data: "Übersprungen (keine verwertbare KI-Antwort)",
 };
 
@@ -97,14 +98,15 @@ const OUTCOME_LABELS: Record<string, string> = {
 function ValidationBackfill() {
   const [state, setState] = useState<ValidationBackfillState | null>(null);
   const [autoCorrect, setAutoCorrect] = useState(true);
+  const [normalizeUnits, setNormalizeUnits] = useState(false);   // Modus „Einheiten auf Tonnen vereinheitlichen"
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
-    try { setState(await validationBackfillApi.status()); } catch { /* beim nächsten Takt erneut */ }
+    try { setState(await validationBackfillApi.status(normalizeUnits)); } catch { /* beim nächsten Takt erneut */ }
   }
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [normalizeUnits]);
   useEffect(() => {
     if (!state?.running) return;
     const t = setInterval(refresh, 2000);
@@ -112,14 +114,19 @@ function ValidationBackfill() {
   }, [state?.running]);
 
   async function start(dryRun: boolean) {
-    if (!dryRun && !confirm(
+    if (!dryRun && normalizeUnits && !confirm(
+      `Gewichtseinheiten bei ${state?.pending?.toLocaleString("de-DE") ?? "allen"} Belegen auf Tonnen vereinheitlichen?\n\n` +
+      "Menge, Einheit und Einzelpreis (€ je t) der Positionen werden in der Datenbank umgerechnet (kg → t). " +
+      "Die ursprünglichen Werte bleiben in der gespeicherten KI-Antwort erhalten. Prüfstatus bleiben unverändert.",
+    )) return;
+    if (!dryRun && !normalizeUnits && !confirm(
       `Prüfung für ${state?.pending?.toLocaleString("de-DE") ?? "alle ungeprüften"} Belege nachrüsten?\n\n` +
       (autoCorrect ? "Eindeutige Fehler (z.B. t/kg) werden dabei automatisch korrigiert. " : "") +
       "Fehlende Positions-Gesamtpreise werden aus der gespeicherten KI-Antwort ergänzt.",
     )) return;
     setBusy(true);
     setError(null);
-    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect })); }
+    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect, normalize_units: normalizeUnits })); }
     catch (err) { setError(extractApiError(err, "Start fehlgeschlagen")); }
     finally { setBusy(false); }
   }
@@ -142,8 +149,18 @@ function ValidationBackfill() {
         fehlende Positions-Gesamtpreise werden aus der gespeicherten KI-Antwort ergänzt und alle Werte durchgerechnet.
         Die „Vorschau" rechnet alles durch, speichert aber nichts. Belege mit „Prüfen!" kannst du danach gezielt neu analysieren lassen.
       </p>
+      <div className="mb-3 flex gap-4 text-sm text-gray-700" data-testid="backfill-mode">
+        <label className="flex items-center gap-1.5">
+          <input type="radio" checked={!normalizeUnits} disabled={state?.running} onChange={() => setNormalizeUnits(false)} />
+          Prüfung nachrüsten
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="radio" checked={normalizeUnits} disabled={state?.running} onChange={() => setNormalizeUnits(true)} />
+          Einheiten auf Tonnen vereinheitlichen (kg → t, alle Belege)
+        </label>
+      </div>
       <p className="mb-4 text-sm text-gray-700" data-testid="backfill-pending">
-        Noch ungeprüft: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
+        {normalizeUnits ? "Zu prüfen" : "Noch ungeprüft"}: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
       </p>
       <label className="mb-4 flex items-center gap-2 text-sm text-gray-700">
         <input type="checkbox" checked={autoCorrect} onChange={(e) => setAutoCorrect(e.target.checked)}

@@ -18,19 +18,21 @@ class BackfillStart(BaseModel):
     dry_run: bool = False
     auto_correct: bool = True
     batch_ids: list[int] | None = None
+    normalize_units: bool = False     # nur Gewichtseinheiten auf Tonnen vereinheitlichen (alle Belege)
 
 
 @router.get("")
-def backfill_status(batch_ids: list[int] | None = Query(default=None)):
+def backfill_status(batch_ids: list[int] | None = Query(default=None), normalize_units: bool = False):
     state = validation_backfill.get_state()
-    state["pending"] = validation_backfill.count_pending(batch_ids)
+    state["pending"] = validation_backfill.count_pending(batch_ids, normalize_units)
     return state
 
 
 @router.post("")
 def backfill_start(payload: BackfillStart):
     try:
-        return validation_backfill.start(payload.dry_run, payload.auto_correct, payload.batch_ids)
+        return validation_backfill.start(payload.dry_run, payload.auto_correct, payload.batch_ids,
+                                         normalize_units=payload.normalize_units)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

@@ -148,6 +148,8 @@ class ValidationResult:
     status: str
     issues: list[Issue] = field(default_factory=list)
     corrections: list[dict] = field(default_factory=list)
+    # Vereinheitlichung der Einheiten (Gewicht → t): keine Fehlerkorrektur, zählt nicht für den Prüfstatus
+    normalizations: list[dict] = field(default_factory=list)
     checks_run: int = 0
     # „Durchrechnung": jede geprüfte Rechnung mit erwartetem/tatsächlichem Wert
     calc: list[dict] = field(default_factory=list)
@@ -161,6 +163,7 @@ class ValidationResult:
             "status": self.status,
             "issues": [i.to_dict() for i in self.issues],
             "corrections": self.corrections,
+            "normalizations": self.normalizations,
             "checks_run": self.checks_run,
             "calc": self.calc,
         }
@@ -495,6 +498,10 @@ def validate_invoice(
         else:
             calc("Netto + Steuer ↔ Brutto", expected_gross, gross)
 
+    # ── Einheiten vereinheitlichen (Gewicht → Tonnen), erst nach allen Korrekturen ──
+    if auto_correct:
+        _normalize_mass_to_tonnes(result, positions, raw_pos)
+
     # ── Status ableiten ──────────────────────────────────────────────────────
     if result.blocking_issues:
         result.status = STATUS_NEEDS_REVIEW
@@ -506,6 +513,52 @@ def validate_invoice(
 
 
 # ─── interne Helfer ───────────────────────────────────────────────────────────
+
+def _normalize_mass_to_tonnes(
+    result: "ValidationResult", positions: list[dict], raw_pos: list[dict],
+) -> None:
+    """
+    Rechnet Gewichtspositionen (kg, g, …) auf Tonnen um — Menge, Einheit und Einzelpreis (€ je t), damit Datenbank,
+    Excel-Export und Auswertungen einheitlich in t vorliegen. Die Originalwerte stehen in `normalizations`
+    (und im `raw_response`). Es wird nur umgerechnet, wenn Menge × neuer Preis weiterhin zum Positionspreis passt
+    (Positionsrabatt berücksichtigt); sonst bleibt die Position unverändert.
+    """
+    for idx, pos in enumerate(positions):
+        unit = parse_unit(pos.get("unit"))
+        qty = _f(pos.get("quantity"))
+        if unit is None or unit.dimension != "mass" or qty is None:
+            continue
+        if abs(unit.factor - 1000.0) < 1e-9 and str(pos.get("unit")).strip().lower() in ("t", "to", "tonne", "tonnen"):
+            continue
+        qty_t = qty * unit.factor / 1000.0
+        price, total = _f(pos.get("unit_price")), _f(pos.get("total_price"))
+        new_price: float | None = None
+        if price is not None:
+            price_unit = parse_unit((raw_pos[idx] if idx < len(raw_pos) else {}).get("preiseinheit")) or unit
+            candidates = []
+            if price_unit.dimension == "mass":
+                candidates.append(price * 1000.0 / price_unit.factor)     # Preis bezog sich auf price_unit
+            candidates.append(price)                                      # Preis galt bereits je Tonne
+            if total is None:
+                new_price = candidates[0]
+            else:
+                for c in candidates:
+                    exp = qty_t * c
+                    if _close(exp, total) or any(_close(v, total) for v in _discounted_values(exp, pos.get("discount"))):
+                        new_price = c
+                        break
+                if new_price is None:
+                    continue                                              # passt nicht → nicht anfassen
+        before = {"quantity": qty, "unit": pos.get("unit"), "unit_price": price}
+        pos["quantity"] = round(qty_t, 6)
+        pos["unit"] = "t"
+        if new_price is not None:
+            pos["unit_price"] = round(new_price, 6)
+        result.normalizations.append({
+            "position": idx, "field": "normalize", "from": before,
+            "to": {"quantity": pos["quantity"], "unit": "t", "unit_price": pos.get("unit_price")},
+        })
+
 
 def _check_unit_vs_price_unit(
     result: "ValidationResult", idx: int, pos: dict, raw_pos: list[dict], auto_correct: bool,

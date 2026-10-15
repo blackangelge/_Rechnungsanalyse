@@ -437,6 +437,7 @@ def update_validation(
     Korrekturen in die Daten (`corrected_positions` = ValidationResult.corrections):
       • {"position": idx, "to": wert}            → order_positions.total_price
       • {"position": idx, "field": "unit", "to": einheit} → order_positions.unit
+      • {"position": idx, "field": "normalize", "to": {quantity, unit, unit_price}} → Menge/Einheit/Preis in Tonnen
       • {"field": "total_amount", "to": wert}    → invoice_extractions.total_amount_brutto
     """
     extraction = (
@@ -455,7 +456,13 @@ def update_validation(
                 .first()
             )
             if pos is not None:
-                if corr.get("field") == "unit":
+                if corr.get("field") == "normalize":
+                    to = corr["to"]
+                    pos.quantity = Decimal(str(to["quantity"]))
+                    pos.unit = to["unit"]
+                    if to.get("unit_price") is not None:
+                        pos.unit_price_netto = Decimal(str(to["unit_price"]))
+                elif corr.get("field") == "unit":
                     pos.unit = str(corr["to"])
                 else:
                     pos.total_price = Decimal(str(corr["to"]))

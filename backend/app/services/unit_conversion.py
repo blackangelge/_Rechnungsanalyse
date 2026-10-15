@@ -1,5 +1,5 @@
 """
-Einheiten-Umrechnung für Auswertungen (Artikelsuche): Gewicht → kg, Volumen → l, Länge → m, Fläche → m².
+Einheiten-Umrechnung für Auswertungen (Artikelsuche): Gewicht → t (Tonnen), Volumen → l, Länge → m, Fläche → m².
 
 Quelle ist dieselbe Einheitentabelle wie in der Plausibilitätsprüfung (`plausibility_service._UNITS`), damit
 Prüfung und Auswertung nie auseinanderlaufen. Stück/Verpackungen und unbekannte Einheiten werden nicht umgerechnet
@@ -13,12 +13,15 @@ from sqlalchemy import case, func
 
 from app.services.plausibility_service import _UNITS
 
-BASE_UNITS = {"mass": "kg", "volume": "l", "length": "m", "area": "m²"}
+BASE_UNITS = {"mass": "t", "volume": "l", "length": "m", "area": "m²"}
+# Faktor der Basiseinheit in den internen Einheiten von `_UNITS` (dort ist die Masse in kg angegeben: 1 t = 1000)
+_BASE_FACTOR = {"mass": 1000.0, "volume": 1.0, "length": 1.0, "area": 1.0}
 GROUP_LABELS = {"mass": "Gewicht", "volume": "Volumen", "length": "Länge", "area": "Fläche"}
 
 
 def _convertible() -> dict[str, tuple[str, float]]:
-    return {name: (dim, factor) for name, (dim, factor) in _UNITS.items() if dim in BASE_UNITS}
+    # Faktor bezogen auf die Basiseinheit (z.B. kg → 0,001 t)
+    return {name: (dim, factor / _BASE_FACTOR[dim]) for name, (dim, factor) in _UNITS.items() if dim in BASE_UNITS}
 
 
 def unit_key(column):
@@ -53,7 +56,7 @@ def reference_table() -> list[dict]:
     }
     out = []
     for dim, names in shown.items():
-        units = [{"unit": ("m³" if n == "m3" else "m²" if n == "m2" else n), "factor": _UNITS[n][1]}
+        units = [{"unit": ("m³" if n == "m3" else "m²" if n == "m2" else n), "factor": _UNITS[n][1] / _BASE_FACTOR[dim]}
                  for n in names if n in _UNITS]
         out.append({"group": dim, "label": GROUP_LABELS[dim], "base_unit": BASE_UNITS[dim], "units": units})
     return out

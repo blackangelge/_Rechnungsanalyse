@@ -619,6 +619,11 @@ nur bei Eingangsrechnungen mit verwertbarer KI-Antwort — **vor** `_db_analyze_
    - **Mengen- vs. Preiseinheit** (`_check_unit_vs_price_unit`): geht Menge × Einzelpreis = Positionspreis auf, obwohl `preiseinheit` (nur `raw_response`) eine andere Einheit
      derselben Dimension nennt als `unit` (z.B. „25,88 kg“ bei „421,10 je t“ — die KI hatte 25.880 kg zu 25,88 t umgerechnet), steht die Menge zahlenmäßig in der Preiseinheit →
      `unit` wird korrigiert (`corrections: {position, field: "unit", from, to}`; `update_validation` schreibt `order_positions.unit`), ohne Auto-Korrektur Warnung `unit_mismatch`.
+   - **Gewicht in Tonnen (`_normalize_mass_to_tonnen`→`_normalize_mass_to_tonnes`)**: am Ende von `validate_invoice` (nur bei `auto_correct`) werden Gewichtspositionen (kg, g …) **in der Datenbank** auf t umgerechnet:
+     Menge in t, Einheit „t“, Einzelpreis € je t (aus `preiseinheit`, sonst Annahme Preis je Mengeneinheit bzw. schon je t — es gilt der Kandidat, bei dem Menge × Preis zum Positionspreis passt, sonst bleibt die
+     Position unverändert). Excel-Export und Auswertungen lesen damit direkt Tonnen. Originalwerte: `validation_details.normalizations` + `raw_response`. Zählt nicht als Korrektur (kein Statuswechsel).
+     `crud.document.update_validation` schreibt `{field: "normalize"}`-Einträge; Altbestand: `validation_backfill` im Modus `normalize_units` (Einstellungen → Automatisierung, „Einheiten auf Tonnen vereinheitlichen“) — alle Belege, Prüfstatus bleiben unberührt.
+     Basiseinheit der Artikelsuche (`unit_conversion.BASE_UNITS`): Gewicht = **t**.
    - `ai_service.with_unit_rules` hängt an jeden Extraktionsprompt Zusatzregeln (Menge/Einheit wie gedruckt, deutsche Zahlen, `preiseinheit` je Position), sofern der Prompt
      `preiseinheit` nicht schon behandelt. Fehlt `preiseinheit`, kann der Widerspruch nicht erkannt werden.
    - `validation_details.calc` = Durchrechnung als Zeilen `{label, expected, actual, status, note}` (Tabelle im Prüfpanel).
@@ -787,9 +792,9 @@ Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, s
 - Filter: `q` (alle Wörter müssen in Bezeichnung, Beschreibung **oder** Artikelnummer vorkommen; `%`/`_` sind keine Platzhalter), `article_number`, `supplier_name`
   (Teilstring auf `invoice_extractions.vendor_id` = Lieferantenname), `company`, `year` (aus dem Import), `batch_ids`, `document_id`, `invoice_number`, `unit`,
   `unit_price_`/`total_price_`/`quantity_` `min|max`, `date_from|date_to`, `validation_status`, `include_deleted`.
-- **Einheiten-Umrechnung** (`services/unit_conversion.py`, nutzt dieselbe Tabelle `_UNITS` wie die Plausibilitätsprüfung): Gewicht → kg, Volumen → l, Länge → m, Fläche → m².
+- **Einheiten-Umrechnung** (`services/unit_conversion.py`, nutzt dieselbe Tabelle `_UNITS` wie die Plausibilitätsprüfung): Gewicht → t, Volumen → l, Länge → m, Fläche → m².
   Zur Abfragezeit in SQL (nichts gespeichert, gilt sofort für den Altbestand): Trefferfelder `base_quantity`, `base_unit`, `base_unit_price` (= Positionspreis ÷ Basismenge;
-  leer bei Stück/Verpackungen/unbekannten Einheiten); `/summary` fasst `by_unit` in der Basiseinheit zusammen (t + kg + g → kg); Filter `unit_group=mass|volume|length|area`;
+  leer bei Stück/Verpackungen/unbekannten Einheiten); `/summary` fasst `by_unit` in der Basiseinheit zusammen (t + kg + g → t); Filter `unit_group=mass|volume|length|area`;
   `GET /api/positions/unit-table` liefert die Umrechnungstabelle (Oberfläche: „ⓘ Einheiten-Umrechnung"). Neue Einheit → in `_register(...)` ergänzen, nicht hier.
 - Sortierung: leere Werte immer am Ende, `id` als Tie-Breaker → stabiles Blättern. Standard: neueste Belege zuerst.
 - Es werden nur Listenspalten gelesen (kein `raw_response`); Teilstring-Suche nutzt die `pg_trgm`-Indizes aus Migration 0011.

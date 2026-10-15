@@ -171,12 +171,12 @@ def test_summary(client, world):
     assert s["count"] == 2 and s["documents"] == 2
     assert s["total_price_sum"] == 650.0
     assert s["unit_price_min"] == 0.4 and s["unit_price_max"] == 0.45 and round(s["unit_price_avg"], 3) == 0.425
-    assert s["by_unit"] == [{"unit": "kg", "count": 2, "quantity": 1500.0, "total_price": 650.0}]
+    assert s["by_unit"] == [{"unit": "t", "count": 2, "quantity": 1.5, "total_price": 650.0}]
     everything = client.get("/api/positions/summary").json()
     assert everything["count"] == 7 and everything["documents"] == 3
     assert everything["total_price_sum"] == 200 + 900 + 260 + 120 + 450 + 10
-    assert [u["unit"] for u in everything["by_unit"]][:1] == ["kg"]                    # kg + KG + t zusammengefasst
-    assert everything["by_unit"][0]["count"] == 4 and everything["by_unit"][0]["quantity"] == 500 + 1000 + 1000 + 2000
+    assert [u["unit"] for u in everything["by_unit"]][:1] == ["t"]                     # kg + KG + t zusammengefasst
+    assert everything["by_unit"][0]["count"] == 4 and round(everything["by_unit"][0]["quantity"], 6) == 4.5
     empty = client.get("/api/positions/summary", params={"q": "gibtsnicht"}).json()
     assert empty["count"] == 0 and empty["total_price_sum"] is None and empty["by_unit"] == []
 
@@ -233,12 +233,12 @@ def test_summary_and_options_are_cached_but_cleared_when_imports_change(client, 
 def test_units_are_converted_to_base_unit_in_list_and_filter(client, world):
     items, _ = get(client, unit="t", limit=100)
     row = items[0]
-    assert row["unit"] == "t" and row["base_unit"] == "kg" and float(row["base_quantity"]) == 2000.0
-    assert round(float(row["base_unit_price"]), 4) == 0.45        # 900 € ÷ 2000 kg (Positionspreis ÷ Basismenge)
+    assert row["unit"] == "t" and row["base_unit"] == "t" and float(row["base_quantity"]) == 2.0
+    assert round(float(row["base_unit_price"]), 4) == 450.0       # 900 € ÷ 2 t (Positionspreis ÷ Basismenge)
     piece = next(i for i in get(client, limit=100)[0] if i["unit"] == "Stück")
     assert piece["base_unit"] is None and piece["base_quantity"] is None
     mass = next(g for g in client.get("/api/positions/unit-table").json() if g["group"] == "mass")
-    assert mass["base_unit"] == "kg" and {"unit": "t", "factor": 1000.0} in mass["units"]
+    assert mass["base_unit"] == "t" and {"unit": "kg", "factor": 0.001} in mass["units"]
     assert get(client, unit_group="mass")[1] == 4                  # kg, KG, kg, t
     assert get(client, unit_group="volume")[1] == 0
     assert client.get("/api/positions", params={"unit_group": "bogus"}).status_code == 422
