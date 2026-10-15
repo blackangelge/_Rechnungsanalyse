@@ -136,7 +136,7 @@ def test_standard_workflow_invoice_end_to_end(env, monkeypatch):
     assert doc.used_workflow_id == wf.id and doc.used_workflow_name == "Standard"
     assert doc.used_workflow["nodes"] and doc.page_count == 3
     run = doc.workflow_run
-    assert [t["type"] for t in run] == ["start", "detect_type", "branch", "extract", "validate", "end"]
+    assert [t["type"] for t in run if t["type"] != "saved"] == ["start", "detect_type", "branch", "extract", "validate", "end"]
     assert run[2]["branch"] == "true" and all(t["status"] == "ok" for t in run)
     assert doc.ki_input_tokens == 110                   # Typ + Extraktion summiert
 
@@ -147,7 +147,7 @@ def test_standard_workflow_other_type_skips_extraction(env, monkeypatch):
     doc = env.analyze(env.make_doc())
     assert doc.status == "done" and doc.document_type == 3 and doc.extraction is None
     assert ai.names() == ["detect"]
-    assert [t["type"] for t in doc.workflow_run] == ["start", "detect_type", "branch", "end"]
+    assert [t["type"] for t in doc.workflow_run if t["type"] != "saved"] == ["start", "detect_type", "branch", "end"]
     assert doc.workflow_run[2]["branch"] == "false"
     assert doc.ki_input_tokens == 10
 
@@ -424,7 +424,7 @@ def test_api_document_detail_exposes_workflow_info(client, env, monkeypatch):
     env.add_workflow(_tpl("direct"), "Mein Flow", default=True)
     doc = env.analyze(env.make_doc())
     d = client.get(f"/api/documents/{doc.id}").json()
-    assert d["used_workflow_name"] == "Mein Flow" and len(d["workflow_run"]) == 4
+    assert d["used_workflow_name"] == "Mein Flow" and len([t for t in d["workflow_run"] if t["type"] != "saved"]) == 4
     assert d["used_workflow"]["nodes"][0]["type"] == "start"
 
 
@@ -519,3 +519,22 @@ def test_normalize_node_default_mode_leaves_kg_priced_positions_alone(env, monke
     env.add_workflow(_chain(("extract", {}), ("normalize_units", {})), default=True)
     pos = env.analyze(env.make_doc()).order_positions[0]
     assert (float(pos.quantity), pos.unit) == (25880.0, "kg")
+
+
+def test_trace_records_input_output_changes_prompts_and_saved_state(env, monkeypatch):
+    FakeAI(monkeypatch, positions=[{"quantity": 25880, "unit": "kg", "unit_price": 421.10 / 1000, "total_price": 10898.07}])
+    env.add_workflow(_chain(("extract", {}), ("normalize_units", {"mode": "all"})), default=True)
+    doc = env.analyze(env.make_doc(), prompt="MEIN-PROMPT")
+    run = {t["type"]: t for t in doc.workflow_run}
+    ex, nu, saved = run["extract"], run["normalize_units"], run["saved"]
+    assert ex["input"]["positions"] == [] and ex["output"]["positions"][0]["Einheit"] == "kg"
+    assert "MEIN-PROMPT" in ex["io"]["prompt"] and ex["io"]["response"]
+    assert any(c["path"] == "Position 1 · Einheit" and c["from"] == "kg" and c["to"] == "t" for c in nu["changes"])
+    assert saved["output"]["positions"][0]["Einheit"] == "t" and saved["output"]["positions"][0]["Menge"] == 25.88
+
+
+def test_trace_explains_why_normalization_did_nothing(env, monkeypatch):
+    FakeAI(monkeypatch, positions=KG_POS)
+    env.add_workflow(_chain(("extract", {}), ("normalize_units", {})), default=True)
+    nu = next(t for t in env.analyze(env.make_doc()).workflow_run if t["type"] == "normalize_units")
+    assert nu["changes"] == [] and any("nicht je Tonne" in n for n in nu["io"]["notes"])

@@ -76,6 +76,8 @@ class RunContext:
     validation: dict | None = None
     extract_proxy: Any = None
     used_extract_prompt: str | None = None
+    # Ein-/Ausgabe des gerade laufenden Knotens fürs Ablaufprotokoll (Prompt, Antwort, Hinweise) — Engine setzt sie je Knoten zurück
+    node_io: dict = field(default_factory=dict)
 
     async def ensure_images(self) -> list:
         """Rendert die PDF beim ersten Bedarf (und nach einer Änderung der PDF erneut)."""
@@ -92,6 +94,88 @@ class RunContext:
 
     def add_stats(self, stats: dict | None) -> None:
         self.ki_stats = _docs()._merge_ki_stats(self.ki_stats, stats or {}) if (stats or self.ki_stats) else {}
+
+
+# ─── Ablaufprotokoll: Datenstand je Knoten ────────────────────────────────────
+
+IO_TEXT_LIMIT = 20_000        # Zeichen je Prompt/Antwort im Protokoll
+SNAPSHOT_POSITIONS = 100
+_FIELD_KEYS = (
+    "supplier_name", "invoice_number", "invoice_date", "due_date", "customer_number", "total_amount",
+    "total_amount_netto", "total_tax_value", "discount_amount", "cash_discount_amount", "payment_terms",
+    "iban", "bic", "vat_id", "tax_number",
+)
+
+
+def _clip(text: str | None, limit: int = IO_TEXT_LIMIT) -> str | None:
+    if text is None:
+        return None
+    return text if len(text) <= limit else text[:limit] + f"\n… (gekürzt, {len(text)} Zeichen insgesamt)"
+
+
+def _scalar(v: Any) -> Any:
+    from decimal import Decimal
+    if isinstance(v, Decimal):
+        return float(v)
+    return v if isinstance(v, (str, int, float, bool)) or v is None else str(v)
+
+
+def _position_row(p: dict) -> dict:
+    return {
+        "Bezeichnung": (_scalar(p.get("product_description") or p.get("product_name")) or "")[:80] or None,
+        "Artikelnr.": _scalar(p.get("article_number")),
+        "Menge": _scalar(p.get("quantity")), "Einheit": _scalar(p.get("unit")),
+        "Einzelpreis": _scalar(p.get("unit_price")), "Gesamtpreis": _scalar(p.get("total_price")),
+        "Nachlass": _scalar(p.get("discount")),
+    }
+
+
+def _snapshot(ctx: "RunContext") -> dict:
+    """Datenstand des Ablaufs (Dokumententyp, Felder, Positionen, Prüfergebnis) — kompakt und JSON-tauglich."""
+    snap: dict = {
+        "document_type": ctx.document_type_name, "page_count": ctx.page_count or None,
+        "extracted": ctx.extracted,
+        "fields": {k: _scalar(ctx.fields.get(k)) for k in _FIELD_KEYS if ctx.fields.get(k) is not None},
+        "positions": [_position_row(p) for p in ctx.positions[:SNAPSHOT_POSITIONS]],
+        "positions_total": len(ctx.positions),
+        "validation_status": (ctx.validation or {}).get("status"),
+    }
+    if ctx.validation:
+        snap["validation"] = {
+            "issues": [i.get("message") for i in (ctx.validation.get("issues") or [])][:30],
+            "corrections": ctx.validation.get("corrections") or [],
+            "normalizations": ctx.validation.get("normalizations") or [],
+        }
+    return snap
+
+
+def _db_saved_snapshot(doc_id: int) -> dict:
+    """Was tatsächlich in der Datenbank steht (Positionen + Kopfdaten) — Gegenprobe zum Ablauf."""
+    from app.models.invoice_extraction import InvoiceExtraction
+    from app.models.order_position import OrderPosition
+    db = SessionLocal()
+    try:
+        ext = db.query(InvoiceExtraction).filter(InvoiceExtraction.document_id == doc_id).first()
+        positions = (db.query(OrderPosition).filter(OrderPosition.document_id == doc_id)
+                     .order_by(OrderPosition.position_index).limit(SNAPSHOT_POSITIONS).all())
+        fields = {}
+        if ext is not None:
+            for k, v in (("supplier_name", ext.vendor_id), ("invoice_number", ext.invoice_number),
+                         ("invoice_date", ext.invoice_date), ("total_amount", ext.total_amount_brutto),
+                         ("total_amount_netto", ext.total_amount_netto), ("total_tax_value", ext.total_tax_value)):
+                if v is not None:
+                    fields[k] = _scalar(v if not hasattr(v, "isoformat") else v.isoformat())
+        return {
+            "fields": fields,
+            "validation_status": ext.validation_status if ext is not None else None,
+            "positions": [_position_row({
+                "product_description": p.product_description, "product_name": p.product_name,
+                "article_number": p.article_number, "quantity": p.quantity, "unit": p.unit,
+                "unit_price": p.unit_price_netto, "total_price": p.total_price, "discount": p.discount,
+            }) for p in positions],
+        }
+    finally:
+        db.close()
 
 
 # ─── DB-Helfer (sync, für asyncio.to_thread) ──────────────────────────────────
@@ -221,6 +305,7 @@ async def _h_detect(cfg, ctx: RunContext):
     )
     if _docs()._is_ai_conn_error(_raw):
         raise AIUnavailable(f"KI nicht erreichbar bei der Typ-Erkennung: {_raw[:120]}")
+    ctx.node_io = {"prompt": _clip(prompt), "response": _clip(_raw)}
     ctx.type_detected = True
     ctx.document_type_id, ctx.document_type_name = type_id, type_name
     ctx.add_stats(stats)
@@ -238,6 +323,7 @@ async def _h_branch(cfg, ctx: RunContext):
         "page_count": ctx.page_count or None,
         "validation_status": (ctx.validation or {}).get("status"),
     }
+    ctx.node_io = {"notes": [f"{k} = {v!r}" for k, v in facts.items()]}
     result = workflow_service.evaluate_condition(cfg, facts)
     shown = facts.get(
         {"document_type": "document_type_name", "supplier_name": "supplier_name",
@@ -260,6 +346,8 @@ async def _h_extract(cfg, ctx: RunContext):
     )
     if _docs()._is_ai_conn_error(raw):
         raise AIUnavailable(f"KI nicht erreichbar bei der Extraktion: {raw[:120]}")
+    ctx.node_io = {"prompt": _clip(ai_service.with_unit_rules(prompt)), "response": _clip(raw),
+                   "model": getattr(proxy, "model_name", None)}
     ctx.fields, ctx.positions, ctx.raw = fields, positions, raw
     ctx.extracted, ctx.extract_proxy = True, proxy
     ctx.used_extract_prompt = prompt
@@ -289,7 +377,9 @@ async def _h_normalize(cfg, ctx: RunContext):
     from app.services import plausibility_service as ps
     raw = docs_parse_raw(ctx.raw)
     result = ps.ValidationResult(status=ps.STATUS_UNCHECKED)
-    ps._normalize_mass_to_tonnes(result, ctx.positions, ps._raw_positions(raw), cfg.target, cfg.mode)
+    notes: list[str] = []
+    ps._normalize_mass_to_tonnes(result, ctx.positions, ps._raw_positions(raw), cfg.target, cfg.mode, notes)
+    ctx.node_io = {"notes": notes}
     if ctx.validation is not None and result.normalizations:
         ctx.validation["normalizations"] = (ctx.validation.get("normalizations") or []) + result.normalizations
     n = len(result.normalizations)
@@ -315,6 +405,8 @@ async def _h_refine(cfg, ctx: RunContext):
     if _docs()._is_ai_conn_error(raw):
         raise AIUnavailable(f"KI nicht erreichbar bei der Nachbearbeitung: {raw[:120]}")
     ctx.add_stats(stats)
+    ctx.node_io = {"prompt": _clip(ai_service.with_unit_rules(prompt)), "response": _clip(raw),
+                   "model": getattr(proxy, "model_name", None)}
     if not (fields or positions):
         return NodeResult(detail="KI lieferte kein verwertbares Ergebnis — Daten unverändert")
     ctx.fields, ctx.positions, ctx.raw = fields, positions, raw
@@ -376,7 +468,7 @@ async def analyze_with_workflow(
     )
     trace: list[dict] = []
     try:
-        trace = await workflow_service.run_graph(workflow["graph"], HANDLERS, ctx)
+        trace = await workflow_service.run_graph(workflow["graph"], HANDLERS, ctx, snapshot=_snapshot)
     except WorkflowError as exc:
         ctx.images = None
         if isinstance(exc.__cause__, AIUnavailable):
@@ -414,6 +506,18 @@ async def analyze_with_workflow(
         )
     else:
         await asyncio.to_thread(_db_finish_empty, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename)
+    try:
+        saved = await asyncio.to_thread(_db_saved_snapshot, doc_id)
+        final = _snapshot(ctx)
+        trace.append({
+            "node_id": "__saved__", "type": "saved", "label": "In Datenbank gespeichert", "status": "ok",
+            "duration_s": 0.0, "detail": f"{len(saved['positions'])} Position(en) gespeichert", "branch": None,
+            "input": final, "output": saved,
+            "changes": workflow_service.diff_snapshots(
+                {"fields": {}, "positions": final["positions"]}, {"fields": {}, "positions": saved["positions"]}),
+        })
+    except Exception as exc:        # Protokoll darf nie die Analyse gefährden
+        logger.warning("Gespeicherter Datenstand von #%d nicht protokolliert: %s", doc_id, exc)
     await asyncio.to_thread(_db_save_run, doc_id, workflow, trace)
     return "ok"
 

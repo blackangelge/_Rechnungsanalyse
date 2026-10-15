@@ -352,10 +352,40 @@ class WorkflowError(Exception):
         self.trace = trace
 
 
-async def run_graph(graph: dict, handlers: dict[str, Handler], ctx: Any) -> list[dict]:
+def diff_snapshots(before: dict, after: dict, limit: int = 200) -> list[dict]:
+    """
+    Vergleicht zwei Daten-Schnappschüsse (Felder, Positionen, Prüfstatus …) und liefert die Änderungen eines Knotens
+    als [{path, from, to}] — leer = der Knoten hat nichts verändert.
+    """
+    changes: list[dict] = []
+
+    def add(path: str, a: Any, b: Any) -> None:
+        if a != b and len(changes) < limit:
+            changes.append({"path": path, "from": a, "to": b})
+
+    for key in ("document_type", "page_count", "validation_status"):
+        add(key, before.get(key), after.get(key))
+    bf, af = before.get("fields") or {}, after.get("fields") or {}
+    for k in sorted(set(bf) | set(af)):
+        add(f"Feld {k}", bf.get(k), af.get(k))
+    bp, ap = before.get("positions") or [], after.get("positions") or []
+    if len(bp) != len(ap):
+        add("Anzahl Positionen", len(bp), len(ap))
+    for i in range(min(len(bp), len(ap))):
+        for k in sorted(set(bp[i]) | set(ap[i])):
+            add(f"Position {i + 1} · {k}", bp[i].get(k), ap[i].get(k))
+    return changes
+
+
+async def run_graph(
+    graph: dict, handlers: dict[str, Handler], ctx: Any,
+    snapshot: Callable[[Any], dict] | None = None,
+) -> list[dict]:
     """
     Führt den Workflow aus und gibt das Ablaufprotokoll zurück
-    ([{node_id, type, label, status, duration_s, detail, branch}, ...]).
+    ([{node_id, type, label, status, duration_s, detail, branch, input, output, changes, io}, ...]).
+    Mit `snapshot` (ctx → dict) wird je Knoten der Datenstand davor/danach und die Differenz festgehalten;
+    Prompts/Antworten und Hinweise, die ein Knoten in `ctx.node_io` ablegt, landen unter `io`.
     Wirft WorkflowError, wenn ein Knoten eine Exception auslöst.
     """
     nodes = {n["id"]: n for n in graph["nodes"]}
@@ -375,14 +405,20 @@ async def run_graph(graph: dict, handlers: dict[str, Handler], ctx: Any) -> list
             "node_id": current, "type": ntype, "label": _label(node),
             "status": "ok", "duration_s": 0.0, "detail": None, "branch": None,
         }
+        before = _safe_snapshot(snapshot, ctx)
+        if hasattr(ctx, "node_io"):
+            ctx.node_io = {}
+        entry["config"] = cfg.model_dump()
         started = time.monotonic()
         try:
             result = await handlers[ntype](cfg, ctx)
         except Exception as exc:
             entry.update(status="error", detail=str(exc), duration_s=round(time.monotonic() - started, 2))
+            _attach_io(entry, before, _safe_snapshot(snapshot, ctx), ctx)
             trace.append(entry)
             raise WorkflowError(node, str(exc), trace) from exc
         entry["duration_s"] = round(time.monotonic() - started, 2)
+        _attach_io(entry, before, _safe_snapshot(snapshot, ctx), ctx)
         result = result or NodeResult()
         entry["detail"] = result.detail
         if ntype == "branch":
@@ -390,6 +426,24 @@ async def run_graph(graph: dict, handlers: dict[str, Handler], ctx: Any) -> list
         trace.append(entry)
         current = edges.get((current, result.handle))
     raise WorkflowError(nodes[current] if current else {}, f"Abbruch nach {MAX_STEPS} Schritten", trace)
+
+
+def _safe_snapshot(snapshot: Callable[[Any], dict] | None, ctx: Any) -> dict | None:
+    if snapshot is None:
+        return None
+    try:
+        return snapshot(ctx)
+    except Exception:           # Protokoll darf den Ablauf nie stören
+        return None
+
+
+def _attach_io(entry: dict, before: dict | None, after: dict | None, ctx: Any) -> None:
+    if before is not None and after is not None:
+        entry["input"], entry["output"] = before, after
+        entry["changes"] = diff_snapshots(before, after)
+    io = getattr(ctx, "node_io", None)
+    if io:
+        entry["io"] = io
 
 
 # ─── Vorlagen ─────────────────────────────────────────────────────────────────
