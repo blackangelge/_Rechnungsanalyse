@@ -1140,6 +1140,8 @@ export interface PositionFilter {
   q?: string;
   article_number?: string;
   supplier_name?: string;
+  /** Lieferantenname exakt (Auswahl aus der Liste) statt Teilstring — deutlich schneller */
+  supplier_exact?: boolean;
   company?: string;
   year?: number;
   batch_ids?: number[];
@@ -1187,7 +1189,12 @@ export const positionsApi = {
       params: { ...filters, limit: pageSize, offset: page * pageSize, sort, order },
     });
     const header = Number(r.headers["x-total-count"]);
-    return { items: r.data, total: Number.isFinite(header) ? header : r.data.length };
+    return {
+      items: r.data,
+      total: Number.isFinite(header) ? header : r.data.length,
+      /** true = es gibt mehr Treffer als `total` (die Zählung wird bei sehr breiten Filtern gedeckelt) */
+      capped: r.headers["x-total-capped"] === "true",
+    };
   },
 
   /** Kennzahlen zu denselben Filtern (Anzahl, Summe, Einzelpreis min/Ø/max, je Einheit) */

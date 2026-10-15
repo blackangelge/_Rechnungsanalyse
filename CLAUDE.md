@@ -786,6 +786,18 @@ Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, s
 - Es werden nur Listenspalten gelesen (kein `raw_response`); Teilstring-Suche nutzt die `pg_trgm`-Indizes aus Migration 0011.
 - Frontend `app/artikel/page.tsx`: alle Filter stehen in der Adresszeile (`?q=…&unit=t`) → teilbar; Beleg-Link auf `/belege?doc_id=…`.
 
+### Große Bestände: Zeitlimits, Zähl-Obergrenze, Zwischenspeicher (`services/query_guard.py`)
+
+- Artikelsuche: `statement_timeout` (PostgreSQL, `SET LOCAL`) — Suche 30 s, Kennzahlen 45 s; bei Überschreitung HTTP 504 mit verständlicher Meldung
+  statt Browser-Timeout. Die Gesamtzahl ist auf `COUNT_CAP = 10 000` begrenzt (`X-Total-Count`, `X-Total-Capped: true` → „mehr als …"-Hinweis).
+- Lieferant aus dem Dropdown filtert **exakt** (`supplier_exact=true`, nutzt Index) statt `ILIKE '%…%'`.
+- `TTLCache` für `/api/positions/summary` (60 s), `/filter-options` (300 s) und `/api/documents/filter-options` (120 s);
+  `clear_all_caches()` wird nach Ein-/Ausblenden und Löschen von Imports aufgerufen. Tests leeren die Caches automatisch (conftest).
+- Frontend `/artikel`: Tabelle, Kennzahlen und Filter-Optionen laden **unabhängig** (Ladebalken, Skeleton-Zeilen, „Suche läuft …").
+  Dropdowns (Import/Jahr/Lieferant) in Belege und Artikel folgen „Ausgeblendete Imports einbeziehen".
+- Belege mit geöffneter PDF-Vorschau: kompakte Tabelle (Firma/Jahr/Seiten/Betrag/KI ausgeblendet, Aktionen ohne Umbruch).
+- Nach großen Datenänderungen (z.B. Nachrüstung) `VACUUM ANALYZE;` ausführen, damit der Planer die Indizes nutzt.
+
 ### Imports ausblenden (`import_batches.hidden_at`, Migration `0012_import_hidden`)
 
 Ganze Imports lassen sich ausblenden, wenn sie gerade nicht wichtig sind — **nichts wird gelöscht**, alles ist umkehrbar.

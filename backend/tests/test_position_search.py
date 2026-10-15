@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import crud
+from app.crud import position_search
 from app.database import get_db
 from app.main import app
 from app.models.import_batch import ImportBatch
@@ -193,3 +194,37 @@ def test_hidden_imports_excluded_unless_requested(client, world):
     assert get(client, batch_ids=[world.batches["A"].id])[1] == 5                    # ausdrücklich gewählt
     assert get(client, document_id=world.docs["d1"].id)[1] == 2                       # per Beleg-ID
     assert client.get("/api/positions/summary").json()["count"] == 2
+
+
+def test_exact_supplier_filter_does_not_match_substrings(client, world):
+    assert get(client, supplier_name="Agro")[1] == 4                              # Teilstring (Freitext)
+    assert get(client, supplier_name="Agro", supplier_exact=True)[1] == 0         # exakt: nur voller Name
+    assert get(client, supplier_name="Agro GmbH", supplier_exact=True)[1] == 4
+
+
+def test_total_count_is_capped_for_broad_searches(client, world, monkeypatch):
+    monkeypatch.setattr(position_search, "COUNT_CAP", 3)
+    r = client.get("/api/positions", params={"limit": 2})
+    assert r.headers["x-total-count"] == "3" and r.headers["x-total-capped"] == "true"
+    assert len(r.json()) == 2
+    r = client.get("/api/positions", params={"q": "harnstoff"})
+    assert r.headers["x-total-count"] == "1" and r.headers["x-total-capped"] == "false"
+
+
+def test_too_slow_query_gives_a_clear_504(client, world, monkeypatch):
+    from app.services.query_guard import QueryTooSlow
+
+    def boom(*a, **k):
+        raise QueryTooSlow("x")
+    monkeypatch.setattr(position_search, "count", boom)
+    r = client.get("/api/positions")
+    assert r.status_code == 504 and "mehr Filter" in r.json()["detail"]
+
+
+def test_summary_and_options_are_cached_but_cleared_when_imports_change(client, world):
+    first = client.get("/api/positions/summary").json()["count"]
+    world.db.query(world.docs["d1"].__class__).filter_by(id=world.docs["d1"].id).update({"soft_deleted": True})
+    world.db.commit()
+    assert client.get("/api/positions/summary").json()["count"] == first          # noch aus dem Zwischenspeicher
+    client.post("/api/imports/visibility", json={"ids": [world.batches["A"].id], "hidden": True})
+    assert client.get("/api/positions/summary").json()["count"] < first           # Cache wurde geleert
