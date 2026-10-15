@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import MergeModal from "@/components/suppliers/MergeModal";
+import CompareModal from "@/components/suppliers/CompareModal";
 import {
   DuplicateGroup, DuplicateSearchOptions, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount, WorkflowListItem,
   vendorsApi, workflowsApi, extractApiError,
@@ -109,6 +110,7 @@ export default function LieferantenPage() {
   const [duplicates, setDuplicates] = useState<DuplicateGroup[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [mergeVendors, setMergeVendors] = useState<Vendor[] | null>(null);
+  const [compareVendors, setCompareVendors] = useState<Vendor[] | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [dupeLoading, setDupeLoading] = useState(false);
   const [showDupeOptions, setShowDupeOptions] = useState(false);
@@ -323,8 +325,15 @@ export default function LieferantenPage() {
                     <span key={l} className="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">{l}</span>
                   ))}
                   <button
+                    onClick={() => setCompareVendors(group.suppliers)}
+                    data-testid="compare-group"
+                    className="ml-auto rounded border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                  >
+                    Vergleichen
+                  </button>
+                  <button
                     onClick={() => setMergeVendors(group.suppliers)}
-                    className="ml-auto rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                    className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
                   >
                     Zusammenführen…
                   </button>
@@ -356,6 +365,14 @@ export default function LieferantenPage() {
       {selected.size > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5" data-testid="selection-bar">
           <span className="text-sm font-medium text-blue-800">{selected.size} Lieferant(en) ausgewählt</span>
+          <button
+            onClick={() => setCompareVendors(vendors.filter((v) => selected.has(v.id)))}
+            disabled={selected.size < 2}
+            data-testid="compare-selected"
+            className="rounded border border-blue-400 bg-white px-3 py-1 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-40"
+          >
+            Vergleichen
+          </button>
           <button
             onClick={() => setMergeVendors(vendors.filter((v) => selected.has(v.id)))}
             disabled={selected.size < 2}
@@ -468,6 +485,14 @@ export default function LieferantenPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {compareVendors && (
+        <CompareModal
+          suppliers={compareVendors}
+          onClose={() => setCompareVendors(null)}
+          onMerge={(sup) => { setCompareVendors(null); setMergeVendors(sup); }}
+        />
       )}
 
       {mergeVendors && (
