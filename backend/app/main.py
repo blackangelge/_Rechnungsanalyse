@@ -41,6 +41,32 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ── Startup / Shutdown ───────────────────────────────────────────────────────
 
+class MigrationError(RuntimeError):
+    """Die Datenbank konnte nicht auf den aktuellen Stand gebracht werden — der Start wird abgebrochen."""
+
+
+def _assert_single_head(script_dir) -> str:
+    """
+    Gibt den einzigen Alembic-Head zurück. Gibt es mehrere (zwei Migrationsdateien mit derselben
+    `down_revision`, typisch: eine veraltete Datei, die beim Einspielen einer neuen Version im Ordner
+    `alembic/versions/` liegen geblieben ist), wird mit einer Meldung abgebrochen, die die Dateien nennt.
+    Bewusst KEIN `upgrade heads`: eine verwaiste Migration würde sonst unbemerkt Daten verändern.
+    """
+    heads = script_dir.get_heads()
+    if len(heads) == 1:
+        return heads[0]
+    files = []
+    for rev in heads:
+        script = script_dir.get_revision(rev)
+        files.append(f"  • {rev}  ({getattr(script, 'path', '?')})")
+    raise MigrationError(
+        f"Alembic hat {len(heads)} Heads statt einem — die Migrationskette ist verzweigt:\n"
+        + "\n".join(files)
+        + "\n  → Die veraltete Datei aus alembic/versions/ entfernen (Ordner mit dem aktuellen Stand "
+        "des Repos abgleichen), dann das Backend neu starten. Es wurde keine Migration ausgeführt."
+    )
+
+
 def _run_migrations() -> None:
     """
     Wartet auf PostgreSQL und führt dann ausstehende Alembic-Migrationen aus.
@@ -68,7 +94,7 @@ def _run_migrations() -> None:
 
         cfg = AlembicConfig(str(alembic_ini))
         script_dir = ScriptDirectory.from_config(cfg)
-        head_rev = script_dir.get_current_head()
+        head_rev = _assert_single_head(script_dir)
 
         # Schnell-Check: aktuelle DB-Version per direktem SQL lesen (kein Alembic-Lock).
         # statement_timeout=3s: Falls alembic_version-Tabelle selbst gesperrt ist,
@@ -112,8 +138,13 @@ def _run_migrations() -> None:
         finally:
             alembic_conn.close()
             engine.dispose()
+    except MigrationError as exc:
+        logger.error("✗ Datenbank-Migration nicht möglich: %s", exc)
+        raise
     except Exception as exc:
         logger.error("✗ Fehler beim Ausführen der Datenbank-Migrationen: %s", exc, exc_info=True)
+        # Nicht mit veraltetem Schema weiterlaufen (sonst folgen Fehler wie "column ... does not exist")
+        raise MigrationError(f"Migration fehlgeschlagen: {exc}") from exc
 
 
 def _seed_users() -> None:
