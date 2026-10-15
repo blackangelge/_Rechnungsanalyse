@@ -19,7 +19,7 @@ def _g(nodes, edges):
 
 # ─── Vorlagen ─────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("key", ["standard", "direct", "trimmed"])
+@pytest.mark.parametrize("key", ["standard", "direct", "trimmed", "tonnes"])
 def test_templates_are_valid_without_errors(key):
     rep = ws.validate_graph(_tpl(key))
     assert rep.ok, rep.errors

@@ -283,9 +283,50 @@ async def _h_validate(cfg, ctx: RunContext):
     return NodeResult(detail=f"Status: {(validation or {}).get('status', 'nicht prüfbar')}")
 
 
+async def _h_normalize(cfg, ctx: RunContext):
+    if not ctx.extracted:
+        return NodeResult(detail="übersprungen — keine Extraktion vorhanden")
+    from app.services import plausibility_service as ps
+    raw = docs_parse_raw(ctx.raw)
+    result = ps.ValidationResult(status=ps.STATUS_UNCHECKED)
+    ps._normalize_mass_to_tonnes(result, ctx.positions, ps._raw_positions(raw), cfg.target)
+    if ctx.validation is not None and result.normalizations:
+        ctx.validation["normalizations"] = (ctx.validation.get("normalizations") or []) + result.normalizations
+    n = len(result.normalizations)
+    return NodeResult(detail=f"{n} Position(en) auf {cfg.target} umgerechnet" if n else f"nichts umzurechnen (Zieleinheit {cfg.target})")
+
+
+def docs_parse_raw(raw: str) -> dict | None:
+    return _docs()._parse_raw(raw)
+
+
+async def _h_refine(cfg, ctx: RunContext):
+    if not cfg.system_prompt_id:
+        raise RuntimeError("Kein Systemprompt gewählt — bitte im Knoten „KI-Nachbearbeitung“ einen Prompt auswählen")
+    prompt = await asyncio.to_thread(_db_prompt_text, cfg.system_prompt_id)
+    proxy = await asyncio.to_thread(_db_ai_proxy, cfg.ai_config_id) if cfg.ai_config_id else (ctx.extract_proxy or ctx.ai_proxy)
+    if ctx.extracted and ctx.raw:
+        prompt = (
+            f"{prompt}\n\nBISHERIGE AUSLESUNG (JSON aus dem vorherigen Schritt — bearbeite sie gemäß der Anweisung "
+            f"und antworte vollständig im selben JSON-Format):\n{ctx.raw[:20000]}"
+        )
+    images = await ctx.ensure_images() if cfg.include_images else []
+    fields, positions, raw, stats = await asyncio.to_thread(ai_service.extract_invoice_data, images, proxy, prompt)
+    if _docs()._is_ai_conn_error(raw):
+        raise AIUnavailable(f"KI nicht erreichbar bei der Nachbearbeitung: {raw[:120]}")
+    ctx.add_stats(stats)
+    if not (fields or positions):
+        return NodeResult(detail="KI lieferte kein verwertbares Ergebnis — Daten unverändert")
+    ctx.fields, ctx.positions, ctx.raw = fields, positions, raw
+    ctx.extracted, ctx.extract_proxy = True, proxy
+    ctx.validation = None             # muss erneut geprüft werden
+    return NodeResult(detail=f"{len(positions)} Position(en), Modell {getattr(proxy, 'model_name', '?')}")
+
+
 HANDLERS = {
     "start": _h_start, "end": _h_end, "trim_pages": _h_trim, "detect_type": _h_detect,
     "branch": _h_branch, "extract": _h_extract, "validate": _h_validate,
+    "normalize_units": _h_normalize, "ai_refine": _h_refine,
 }
 
 
