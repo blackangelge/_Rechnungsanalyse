@@ -8,8 +8,8 @@ services:
     env_file: ${PROJECT_BASE_PATH}/.env
     volumes:
       - ${PROJECT_BASE_PATH}/${DB_Path}:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Bewusst KEIN "ports:" — die Datenbank ist nur für backend/worker im Docker-Netz (db:5432) erreichbar,
+    # nicht von außen (NAS-IP:5432).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
