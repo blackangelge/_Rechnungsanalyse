@@ -20,6 +20,10 @@ class PositionSearchRead(BaseModel):
     quantity: Decimal | None = None
     unit: str | None = None
     unit_price: Decimal | None = None
+    # Umrechnung in die Basiseinheit (kg, l, m, m²); leer bei Stück/Verpackungen/unbekannten Einheiten
+    base_quantity: Decimal | None = None
+    base_unit: str | None = None
+    base_unit_price: Decimal | None = None
     total_price: Decimal | None = None
     discount: str | None = None
     invoice_number: str | None = None

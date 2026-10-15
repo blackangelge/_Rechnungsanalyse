@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.crud import position_search
+from app.services import unit_conversion
 from app.database import get_db
 from app.schemas.position_search import PositionSearchRead, PositionSummary
 from app.services.query_guard import QueryTooSlow, TTLCache, statement_timeout
@@ -41,6 +42,8 @@ def _filters(
     document_id: Optional[int] = None,
     invoice_number: Optional[str] = None,
     unit: Optional[str] = Query(None, description="Einheit (exakt, Groß-/Kleinschreibung egal)"),
+    unit_group: Optional[Literal["mass", "volume", "length", "area"]] = Query(
+        None, description="Einheitengruppe: alle Gewichts-/Volumen-/Längen-/Flächeneinheiten (t, kg, g … zusammen)"),
     unit_price_min: Optional[float] = None,
     unit_price_max: Optional[float] = None,
     total_price_min: Optional[float] = None,
@@ -56,7 +59,7 @@ def _filters(
     return dict(
         q=q, article_number=article_number, supplier_name=supplier_name, supplier_exact=supplier_exact,
         company=company, year=year, batch_ids=batch_ids, document_id=document_id,
-        invoice_number=invoice_number, unit=unit,
+        invoice_number=invoice_number, unit=unit, unit_group=unit_group,
         unit_price_min=unit_price_min, unit_price_max=unit_price_max,
         total_price_min=total_price_min, total_price_max=total_price_max,
         quantity_min=quantity_min, quantity_max=quantity_max,
@@ -114,3 +117,9 @@ def positions_summary(filters: dict = Depends(_filters), db: Session = Depends(g
 def positions_filter_options(db: Session = Depends(get_db)):
     """Einheiten für das Dropdown — über alle Positionen gruppiert, daher 5 Minuten zwischengespeichert."""
     return _options_cache.get_or_compute("units", lambda: position_search.filter_options(db))
+
+
+@router.get("/unit-table")
+def positions_unit_table():
+    """Welche Einheiten ineinander umgerechnet werden (z.B. 1 t = 1000 kg) — für die Anzeige in der Oberfläche."""
+    return unit_conversion.reference_table()

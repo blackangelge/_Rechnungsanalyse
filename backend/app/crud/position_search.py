@@ -11,17 +11,18 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.models.document import Document
 from app.models.import_batch import ImportBatch
 from app.models.invoice_extraction import InvoiceExtraction
 from app.models.order_position import OrderPosition
+from app.services import unit_conversion
 
 FILTER_KEYS = (
     "q", "article_number", "supplier_name", "supplier_exact", "company", "year", "batch_ids",
-    "document_id", "invoice_number", "unit", "unit_price_min", "unit_price_max",
+    "document_id", "invoice_number", "unit", "unit_group", "unit_price_min", "unit_price_max",
     "total_price_min", "total_price_max", "quantity_min", "quantity_max",
     "date_from", "date_to", "validation_statuses", "include_hidden", "include_deleted",
 )
@@ -96,6 +97,9 @@ def _filtered(db: Session, entities: list, **f) -> Query:
         query = query.filter(InvoiceExtraction.invoice_number.ilike(_like(g("invoice_number").strip()), escape="\\"))
     if g("unit"):
         query = query.filter(func.lower(OrderPosition.unit) == g("unit").strip().lower())
+    if g("unit_group"):
+        names = unit_conversion.group_names(g("unit_group"))
+        query = query.filter(unit_conversion.unit_key(OrderPosition.unit).in_(names or [""]))
     for key, column, op in (
         ("unit_price_min", OrderPosition.unit_price_netto, ">="), ("unit_price_max", OrderPosition.unit_price_netto, "<="),
         ("total_price_min", OrderPosition.total_price, ">="), ("total_price_max", OrderPosition.total_price, "<="),
@@ -123,11 +127,21 @@ _LIST_COLUMNS = [
     ImportBatch.company_name.label("company"), ImportBatch.year, Document.batch_id, Document.original_filename,
 ]
 
+# Umgerechnete Werte (Gewicht → kg, Volumen → l …): Menge × Faktor; Preis je Basiseinheit = Positionspreis ÷ Basismenge
+_FACTOR = unit_conversion.factor_expr(OrderPosition.unit)
+_BASE_QTY = (OrderPosition.quantity * _FACTOR).label("base_quantity")
+_BASE_UNIT = unit_conversion.base_unit_expr(OrderPosition.unit).label("base_unit")
+_BASE_PRICE = case(
+    ((_FACTOR.isnot(None)) & (OrderPosition.quantity != 0) & (OrderPosition.total_price.isnot(None)),
+     OrderPosition.total_price / (OrderPosition.quantity * _FACTOR)),
+    else_=None,
+).label("base_unit_price")
+
 
 def search(db: Session, limit: int, offset: int = 0, sort: str | None = None,
            descending: bool = True, **filters) -> list:
     """Eine Seite Treffer. Standard: neueste Belege zuerst, innerhalb eines Belegs in Positionsreihenfolge."""
-    query = _filtered(db, _LIST_COLUMNS, **filters)
+    query = _filtered(db, _LIST_COLUMNS + [_BASE_QTY, _BASE_UNIT, _BASE_PRICE], **filters)
     column = SORT_COLUMNS.get(sort or "")
     if column is None:
         query = query.order_by(Document.id.desc(), OrderPosition.position_index.asc())
@@ -162,9 +176,11 @@ def summary(db: Session, **filters) -> dict:
          func.max(OrderPosition.unit_price_netto), func.count(func.distinct(Document.id))],
         **filters,
     ).one()
-    unit_key = func.lower(func.trim(OrderPosition.unit))
+    # umrechenbare Einheiten (t, kg, g …) werden in der Basiseinheit zusammengefasst, Rest nach Schreibweise
+    unit_key = func.coalesce(unit_conversion.base_unit_expr(OrderPosition.unit), func.lower(func.trim(OrderPosition.unit)))
     by_unit = (
-        _filtered(db, [unit_key, func.count(OrderPosition.id), func.sum(OrderPosition.quantity),
+        _filtered(db, [unit_key, func.count(OrderPosition.id),
+                       func.sum(OrderPosition.quantity * func.coalesce(_FACTOR, 1)),
                        func.sum(OrderPosition.total_price)], **filters)
         .group_by(unit_key).order_by(func.count(OrderPosition.id).desc()).limit(10).all()
     )
