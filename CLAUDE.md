@@ -834,6 +834,8 @@ der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
   einzeln wählbar; Standard `name_check=true` — IBAN/USt-IdNr./Steuernr.-Treffer verbinden nur Lieferanten mit Namensähnlichkeit ≥ 50 %
   (sonst wirft eine falsch gelesene Nummer, z.B. die des Rechnungsempfängers, fremde Lieferanten in eine Gruppe — Union-Find verkettet
   transitiv); `max_key_share` (Standard 10) ignoriert Nummern, die bei zu vielen Lieferanten vorkommen. Frontend: „⚙ Suchoptionen".
+- **Vergleichen** (`components/suppliers/CompareModal.tsx`): Button je Dublettengruppe und für die Mehrfachauswahl — Lieferanten nebeneinander, je Feld
+  „identisch / abweichend / nur teilweise / überall leer" (Schreibweise egal), abweichende Einzelwerte rot, Filter „Nur Unterschiede", Weiter zu „Zusammenführen…". Rein im Frontend (Daten aus der Lieferantenliste).
 - Frontend `/lieferanten`: „Dubletten suchen" (Gruppen mit Konfidenz und Gründen), Mehrfachauswahl → `components/suppliers/MergeModal.tsx`.
 - `find_or_create` (Analyse) erkennt weiterhin nur exakte IBAN/USt-IdNr./Namen — Schreibvarianten legen neue Lieferanten an, die später
   per Dublettensuche zusammengeführt werden können.
