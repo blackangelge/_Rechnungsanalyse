@@ -1665,6 +1665,11 @@ function ValidationPanel({
                   {c.from == null ? "fehlte und wurde berechnet:" : <>von <b>{fmtNum(c.from)} €</b> auf</>}{" "}
                   <b>{fmtNum(c.to)} €</b>{c.from == null ? "" : " korrigiert"} (Netto + Steuer)
                 </>
+              ) : c.field === "unit" ? (
+                <>
+                  ↻ Position {(c.position ?? 0) + 1}: Mengeneinheit von <b>{String(c.from ?? "–")}</b> auf{" "}
+                  <b>{String(c.to)}</b> korrigiert (passend zur Preiseinheit)
+                </>
               ) : (
                 <>
                   ↻ Position {(c.position ?? 0) + 1}: Positionspreis von <b>{fmtNum(c.from ?? 0)} €</b> auf{" "}

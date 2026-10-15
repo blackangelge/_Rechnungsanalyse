@@ -243,6 +243,7 @@ def validate_invoice(
         result.checks_run += 1
         expected = qty * price
         if _close(expected, total):
+            _check_unit_vs_price_unit(result, idx, pos, raw_pos, auto_correct)
             continue
         if any(_close(v, total) for v in _discounted_values(expected, pos.get("discount"))):
             continue
@@ -505,6 +506,43 @@ def validate_invoice(
 
 
 # ─── interne Helfer ───────────────────────────────────────────────────────────
+
+def _check_unit_vs_price_unit(
+    result: "ValidationResult", idx: int, pos: dict, raw_pos: list[dict], auto_correct: bool,
+) -> None:
+    """
+    Menge × Einzelpreis ergibt den Positionspreis, aber Mengen- und Preiseinheit sind verschieden
+    (z.B. "25,88 kg" bei Preis "421,10 je t"). Dann kann die Menge zahlenmäßig nur in der Preiseinheit
+    gemeint sein — die KI hat z.B. 25.880 kg zu 25,88 (t) umgerechnet, aber "kg" stehen lassen.
+    Auswertungen nach Einheit wären sonst falsch.
+    """
+    price_raw = (raw_pos[idx] if idx < len(raw_pos) else {}).get("preiseinheit")
+    unit, price_unit = parse_unit(pos.get("unit")), parse_unit(price_raw)
+    if not (unit and price_unit and unit.dimension and unit.dimension == price_unit.dimension):
+        return
+    if abs(unit.factor - price_unit.factor) < 1e-9:
+        return
+    old = pos.get("unit")
+    if auto_correct:
+        pos["unit"] = str(price_raw).strip()
+        result.corrections.append({
+            "position": idx, "field": "unit", "from": old, "to": pos["unit"],
+            "method": "price_unit",
+        })
+        result.issues.append(Issue(
+            "unit_corrected", "info",
+            (f"Position {idx + 1}: Mengeneinheit von „{old}“ auf „{pos['unit']}“ korrigiert — "
+             f"Menge × Einzelpreis geht nur auf, wenn die Menge in der Preiseinheit steht."),
+            position=idx, details={"from": old, "to": pos["unit"]},
+        ))
+    else:
+        result.issues.append(Issue(
+            "unit_mismatch", "warning",
+            (f"Position {idx + 1}: Menge ist in „{old}“ angegeben, der Preis gilt aber je "
+             f"„{price_raw}“, und Menge × Preis geht ohne Umrechnung auf — die Mengeneinheit stimmt vermutlich nicht."),
+            position=idx, details={"unit": old, "price_unit": price_raw},
+        ))
+
 
 def _fmt_factor(f: float) -> str:
     return f"{f:g}".replace(".", ",")

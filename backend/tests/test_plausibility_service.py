@@ -280,3 +280,29 @@ def test_wrongly_multiplied_total_still_auto_corrected_and_gross_untouched():
     assert r.status == STATUS_CORRECTED and pos[0]["total_price"] == 25.0 and fields["total_amount"] == 41.65
     assert [c["field"] for c in r.corrections] == ["total_price"]            # nur der Positionspreis, nicht das Brutto
     assert all(row["status"] == "ok" for row in r.calc)                        # nach der Korrektur stimmt alles
+
+
+def test_quantity_unit_differs_from_price_unit_but_product_matches_is_corrected():
+    """Rechnung: 25.880 kg zu 421,10 je t = 10.898,07. KI schrieb menge 25,88 mit Einheit kg."""
+    pos = [{"quantity": 25.88, "unit": "kg", "unit_price": 421.10, "total_price": 10898.07}]
+    raw = _raw(10898.07, positions=[{"preiseinheit": "t"}])
+    r = validate_invoice({"total_amount": 10898.07}, pos, raw)
+    assert pos[0]["unit"] == "t"
+    assert r.status == STATUS_CORRECTED
+    assert r.corrections[0]["field"] == "unit" and r.corrections[0]["from"] == "kg"
+    assert "unit_corrected" in [i.code for i in r.issues]
+
+
+def test_unit_mismatch_is_only_reported_without_auto_correct():
+    pos = [{"quantity": 25.88, "unit": "kg", "unit_price": 421.10, "total_price": 10898.07}]
+    r = validate_invoice({"total_amount": 10898.07}, pos, _raw(10898.07, positions=[{"preiseinheit": "t"}]),
+                         auto_correct=False)
+    assert pos[0]["unit"] == "kg" and r.status == STATUS_NEEDS_REVIEW
+    assert "unit_mismatch" in [i.code for i in r.issues]
+
+
+def test_same_units_or_unknown_price_unit_are_untouched():
+    pos = [{"quantity": 2, "unit": "t", "unit_price": 10.0, "total_price": 20.0}]
+    assert validate_invoice({"total_amount": 23.8}, pos, _raw(20.0, positions=[{"preiseinheit": "t"}])).status == STATUS_OK
+    pos = [{"quantity": 2, "unit": "t", "unit_price": 10.0, "total_price": 20.0}]
+    assert validate_invoice({"total_amount": 23.8}, pos, _raw(20.0)).status == STATUS_OK

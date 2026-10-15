@@ -616,6 +616,11 @@ nur bei Eingangsrechnungen mit verwertbarer KI-Antwort — **vor** `_db_analyze_
      `total_price`; Originalwert steht in `validation_details.corrections`.
    - **Brutto wird korrigiert** (`total_amount_brutto`), wenn Positionen ≙ Netto und Steuer ≙ Netto × Satz einander bestätigen, das
      Brutto aber nicht zu Netto + Steuer passt; **fehlt** das Brutto, wird es berechnet. Netto/Steuer werden nie überschrieben.
+   - **Mengen- vs. Preiseinheit** (`_check_unit_vs_price_unit`): geht Menge × Einzelpreis = Positionspreis auf, obwohl `preiseinheit` (nur `raw_response`) eine andere Einheit
+     derselben Dimension nennt als `unit` (z.B. „25,88 kg“ bei „421,10 je t“ — die KI hatte 25.880 kg zu 25,88 t umgerechnet), steht die Menge zahlenmäßig in der Preiseinheit →
+     `unit` wird korrigiert (`corrections: {position, field: "unit", from, to}`; `update_validation` schreibt `order_positions.unit`), ohne Auto-Korrektur Warnung `unit_mismatch`.
+   - `ai_service.with_unit_rules` hängt an jeden Extraktionsprompt Zusatzregeln (Menge/Einheit wie gedruckt, deutsche Zahlen, `preiseinheit` je Position), sofern der Prompt
+     `preiseinheit` nicht schon behandelt. Fehlt `preiseinheit`, kann der Widerspruch nicht erkannt werden.
    - `validation_details.calc` = Durchrechnung als Zeilen `{label, expected, actual, status, note}` (Tabelle im Prüfpanel).
 2. **Zweite KI-Abfrage** (`ai_service.recheck_invoice_data`): nur wenn Stufe 1 `needs_review` ergibt. Systemprompt = normaler
    Extraktionsprompt + Prüfhinweis + gefundene Auffälligkeiten + erste Auslesung. Ist die neue Auslesung plausibel → `ai_corrected`
