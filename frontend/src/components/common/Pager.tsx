@@ -22,7 +22,12 @@ export default function Pager({
   onPage,
   onPageSize,
   pageSizes = [25, 50, 100, 200],
-  allSize,
+  onLoadAll,
+  allActive,
+  allLoading,
+  onExitAll,
+  localFilter,
+  onLocalFilter,
   compact,
 }: {
   testId: string;
@@ -43,8 +48,14 @@ export default function Pager({
   onPage: (p: number) => void;
   onPageSize: (size: number) => void;
   pageSizes?: number[];
-  /** Maximale Seitengröße für „Alle laden“ (ohne Angabe kein Button) */
-  allSize?: number;
+  /** „Alle laden“: alle Treffer in den Browser holen (Anzeige bleibt seitenweise) */
+  onLoadAll?: () => void;
+  allActive?: boolean;
+  allLoading?: { loaded: number; total: number } | null;
+  onExitAll?: () => void;
+  /** Lokaler Filter über die geladenen Treffer */
+  localFilter?: string;
+  onLocalFilter?: (v: string) => void;
   compact?: boolean;
 }) {
   const btn = "rounded border border-gray-300 bg-white px-2.5 py-1 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40";
@@ -67,18 +78,43 @@ export default function Pager({
           Auswahl aufheben ({selectedCount.toLocaleString("de-DE")})
         </button>
       )}
-      {allSize && total > pageSize && pageSize < allSize && (
+      {onLoadAll && !allActive && !allLoading && total > pageSize && (
         <button
           onClick={() => {
-            if (total > 5000 && !window.confirm(`${Math.min(total, allSize).toLocaleString("de-DE")} Einträge auf einmal laden? Das kann einige Sekunden dauern und den Browser verlangsamen.`)) return;
-            onPageSize(allSize);
+            if (total > 5000 && !window.confirm(`${total.toLocaleString("de-DE")} Einträge in den Browser laden? Das kann einige Sekunden dauern. Angezeigt wird weiter seitenweise, Filter und Sortierung wirken dann sofort.`)) return;
+            onLoadAll();
           }}
           disabled={loading}
           className="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
           data-testid={`${testId}-load-all`}
+          title="Lädt alle Treffer in den Browser; Anzeige bleibt seitenweise, Filtern und Sortieren geht dann sofort"
         >
-          Alle laden{total > allSize ? ` (max. ${allSize.toLocaleString("de-DE")})` : ""}
+          Alle laden
         </button>
+      )}
+      {allLoading && (
+        <span className="text-blue-700" data-testid={`${testId}-load-progress`}>
+          Lade alle… {allLoading.loaded.toLocaleString("de-DE")} / {allLoading.total.toLocaleString("de-DE")}
+        </span>
+      )}
+      {allActive && (
+        <>
+          <span className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700" data-testid={`${testId}-all-active`}>
+            Alle im Browser geladen
+          </span>
+          {onLocalFilter && !compact && (
+            <input
+              value={localFilter ?? ""}
+              onChange={(e) => onLocalFilter(e.target.value)}
+              placeholder="Im Ergebnis filtern…"
+              data-testid={`${testId}-local-filter`}
+              className="w-56 rounded border border-gray-300 px-2 py-1 text-sm text-gray-700 focus:border-blue-500 focus:outline-none"
+            />
+          )}
+          {onExitAll && (
+            <button onClick={onExitAll} className="text-gray-500 hover:underline">Zurück zur Serveransicht</button>
+          )}
+        </>
       )}
       <div className="ml-auto flex items-center gap-2">
         {!compact && (
@@ -87,7 +123,6 @@ export default function Pager({
             <select value={pageSize} onChange={(e) => onPageSize(Number(e.target.value))}
               className="rounded border border-gray-300 bg-white px-1.5 py-1 text-sm">
               {pageSizes.map((n) => <option key={n} value={n}>{n}</option>)}
-              {allSize && !pageSizes.includes(allSize) && <option value={allSize}>Alle</option>}
             </select>
           </label>
         )}

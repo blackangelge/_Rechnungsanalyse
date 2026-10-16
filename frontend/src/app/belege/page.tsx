@@ -24,6 +24,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Pager from "@/components/common/Pager";
+import { fetchAllPages, matchesWords } from "@/lib/loadAll";
 import AnalysisHistoryPanel from "@/components/belege/AnalysisHistoryPanel";
 import PdfEditModal from "@/components/belege/PdfEditModal";
 import {
@@ -284,6 +285,12 @@ export default function BelegePage() {
   const [supplierOptions, setSupplierOptions] = useState<string[]>([]);
   // Aktuelle Seite/Größe/Filter für Timer und Callbacks (Refs, damit der Auto-Refresh die Seite NICHT zurücksetzt)
   const pageRef = useRef(0);
+  // „Alle laden“: komplette Trefferliste im Browser; Blättern/Filtern lokal (null = Serveransicht)
+  const allDocsRef = useRef<DocumentItem[] | null>(null);
+  const localQRef = useRef("");
+  const [allActive, setAllActive] = useState(false);
+  const [allProgress, setAllProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [localQ, setLocalQ] = useState("");
   const pageSizeRef = useRef(DEFAULT_PAGE_SIZE);
   const activeFiltersRef = useRef<DocumentFilter>({});
   const [batches, setBatches] = useState<ImportBatch[]>([]);
@@ -328,6 +335,25 @@ export default function BelegePage() {
     setLoading(true);
     setError(null);
     try {
+      if (allDocsRef.current) {
+        // Lokale Ansicht. Ohne Seitenangabe (= Aktualisierung nach einer Aktion/Auto-Refresh) die Treffer neu vom Server holen.
+        if (pageIdx === undefined) {
+          allDocsRef.current = await fetchAllPages<DocumentItem>(
+            (p, size) => documentsApi.listPage(filters, p, size));
+        }
+        const q = localQRef.current.trim();
+        const list = q
+          ? allDocsRef.current.filter((d) => matchesWords(q, [d.id, d.original_filename, d.company, d.year, d.supplier_name, d.invoice_number, d.status]))
+          : allDocsRef.current;
+        const size = pageSizeRef.current;
+        const target = Math.min(pageIdx ?? pageRef.current, Math.max(0, Math.ceil(list.length / size) - 1));
+        const slice = list.slice(target * size, (target + 1) * size);
+        pageRef.current = target;
+        setPage(target);
+        setDocuments(slice);
+        setTotal(list.length);
+        return slice;
+      }
       let target = pageIdx ?? pageRef.current;
       let res = await documentsApi.listPage(filters, target, pageSizeRef.current);
       const lastPage = Math.max(0, Math.ceil(res.total / pageSizeRef.current) - 1);
@@ -462,6 +488,7 @@ export default function BelegePage() {
     activeFiltersRef.current = f;
     setSelectedIds(new Set());
     setPreviewDocId(null);
+    exitAllMode();
     loadDocuments(f, 0);
   }
 
@@ -476,7 +503,50 @@ export default function BelegePage() {
     activeFiltersRef.current = f;
     setSelectedIds(new Set());
     setPreviewDocId(null);
+    exitAllMode();
     loadDocuments(f, 0);
+  }
+
+  function exitAllMode() {
+    allDocsRef.current = null;
+    localQRef.current = "";
+    setAllActive(false);
+    setLocalQ("");
+  }
+
+  /** Alle Treffer in den Browser laden; angezeigt wird weiter seitenweise, Filter wirken lokal. */
+  async function loadAllHits() {
+    setError(null);
+    setAllProgress({ loaded: 0, total });
+    try {
+      const f = activeFilters;
+      const list = await fetchAllPages<DocumentItem>(
+        (p, size) => documentsApi.listPage(f, p, size),
+        (loaded, tot) => setAllProgress({ loaded, total: tot }),
+      );
+      allDocsRef.current = list;
+      localQRef.current = "";
+      setLocalQ("");
+      setAllActive(true);
+      setPreviewDocId(null);
+      await loadDocuments(f, 0);
+    } catch (err) {
+      setError(extractApiError(err, "Alle Belege konnten nicht geladen werden"));
+    } finally {
+      setAllProgress(null);
+    }
+  }
+
+  async function leaveAllMode() {
+    exitAllMode();
+    setPreviewDocId(null);
+    await loadDocuments(activeFilters, 0);
+  }
+
+  function changeLocalFilter(v: string) {
+    localQRef.current = v;
+    setLocalQ(v);
+    loadDocuments(activeFilters, 0);
   }
 
   function goToPage(p: number) {
@@ -956,7 +1026,9 @@ export default function BelegePage() {
               totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo}
               selectedCount={selectedIds.size} selectingAll={selectingAll}
               onSelectAll={selectAllHits} onClearSelection={() => setSelectedIds(new Set())}
-              onPage={goToPage} onPageSize={changePageSize} allSize={50000} />
+              onPage={goToPage} onPageSize={changePageSize}
+              onLoadAll={loadAllHits} allActive={allActive} allLoading={allProgress} onExitAll={leaveAllMode}
+              localFilter={localQ} onLocalFilter={changeLocalFilter} />
 
             {/* Tabelle */}
             <div className={`overflow-x-auto rounded-lg border bg-white shadow-sm ${showPreview ? "w-1/2" : "w-full"}`}>
@@ -1146,7 +1218,9 @@ export default function BelegePage() {
             <div className="mt-3">
               <Pager testId="pager-bottom" loading={loading} total={total} page={page} pageSize={pageSize}
                 totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo} compact
-                onPage={goToPage} onPageSize={changePageSize} allSize={50000} />
+                onPage={goToPage} onPageSize={changePageSize}
+              onLoadAll={loadAllHits} allActive={allActive} allLoading={allProgress} onExitAll={leaveAllMode}
+              localFilter={localQ} onLocalFilter={changeLocalFilter} />
             </div>
 
             {/* PDF-Vorschau */}

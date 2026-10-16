@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Pager from "@/components/common/Pager";
+import { fetchAllPages, matchesWords } from "@/lib/loadAll";
 import {
   ImportBatch, PositionFilter, PositionHit, PositionSort, PositionSummary,
   documentsApi, extractApiError, importsApi, positionsApi,
@@ -91,8 +92,12 @@ const field = "rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-b
 export default function ArtikelPage() {
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [applied, setApplied] = useState<Form>(EMPTY_FORM);
-  const [items, setItems] = useState<PositionHit[]>([]);
-  const [total, setTotal] = useState(0);
+  const [serverItems, setItems] = useState<PositionHit[]>([]);
+  const [serverTotal, setTotal] = useState(0);
+  // „Alle laden“: alle Treffer im Browser, Blättern/Filtern/Sortieren lokal
+  const [allItems, setAllItems] = useState<PositionHit[] | null>(null);
+  const [allProgress, setAllProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [localQ, setLocalQ] = useState("");
   const [summary, setSummary] = useState<PositionSummary | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
@@ -188,11 +193,13 @@ export default function ArtikelPage() {
   useEffect(() => { loadOptions(includeHiddenOptions); }, [loadOptions, includeHiddenOptions]);
 
   function apply(next: Form = form) {
+    setAllItems(null); setLocalQ("");
     setApplied(next);
     syncUrl(next);
     load(next, 0, pageSize, sort, order, true);
   }
   function reset() {
+    setAllItems(null); setLocalQ("");
     setForm(EMPTY_FORM);
     setSort(undefined);
     setOrder("desc");
@@ -204,11 +211,54 @@ export default function ArtikelPage() {
     const nextOrder = sort === key ? (order === "asc" ? "desc" : "asc") : (key === "document_id" || key === "invoice_date" || key === "total_price" || key === "unit_price" ? "desc" : "asc");
     setSort(key);
     setOrder(nextOrder);
+    if (allItems) { setPage(0); return; }          // lokal sortiert
     load(applied, 0, pageSize, key, nextOrder, false);
   }
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const onEnter = (e: React.KeyboardEvent) => { if (e.key === "Enter") apply(); };
+
+  const localView = useMemo(() => {
+    if (!allItems) return null;
+    const list = localQ.trim()
+      ? allItems.filter((p) => matchesWords(localQ, [p.product_name, p.product_description, p.article_number, p.supplier_name, p.invoice_number, p.unit, p.company, p.year, p.document_id]))
+      : allItems;
+    if (!sort) return list;
+    const dir = order === "asc" ? 1 : -1;
+    const val = (p: PositionHit) => (p as unknown as Record<string, unknown>)[sort];
+    return [...list].sort((a, b) => {
+      const x = val(a), y = val(b);
+      if (x === null || x === undefined || x === "") return y === null || y === undefined || y === "" ? 0 : 1;   // leer immer am Ende
+      if (y === null || y === undefined || y === "") return -1;
+      const nx = Number(x), ny = Number(y);
+      const c = Number.isFinite(nx) && Number.isFinite(ny) ? nx - ny : String(x).localeCompare(String(y), "de");
+      return c * dir;
+    });
+  }, [allItems, localQ, sort, order]);
+  const total = localView ? localView.length : serverTotal;
+  const items = localView ? localView.slice(page * pageSize, (page + 1) * pageSize) : serverItems;
+
+  async function loadAll() {
+    const seq = ++searchSeq.current;
+    setError(null);
+    setAllProgress({ loaded: 0, total: serverTotal });
+    try {
+      const list = await fetchAllPages<PositionHit>(
+        (p, size) => positionsApi.search(toFilter(applied), p, size, sort, order),
+        (loaded, tot) => { if (seq === searchSeq.current) setAllProgress({ loaded, total: tot }); },
+        () => seq !== searchSeq.current,
+      );
+      if (seq !== searchSeq.current) return;
+      setLocalQ("");
+      setAllItems(list);
+      setPage(0);
+    } catch (err) {
+      if (seq === searchSeq.current) setError(extractApiError(err, "Alle Treffer konnten nicht geladen werden"));
+    } finally {
+      if (seq === searchSeq.current) setAllProgress(null);
+    }
+  }
+  function exitAll() { setAllItems(null); setLocalQ(""); load(applied, 0, pageSize, sort, order, false); }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const rangeFrom = total === 0 ? 0 : page * pageSize + 1;
@@ -216,9 +266,17 @@ export default function ArtikelPage() {
   const pager = (testId: string, compact?: boolean) => (
     <Pager
       testId={testId} loading={loading} total={total} page={page} pageSize={pageSize} totalPages={totalPages}
-      rangeFrom={rangeFrom} rangeTo={rangeTo} noun={["Position", "Positionen"]} compact={compact} allSize={20000}
-      onPage={(p) => load(applied, Math.min(Math.max(0, p), totalPages - 1), pageSize, sort, order, false)}
-      onPageSize={(size) => { setPageSize(size); load(applied, 0, size, sort, order, false); }}
+      rangeFrom={rangeFrom} rangeTo={rangeTo} noun={["Position", "Positionen"]} compact={compact}
+      onLoadAll={loadAll} allActive={!!allItems} allLoading={allProgress} onExitAll={exitAll}
+      localFilter={localQ} onLocalFilter={(v) => { setLocalQ(v); setPage(0); }}
+      onPage={(p) => {
+        const target = Math.min(Math.max(0, p), totalPages - 1);
+        if (allItems) setPage(target); else load(applied, target, pageSize, sort, order, false);
+      }}
+      onPageSize={(size) => {
+        setPageSize(size);
+        if (allItems) setPage(0); else load(applied, 0, size, sort, order, false);
+      }}
     />
   );
 

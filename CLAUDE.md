@@ -815,7 +815,7 @@ Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, s
 ### Große Bestände: Zeitlimits, Zähl-Obergrenze, Zwischenspeicher (`services/query_guard.py`)
 
 - Artikelsuche: `statement_timeout` (PostgreSQL, `SET LOCAL`) — Suche 30 s, Kennzahlen 45 s; bei Überschreitung HTTP 504 mit verständlicher Meldung
-  statt Browser-Timeout. Die Gesamtzahl ist auf `COUNT_CAP = 20 000` begrenzt (Seitengröße bis 20 000; Belege-Liste `limit` bis 50 000; Button „Alle laden“ in `Pager` via `allSize`, mit Rückfrage ab 5 000 Treffern) (`X-Total-Count`, `X-Total-Capped: true` → „mehr als …"-Hinweis).
+  statt Browser-Timeout. Die Gesamtzahl ist auf `COUNT_CAP = 20 000` begrenzt (Seitengröße bis 20 000; Belege-Liste `limit` bis 50 000; Button „Alle laden“ in `Pager` mit Rückfrage ab 5 000 Treffern: holt alle Treffer in Blöcken à 2 000 (`lib/loadAll.ts::fetchAllPages`) in den Browser, angezeigt wird weiter **seitenweise**; dazu Feld „Im Ergebnis filtern…" (lokal) und bei Artikeln lokale Sortierung; „Zurück zur Serveransicht" beendet den Modus; neue Suche/Filter beenden ihn ebenfalls; bei Belegen lädt eine Aktualisierung/Auto-Refresh im lokalen Modus alle Treffer neu) (`X-Total-Count`, `X-Total-Capped: true` → „mehr als …"-Hinweis).
 - Lieferant aus dem Dropdown filtert **exakt** (`supplier_exact=true`, nutzt Index) statt `ILIKE '%…%'`.
 - `TTLCache` für `/api/positions/summary` (60 s), `/filter-options` (300 s) und `/api/documents/filter-options` (120 s);
   `clear_all_caches()` wird nach Ein-/Ausblenden und Löschen von Imports aufgerufen. Tests leeren die Caches automatisch (conftest).
