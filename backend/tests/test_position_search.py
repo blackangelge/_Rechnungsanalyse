@@ -97,7 +97,7 @@ def test_pagination_and_total_header(client, world):
     ids = [i["id"] for i in page1 + page2 + page3]
     assert len(set(ids)) == 7
     assert client.get("/api/positions", params={"limit": 0}).status_code == 422
-    assert client.get("/api/positions", params={"limit": 501}).status_code == 422
+    assert client.get("/api/positions", params={"limit": 20001}).status_code == 422
 
 
 def test_free_text_all_words_must_match_description_or_article_number(client, world):

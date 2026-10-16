@@ -216,7 +216,7 @@ export default function ArtikelPage() {
   const pager = (testId: string, compact?: boolean) => (
     <Pager
       testId={testId} loading={loading} total={total} page={page} pageSize={pageSize} totalPages={totalPages}
-      rangeFrom={rangeFrom} rangeTo={rangeTo} noun={["Position", "Positionen"]} compact={compact}
+      rangeFrom={rangeFrom} rangeTo={rangeTo} noun={["Position", "Positionen"]} compact={compact} allSize={20000}
       onPage={(p) => load(applied, Math.min(Math.max(0, p), totalPages - 1), pageSize, sort, order, false)}
       onPageSize={(size) => { setPageSize(size); load(applied, 0, size, sort, order, false); }}
     />

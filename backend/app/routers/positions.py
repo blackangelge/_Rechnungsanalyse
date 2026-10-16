@@ -72,7 +72,7 @@ def _filters(
 def search_positions(
     response: Response,
     filters: dict = Depends(_filters),
-    limit: int = Query(50, ge=1, le=500, description="Seitengröße"),
+    limit: int = Query(50, ge=1, le=20000, description="Seitengröße"),
     offset: int = Query(0, ge=0),
     sort: Optional[Literal[tuple(position_search.SORT_COLUMNS)]] = Query(  # type: ignore[valid-type]
         None, description="Sortierung (Standard: neueste Belege zuerst)"),
