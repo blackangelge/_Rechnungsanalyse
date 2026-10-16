@@ -19,11 +19,13 @@ import { SystemPrompt, systemPromptsApi } from "@/lib/api";
 const TYPE_LABEL: Record<number, string> = {
   0: "Dokumententyp-Erkennung",
   1: "Standard-Extraktion (Eingangsrechnung)",
+  2: "Workflow-Baustein",
 };
 
 const TYPE_COLOR: Record<number, string> = {
   0: "bg-violet-100 text-violet-700",
   1: "bg-blue-100 text-blue-700",
+  2: "bg-teal-100 text-teal-700",
 };
 
 export default function SystemPromptsPage() {
@@ -98,7 +100,7 @@ export default function SystemPromptsPage() {
       await systemPromptsApi.create({
         name: `Kopie von ${p.name}`,
         content: p.content,
-        type: p.type,
+        type: 2,      // eine Kopie ist immer ein Workflow-Baustein (Standard- und Typ-Prompt bleiben eindeutig)
       });
       await load();
     } catch {
@@ -155,7 +157,13 @@ export default function SystemPromptsPage() {
             >
               <option value={0}>0 — Dokumententyp-Erkennung</option>
               <option value={1}>1 — Standard-Extraktion (Eingangsrechnung)</option>
+              <option value={2}>2 — Workflow-Baustein</option>
             </select>
+            <p className="mt-1 text-xs text-gray-500">
+              {formType === 2
+                ? "Wird nie automatisch gewählt — nur dort, wo du ihn ausdrücklich auswählst (z. B. in einem Workflow-Knoten). Beliebig viele möglich."
+                : "Typ 0 und 1 gibt es nur einmal: wird ein weiterer so gespeichert, wird der bisherige zum Workflow-Baustein."}
+            </p>
           </div>
 
           {formType === 0 && (
@@ -219,6 +227,14 @@ export default function SystemPromptsPage() {
         </div>
       )}
 
+      {prompts.filter((p) => p.type === 1).length > 1 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="multi-default-warning">
+          Es gibt {prompts.filter((p) => p.type === 1).length} Standard-Extraktionsprompts — automatisch verwendet wird nur der
+          älteste (<b>{prompts.filter((p) => p.type === 1)[0]?.name}</b>). Wähle unten bei dem richtigen „Als Standard setzen“;
+          alle anderen werden dabei zu Workflow-Bausteinen.
+        </div>
+      )}
+
       {/* Liste */}
       {prompts.length === 0 && !loading ? (
         <div className="rounded-lg border bg-white p-8 text-center text-sm text-gray-400">
@@ -241,6 +257,15 @@ export default function SystemPromptsPage() {
                   </pre>
                 </div>
                 <div className="flex shrink-0 gap-2">
+                  {p.type !== 0 && (p.type === 2 || prompts.filter((x) => x.type === 1).length > 1) && (
+                    <button
+                      onClick={async () => { try { await systemPromptsApi.setDefault(p.id); await load(); } catch { alert("Fehler beim Setzen des Standards"); } }}
+                      disabled={editingId !== null}
+                      className="rounded px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
+                    >
+                      Als Standard setzen
+                    </button>
+                  )}
                   <button
                     onClick={() => openEdit(p)}
                     disabled={editingId !== null}

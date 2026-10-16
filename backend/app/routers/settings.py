@@ -141,7 +141,7 @@ def update_system_prompt(prompt_id: int, payload: SystemPromptUpdate, db: Sessio
 
 @router.post("/system-prompts/{prompt_id}/set-default", response_model=SystemPromptRead)
 def set_default_system_prompt(prompt_id: int, db: Session = Depends(get_db)):
-    """Setzt einen Prompt als Standard-Extraktionsprompt (type=1)."""
+    """Setzt einen Prompt als Standard-Extraktionsprompt (type=1); bisherige Standards werden zu Workflow-Bausteinen (type=2)."""
     obj = crud.system_prompt.set_default(db, prompt_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Systemprompt nicht gefunden")

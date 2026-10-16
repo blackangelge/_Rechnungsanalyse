@@ -13,6 +13,9 @@ Es gibt zwei Prompt-Typen:
           Vollständige Rechnungsdaten-Extraktion für Eingangsrechnungen.
           Enthält die JSON-Struktur mit allen erwarteten Feldern.
 
+  type=2  Workflow-Baustein: wird nie automatisch gewählt (weder als Standard noch als
+          Dokumententyp-Prompt) — nur ausdrücklich in Workflow-Knoten o. Ä.
+
 Es gibt keinen Code-Fallback mehr: Ist für einen Typ kein Prompt konfiguriert,
 bricht der jeweilige ai_service-Aufruf mit einer klaren Fehlermeldung ab,
 statt einen unsichtbaren Standardtext zu verwenden.
@@ -36,7 +39,7 @@ class SystemPrompt(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # 0=Dokumententyp-Erkennung, 1=Standard-Extraktionsprompt (Eingangsrechnung)
+    # 0=Dokumententyp-Erkennung, 1=Standard-Extraktionsprompt (Eingangsrechnung), 2=Workflow-Baustein
     # server_default="1": neue Prompts sind standardmäßig Extraktionsprompts
     type: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     created_at: Mapped[datetime] = mapped_column(

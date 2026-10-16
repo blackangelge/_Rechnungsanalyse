@@ -626,6 +626,8 @@ nur bei Eingangsrechnungen mit verwertbarer KI-Antwort — **vor** `_db_analyze_
      Basiseinheit der Artikelsuche (`unit_conversion.BASE_UNITS`): Gewicht = **t**.
    - `ai_service.with_unit_rules` hängt an jeden Extraktionsprompt Zusatzregeln (Menge/Einheit wie gedruckt, deutsche Zahlen, `preiseinheit` je Position), sofern der Prompt
      `preiseinheit` nicht schon behandelt. Fehlt `preiseinheit`, kann der Widerspruch nicht erkannt werden.
+   - `validation_details.position_calcs` = **Einzelrechnung je Artikel** (`_build_position_calcs`): Schritte „Menge × Einzelpreis = …“, Nachlass, Einheiten-Faktor, Vergleich mit dem Positionspreis,
+     Korrekturen/Vereinheitlichungen und der gespeicherte Stand (✓/✕/nicht prüfbar); Ansicht „Einzelrechnung je Artikel“ im Prüfpanel der Infos-Ansicht.
    - `validation_details.calc` = Durchrechnung als Zeilen `{label, expected, actual, status, note}` (Tabelle im Prüfpanel).
 2. **Zweite KI-Abfrage** (`ai_service.recheck_invoice_data`): nur wenn Stufe 1 `needs_review` ergibt. Systemprompt = normaler
    Extraktionsprompt + Prüfhinweis + gefundene Auffälligkeiten + erste Auslesung. Ist die neue Auslesung plausibel → `ai_corrected`
@@ -764,6 +766,9 @@ Knoten legen Prompt/Antwort/Hinweise in `ctx.node_io` ab (Engine setzt es je Kno
 `workflow_trace` (pro Knoten: Status, Dauer, Detail, bei Weiche der Ausgang), dazu `used_*_prompt`. Beim Start jeder Analyse werden diese Felder zurückgesetzt
 (`save_used_prompts`); sie sind Teil des Snapshots der **Analyse-Historie**. Fehler in einem Knoten → Status `error` mit Knotenname in `documents.raw_response`.
 
+Task-Liste (`routers/tasks.py`, Seite `/tasks`): `POST /api/tasks/restart-all[?include_failed=true]` sendet alle abgeschlossenen (optional auch fehlgeschlagenen) Tasks samt Dokumenten erneut an die KI;
+`DELETE /api/tasks?status=all` leert die gesamte Liste (auch wartende/laufende; laufende KI-Aufrufe werden nicht abgebrochen).
+
 Endpunkte: `GET|POST /api/workflows`, `GET /api/workflows/templates` (Standard, Nur Extraktion, Erst kürzen), `POST /api/workflows/validate`,
 `GET|PUT|DELETE /api/workflows/{id}`, `POST /{id}/set-default|clear-default|duplicate`, `PUT /api/vendors/{id}/workflow`. Workflow löschen setzt Lieferanten-Zuordnungen auf `NULL`.
 
@@ -890,6 +895,10 @@ Vorhandene Felder werden nur überschrieben, wenn der neue Wert besser (nicht le
 `supplier_id` wird in `invoice_extractions` gespeichert.
 
 ### Systemprompts (`models/system_prompt.py`, `crud/system_prompt.py`)
+
+**Prompt-Typen:** `0` Dokumententyp-Erkennung · `1` Standard-Extraktion · `2` **Workflow-Baustein** (wird nie automatisch gewählt; beliebig viele, nur ausdrücklich z.B. im Workflow-Knoten).
+Typ 0 und 1 gibt es höchstens einmal: Anlegen, Typ-Wechsel und „Als Standard setzen“ stufen andere Prompts desselben Typs zu Typ 2 herab; `get_default()`/`get_doc_type_prompt()` sind
+deterministisch (kleinste ID), falls ein älterer Stand mehrere Typ-1-Prompts enthält (Prompts-Seite zeigt dann eine Warnung). Kopien sind immer Typ 2.
 
 Zusätzlich zum normalen Extraktions-Prompt gibt es einen **Dokumententyp-Prompt**:
 

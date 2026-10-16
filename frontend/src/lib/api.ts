@@ -384,6 +384,8 @@ export interface ValidationDetails {
   checks_run: number;
   /** Durchrechnung aller Werte (Positionen, Netto, Steuer je Satz, Brutto) */
   calc?: ValidationCalcRow[];
+  /** Einzelschritt-Berechnung je Position (Menge × Preis, Nachlass, Einheiten, Korrekturen, gespeicherter Stand) */
+  position_calcs?: { position: number; label: string; status: "ok" | "warn" | "skip"; steps: string[] }[];
   confirmed_manually?: boolean;
   recheck?: {
     performed: boolean;
@@ -704,7 +706,7 @@ export interface SystemPrompt {
   id: number;
   name: string;
   content: string;
-  /** 0 = Dokumententyp-Erkennung, 1 = Standard-Extraktion (Eingangsrechnung) */
+  /** 0 = Dokumententyp-Erkennung, 1 = Standard-Extraktion (Eingangsrechnung), 2 = Workflow-Baustein */
   type: number;
   created_at: string;
   updated_at: string;
@@ -725,6 +727,9 @@ export const systemPromptsApi = {
   update: (id: number, data: SystemPromptCreate) =>
     apiClient.put<SystemPrompt>(`/api/settings/system-prompts/${id}/`, data).then((r) => r.data),
   delete: (id: number) => apiClient.delete(`/api/settings/system-prompts/${id}/`),
+  /** Als Standard-Extraktionsprompt setzen — bisherige Standards werden zu Workflow-Bausteinen */
+  setDefault: (id: number) =>
+    apiClient.post<SystemPrompt>(`/api/settings/system-prompts/${id}/set-default/`).then((r) => r.data),
 };
 
 // ─── Typen: Dokumententypen (statisch) ───────────────────────────────────────
@@ -1126,7 +1131,15 @@ export const tasksApi = {
   deleteOne: (taskId: number) =>
     apiClient.delete(`/api/tasks/${taskId}/`),
 
-  deleteByStatus: (status: "completed" | "failed") =>
+  /** Alle abgeschlossenen (optional auch fehlgeschlagene) Tasks erneut an die KI senden */
+  restartAll: (includeFailed = false) =>
+    apiClient
+      .post<{ restarted: number; include_failed: boolean }>("/api/tasks/restart-all/", null, {
+        params: { include_failed: includeFailed }, timeout: 300000,
+      })
+      .then((r) => r.data),
+
+  deleteByStatus: (status: "completed" | "failed" | "all") =>
     apiClient
       .delete<{ deleted: number; status: string }>("/api/tasks/", {
         params: { status },

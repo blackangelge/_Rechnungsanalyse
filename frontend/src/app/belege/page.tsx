@@ -1726,6 +1726,30 @@ function ValidationPanel({
         </details>
       )}
 
+      {(v?.position_calcs ?? []).length > 0 && (
+        <details className="mb-2 rounded border border-gray-200 bg-white/70" data-testid="position-calcs">
+          <summary className="cursor-pointer px-3 py-1.5 text-xs font-medium text-gray-700">
+            Einzelrechnung je Artikel ({v!.position_calcs!.length} Position(en)
+            {v!.position_calcs!.some((c) => c.status === "warn") ? `, ${v!.position_calcs!.filter((c) => c.status === "warn").length} auffällig` : ""})
+          </summary>
+          <ol className="divide-y divide-gray-100 border-t border-gray-200 text-xs">
+            {v!.position_calcs!.map((c) => (
+              <li key={c.position} className={`px-3 py-2 ${c.status === "warn" ? "bg-red-50" : ""}`}>
+                <p className="font-medium text-gray-800">
+                  <span className={c.status === "ok" ? "text-green-600" : c.status === "warn" ? "text-red-600" : "text-gray-400"}>
+                    {c.status === "ok" ? "✓" : c.status === "warn" ? "✕" : "–"}
+                  </span>{" "}
+                  Position {c.position + 1}: {c.label}
+                </p>
+                <ul className="mt-0.5 space-y-0.5 pl-4 text-gray-600">
+                  {c.steps.map((st, i) => <li key={i} className="list-disc">{st}</li>)}
+                </ul>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+
       {v?.recheck?.performed && (
         <p className="mb-2 text-xs text-gray-600">
           Zweite KI-Abfrage:{" "}
