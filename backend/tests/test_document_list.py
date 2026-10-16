@@ -102,7 +102,7 @@ def test_filter_options(client, many):
 
 def test_limit_bounds_are_validated(client, many):
     assert client.get("/api/documents", params={"limit": 0}).status_code == 422
-    assert client.get("/api/documents", params={"limit": 5000}).status_code == 422
+    assert client.get("/api/documents", params={"limit": 50001}).status_code == 422
     assert client.get("/api/documents", params={"limit": 10, "offset": -1}).status_code == 422
 
 

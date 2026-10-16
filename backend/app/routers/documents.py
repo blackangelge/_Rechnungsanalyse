@@ -411,7 +411,7 @@ def _document_filters(
 def list_documents(
     response: Response,
     filters: dict = Depends(_document_filters),
-    limit: Optional[int] = Query(default=None, ge=1, le=500, description="Seitengröße (leer = alle Treffer)"),
+    limit: Optional[int] = Query(default=None, ge=1, le=50000, description="Seitengröße (leer = alle Treffer)"),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):

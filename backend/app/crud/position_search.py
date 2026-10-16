@@ -153,7 +153,7 @@ def search(db: Session, limit: int, offset: int = 0, sort: str | None = None,
     return query.offset(offset).limit(limit).all()
 
 
-COUNT_CAP = 10_000
+COUNT_CAP = 20_000
 
 
 def count(db: Session, cap: int | None = None, **filters) -> int:

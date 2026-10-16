@@ -956,7 +956,7 @@ export default function BelegePage() {
               totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo}
               selectedCount={selectedIds.size} selectingAll={selectingAll}
               onSelectAll={selectAllHits} onClearSelection={() => setSelectedIds(new Set())}
-              onPage={goToPage} onPageSize={changePageSize} />
+              onPage={goToPage} onPageSize={changePageSize} allSize={50000} />
 
             {/* Tabelle */}
             <div className={`overflow-x-auto rounded-lg border bg-white shadow-sm ${showPreview ? "w-1/2" : "w-full"}`}>
@@ -1146,7 +1146,7 @@ export default function BelegePage() {
             <div className="mt-3">
               <Pager testId="pager-bottom" loading={loading} total={total} page={page} pageSize={pageSize}
                 totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo} compact
-                onPage={goToPage} onPageSize={changePageSize} />
+                onPage={goToPage} onPageSize={changePageSize} allSize={50000} />
             </div>
 
             {/* PDF-Vorschau */}
