@@ -150,6 +150,8 @@ class ValidationResult:
     corrections: list[dict] = field(default_factory=list)
     # Vereinheitlichung der Einheiten (Gewicht → t): keine Fehlerkorrektur, zählt nicht für den Prüfstatus
     normalizations: list[dict] = field(default_factory=list)
+    # Einzelschritt-Berechnung je Position: [{position, label, status: ok|warn|skip, steps: [Text]}]
+    position_calcs: list[dict] = field(default_factory=list)
     checks_run: int = 0
     # „Durchrechnung": jede geprüfte Rechnung mit erwartetem/tatsächlichem Wert
     calc: list[dict] = field(default_factory=list)
@@ -164,6 +166,7 @@ class ValidationResult:
             "issues": [i.to_dict() for i in self.issues],
             "corrections": self.corrections,
             "normalizations": self.normalizations,
+            "position_calcs": self.position_calcs,
             "checks_run": self.checks_run,
             "calc": self.calc,
         }
@@ -236,6 +239,7 @@ def validate_invoice(
     result = ValidationResult(status=STATUS_UNCHECKED)
     raw_pos = _raw_positions(raw)
     zahlung = (raw or {}).get("zahlungsinformationen") or {}
+    originals = [dict(p) for p in positions]        # Ausgangswerte für die Einzelschritt-Berechnung
 
     # ── 1. Positionsprüfung ──────────────────────────────────────────────────
     pos_scale_notes: dict[int, float] = {}
@@ -502,6 +506,8 @@ def validate_invoice(
     if auto_correct:
         _normalize_mass_to_tonnes(result, positions, raw_pos)
 
+    result.position_calcs = _build_position_calcs(originals, positions, raw_pos, result)
+
     # ── Status ableiten ──────────────────────────────────────────────────────
     if result.blocking_issues:
         result.status = STATUS_NEEDS_REVIEW
@@ -629,6 +635,84 @@ def _check_unit_vs_price_unit(
              f"„{price_raw}“, und Menge × Preis geht ohne Umrechnung auf — die Mengeneinheit stimmt vermutlich nicht."),
             position=idx, details={"unit": old, "price_unit": price_raw},
         ))
+
+
+def _n(v: Any) -> str:
+    """Zahl für Rechenschritte: deutsch, bis zu 4 Nachkommastellen, ohne überflüssige Nullen."""
+    f = _f(v)
+    if f is None:
+        return "–"
+    text = f"{f:,.4f}".rstrip("0").rstrip(".") if "." in f"{f:,.4f}" else f"{f:,.4f}"
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _build_position_calcs(
+    originals: list[dict], positions: list[dict], raw_pos: list[dict], result: "ValidationResult",
+) -> list[dict]:
+    """
+    Einzelschritt-Berechnung je Position: wie aus Menge, Einheit, Einzelpreis, Nachlass und Preiseinheit der
+    Positionspreis entsteht, ob er zur Rechnung passt, und welche Korrekturen/Vereinheitlichungen danach griffen.
+    """
+    out: list[dict] = []
+    for idx, (o, now) in enumerate(zip(originals, positions)):
+        if idx >= 300:
+            break
+        label = str(o.get("product_description") or o.get("product_name") or f"Position {idx + 1}")[:80]
+        qty, price, total = _f(o.get("quantity")), _f(o.get("unit_price")), _f(o.get("total_price"))
+        unit = o.get("unit") or ""
+        pu_raw = (raw_pos[idx] if idx < len(raw_pos) else {}).get("preiseinheit")
+        steps: list[str] = []
+        status = "ok"
+        if qty is None or price is None or total is None:
+            missing = [n for n, v in (("Menge", qty), ("Einzelpreis", price), ("Gesamtpreis", total)) if v is None]
+            steps.append(f"Nicht prüfbar — es fehlt: {', '.join(missing)}.")
+            status = "skip"
+        else:
+            expected = qty * price
+            per = f" je {pu_raw}" if pu_raw else ""
+            steps.append(f"Menge × Einzelpreis = {_n(qty)} {unit} × {_n(price)} €{per} = {_fmt(expected)} €".replace("  ", " "))
+            result_value, explained = expected, False
+            if _close(expected, total):
+                explained = True
+            else:
+                for v in _discounted_values(expected, o.get("discount")):
+                    if _close(v, total):
+                        steps.append(f"Nachlass „{o.get('discount')}“ abgezogen = {_fmt(v)} €")
+                        result_value, explained = v, True
+                        break
+            if not explained:
+                u, pu = parse_unit(o.get("unit")), parse_unit(pu_raw)
+                scale = _find_scale(expected, total, u, pu)
+                if scale is not None:
+                    result_value, explained = expected * scale, True
+                    steps.append(
+                        f"Mengeneinheit „{unit}“ und Preiseinheit „{pu_raw or '?'}“ unterscheiden sich → "
+                        f"Faktor {_fmt_factor(scale)}: {_fmt(expected)} € × {_fmt_factor(scale)} = {_fmt(result_value)} €")
+            diff = result_value - total
+            if explained:
+                steps.append(f"Positionspreis laut Rechnung: {_fmt(total)} € → ✓ stimmt")
+            else:
+                status = "warn"
+                steps.append(f"Positionspreis laut Rechnung: {_fmt(total)} € → ✗ weicht um {_fmt(abs(diff))} € ab")
+        for c in result.corrections:
+            if c.get("position") != idx:
+                continue
+            if c.get("field") == "unit":
+                steps.append(f"Korrektur: Mengeneinheit „{c.get('from')}“ → „{c.get('to')}“ (Menge × Preis geht nur in der Preiseinheit auf)")
+            elif "factor" in c:
+                steps.append(f"Korrektur: Positionspreis {_fmt(_f(c.get('from')) or 0)} € → {_fmt(_f(c.get('to')) or 0)} € "
+                             f"(Faktor {_fmt_factor(c['factor'])}, damit die Summe zur Rechnung passt)")
+        for n in result.normalizations:
+            if n.get("position") == idx:
+                a, b = n["from"], n["to"]
+                steps.append(
+                    f"Vereinheitlicht: {_n(a.get('quantity'))} {a.get('unit') or ''} × {_n(a.get('unit_price'))} € → "
+                    f"{_n(b.get('quantity'))} {b.get('unit')} × {_n(b.get('unit_price'))} € je {b.get('unit')}")
+        nq, np_, nt = _f(now.get("quantity")), _f(now.get("unit_price")), _f(now.get("total_price"))
+        if nq is not None and np_ is not None and nt is not None:
+            steps.append(f"Gespeichert: {_n(nq)} {now.get('unit') or ''} × {_n(np_)} € = {_fmt(nq * np_)} € (Positionspreis {_fmt(nt)} €)")
+        out.append({"position": idx, "label": label, "status": status, "steps": steps})
+    return out
 
 
 def _fmt_factor(f: float) -> str:

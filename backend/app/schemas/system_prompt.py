@@ -4,8 +4,9 @@ Pydantic-Schemas für Systemprompts.
 Systemprompts steuern die KI-Extraktion:
   type=0 — Dokumententyp-Erkennungsprompt (detect_document_type)
   type=1 — Standard-Extraktionsprompt für Eingangsrechnungen (extract_invoice_data)
+  type=2 — Workflow-Baustein (wird nie automatisch gewählt, beliebig viele)
 
-Pro Typ kann maximal ein Prompt aktiv sein. Das CRUD stellt Eindeutigkeit sicher.
+Typ 0 und 1 gibt es höchstens einmal; das CRUD stuft andere Prompts desselben Typs zu Typ 2 herab.
 
 SystemPromptCreate — Payload für POST /api/settings/system-prompts
 SystemPromptUpdate — Payload für PUT /api/settings/system-prompts/{id}

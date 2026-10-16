@@ -7,7 +7,8 @@ API-Endpunkte für Workflow-Tasks und Worker-Status.
     POST /api/tasks/resume      — Worker fortsetzen (Proxy)
     POST /api/tasks/{id}/restart — Task zurücksetzen auf pending (inkl. Dokument)
     DELETE /api/tasks/{id}      — Einzelnen Task löschen
-    DELETE /api/tasks           — Tasks nach Status löschen (bulk)
+    DELETE /api/tasks           — Tasks nach Status löschen (bulk; status=all leert die gesamte Liste)
+    POST /api/tasks/restart-all — alle abgeschlossenen (und optional fehlgeschlagenen) Tasks erneut an die KI senden
 
 Der Dispatcher läuft im eigenen Worker-Container (app.worker.main) und ist von
 hier aus nicht mehr im Prozessspeicher erreichbar — /workers, /pause und
@@ -157,6 +158,46 @@ def restart_task(task_id: int, db: Session = Depends(get_db)):
     return {"task_id": task_id, "status": "pending"}
 
 
+@router.post("/restart-all", status_code=200)
+def restart_all_tasks(
+    include_failed: bool = Query(False, description="auch fehlgeschlagene Tasks erneut senden"),
+    db: Session = Depends(get_db),
+):
+    """
+    Sendet ALLE abgeschlossenen Tasks (optional auch fehlgeschlagene) erneut an die KI: Task und zugehöriges
+    Dokument werden auf 'pending' zurückgesetzt; der Worker nimmt sie in der Reihenfolge der Anlage wieder auf.
+    Die bisherigen Ergebnisse bleiben über die Analyse-Historie erhalten.
+    """
+    from app.models.document import Document
+
+    statuses = ["completed", "failed"] if include_failed else ["completed"]
+    restarted = 0
+    while True:
+        tasks = db.execute(
+            select(WorkflowTask).where(WorkflowTask.status.in_(statuses)).order_by(WorkflowTask.id).limit(500)
+        ).scalars().all()
+        if not tasks:
+            break
+        doc_ids: list[int] = []
+        for task in tasks:
+            task.status = "pending"
+            task.attempts = 0
+            task.worker_id = None
+            task.locked_at = None
+            task.error = None
+            doc_id = (task.payload or {}).get("document_id")
+            if doc_id is not None:
+                doc_ids.append(int(doc_id))
+        if doc_ids:
+            db.execute(
+                Document.__table__.update().where(Document.id.in_(doc_ids)).values(status="pending")
+            )
+        db.commit()                      # nach jedem Block: die Tasks verlassen die Auswahl (status = pending)
+        restarted += len(tasks)
+    logger.info("%d Task(s) erneut an die KI gesendet (include_failed=%s)", restarted, include_failed)
+    return {"restarted": restarted, "include_failed": include_failed}
+
+
 @router.delete("/{task_id}", status_code=204)
 def delete_task(task_id: int, db: Session = Depends(get_db)):
     """Löscht einen einzelnen Task anhand seiner ID."""
@@ -169,17 +210,20 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
 
 @router.delete("", status_code=200)
 def delete_tasks_by_status(
-    status: Literal["completed", "failed"] = Query(
-        ..., description="Zu löschender Status: completed oder failed"
+    status: Literal["completed", "failed", "all"] = Query(
+        ..., description="Zu löschender Status: completed, failed oder all (leert die gesamte Task-Liste)"
     ),
     db: Session = Depends(get_db),
 ):
     """
     Löscht alle Tasks mit dem angegebenen Status (Bulk-Delete).
-    Nur 'completed' und 'failed' sind erlaubt — laufende Tasks bleiben erhalten.
+    'all' leert die komplette Liste — auch wartende und laufende Tasks. Ein bereits laufender KI-Aufruf wird
+    nicht abgebrochen; sein Ergebnis wird noch ins Dokument geschrieben, nur der Task-Eintrag ist dann weg.
+    Dokumente behalten ihren Status (z. B. 'pending'); sie lassen sich über „Erneut senden“ wieder einreihen.
     """
-    result = db.execute(
-        delete(WorkflowTask).where(WorkflowTask.status == status)
-    )
+    stmt = delete(WorkflowTask)
+    if status != "all":
+        stmt = stmt.where(WorkflowTask.status == status)
+    result = db.execute(stmt)
     db.commit()
     return {"deleted": result.rowcount, "status": status}

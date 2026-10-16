@@ -353,3 +353,16 @@ def test_tonnes_and_non_mass_units_are_left_alone():
            {"quantity": 3, "unit": "Stück", "unit_price": 1.0, "total_price": 3.0}]
     r = validate_invoice({"total_amount": 27.37}, pos, _raw(23.0))
     assert r.normalizations == [] and pos[0]["unit"] == "t" and pos[1]["unit"] == "Stück"
+
+
+def test_position_calcs_show_single_step_calculation():
+    pos = [{"product_description": "Zementsack", "quantity": 25880, "unit": "kg", "unit_price": 421.10, "total_price": 10898.07},
+           {"product_description": "Rabattartikel", "quantity": 2, "unit": "Stück", "unit_price": 10.0, "total_price": 18.0, "discount": "10%"},
+           {"product_description": "Ohne Preis", "quantity": 1, "unit": "Stück", "unit_price": None, "total_price": None}]
+    r = validate_invoice({"total_amount": 12968.7}, pos, _raw(10916.07, positions=[{"preiseinheit": "t"}, {}, {}]))
+    c = r.to_dict()["position_calcs"]
+    assert [x["position"] for x in c] == [0, 1, 2]
+    s0 = " | ".join(c[0]["steps"])
+    assert "25.880 kg × 421,1 € je t" in s0 and "Faktor 0,001" in s0 and "✓ stimmt" in s0 and "Gespeichert" in s0
+    assert any("Nachlass" in t for t in c[1]["steps"]) and c[1]["status"] == "ok"
+    assert c[2]["status"] == "skip" and "Einzelpreis" in c[2]["steps"][0]

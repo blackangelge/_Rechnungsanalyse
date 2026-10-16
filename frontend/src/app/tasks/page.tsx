@@ -35,6 +35,7 @@ export default function TasksPage() {
   const [restarting, setRestarting] = useState<number | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [completedCount, setCompletedCount] = useState<number | null>(null);   // Anzahl abgeschlossener Tasks (für die Rückfrage)
   const [workerStatus, setWorkerStatus] = useState<DispatcherStatus | null>(null);
   const [pauseToggling, setPauseToggling] = useState(false);
 
@@ -125,8 +126,42 @@ export default function TasksPage() {
     }
   };
 
-  const handleBulkDelete = async (status: "completed" | "failed") => {
-    if (!confirm(`Alle ${STATUS_LABELS[status]}-Tasks löschen?`)) return;
+  useEffect(() => {
+    tasksApi.list({ status: "completed", limit: 1 }).then((r) => setCompletedCount(r.total)).catch(() => undefined);
+  }, [data]);
+
+  const handleRestartAll = async () => {
+    let n = completedCount;
+    try { n = (await tasksApi.list({ status: "completed", limit: 1 })).total; } catch { /* Rückfrage ohne Zahl */ }
+    if (!confirm(
+      `Alle ${n !== null ? n.toLocaleString("de-DE") + " " : ""}abgeschlossenen Tasks erneut an die KI senden?\n\n` +
+      "Die Belege werden neu analysiert (bei vielen Belegen dauert das lange). Bisherige Ergebnisse bleiben in der Analyse-Historie.",
+    )) return;
+    setBulkDeleting(true);
+    try {
+      const result = await tasksApi.restartAll(false);
+      setActionMsg(`${result.restarted.toLocaleString("de-DE")} Task${result.restarted !== 1 ? "s" : ""} erneut an die KI gesendet.`);
+      setOffset(0);
+      load(0, statusFilter);
+    } catch (err) {
+      setActionMsg(`Fehler: ${extractApiError(err)}`);
+    } finally {
+      setBulkDeleting(false);
+      setTimeout(() => setActionMsg(null), 5000);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm(
+      "Die gesamte Task-Liste leeren (auch wartende und laufende Tasks)?\n\n" +
+      "Ein bereits laufender KI-Aufruf wird nicht abgebrochen. Belege, die noch auf ihre Analyse warten, " +
+      "bleiben unverändert und lassen sich später wieder einreihen.",
+    )) return;
+    await handleBulkDelete("all", true);
+  };
+
+  const handleBulkDelete = async (status: "completed" | "failed" | "all", confirmed = false) => {
+    if (!confirmed && !confirm(`Alle ${(STATUS_LABELS as Record<string, string>)[status] ?? status}-Tasks löschen?`)) return;
     setBulkDeleting(true);
     try {
       const result = await tasksApi.deleteByStatus(status);
@@ -189,7 +224,16 @@ export default function TasksPage() {
           >
             {workerStatus?.paused ? "▶ Fortsetzen" : "⏸ Pausieren"}
           </button>
-          {/* Bulk-Delete */}
+          {/* Bulk-Aktionen */}
+          <button
+            onClick={handleRestartAll}
+            disabled={bulkDeleting}
+            data-testid="restart-completed"
+            className="rounded border border-blue-300 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 transition-colors"
+            title="Alle abgeschlossenen Tasks der Liste erneut an die KI senden"
+          >
+            ↻ Abgeschlossene erneut senden{completedCount !== null ? ` (${completedCount.toLocaleString("de-DE")})` : ""}
+          </button>
           <button
             onClick={() => handleBulkDelete("completed")}
             disabled={bulkDeleting}
@@ -203,6 +247,15 @@ export default function TasksPage() {
             className="rounded border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 transition-colors"
           >
             Fehlgeschlagene löschen
+          </button>
+          <button
+            onClick={handleClearAll}
+            disabled={bulkDeleting}
+            data-testid="clear-all"
+            className="rounded border border-red-400 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50 transition-colors"
+            title="Gesamte Task-Liste leeren (auch wartende und laufende)"
+          >
+            Liste leeren
           </button>
           <button
             onClick={() => load()}
