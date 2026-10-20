@@ -1287,6 +1287,9 @@ export interface ValidationBackfillState {
   auto_correct?: boolean;
   normalize_units?: boolean;
   restore_originals?: boolean;
+  run_id?: number;
+  changed_rows?: number;
+  changed_fields?: number;
   total?: number;
   processed?: number;
   filled_prices?: number;
@@ -1409,4 +1412,43 @@ export const dbAssistantApi = {
       .then((r) => r.data),
   apply: (p: { table: string; id: unknown; changes: Record<string, unknown>; reason: string }) =>
     apiClient.post<{ row: DbRow; changed: Record<string, { alt: unknown; neu: unknown }> }>("/api/db-assistant/apply/", p).then((r) => r.data),
+};
+
+// ─── Änderungsprotokoll ──────────────────────────────────────────────────────
+
+export interface ChangeRun {
+  id: number;
+  kind: string;
+  label: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  changed_rows: number;
+  changed_fields: number;
+  undone_at: string | null;
+  undo_summary: string | null;
+}
+
+export interface ChangeEntry {
+  id: number;
+  table: string;
+  row_id: number;
+  document_id: number | null;
+  field: string;
+  old: string | null;
+  new: string | null;
+  /** 0 = offen · 1 = zurückgesetzt · 2 = übersprungen (danach erneut geändert) */
+  status: number;
+}
+
+export const changeLogApi = {
+  runs: (kind?: string, limit = 30) =>
+    apiClient.get<ChangeRun[]>("/api/change-log/runs/", { params: { kind, limit } }).then((r) => r.data),
+  changes: async (runId: number, offset = 0, limit = 100) => {
+    const r = await apiClient.get<ChangeEntry[]>(`/api/change-log/runs/${runId}/changes/`, { params: { offset, limit } });
+    return { items: r.data, total: Number(r.headers["x-total-count"]) || r.data.length };
+  },
+  undo: (runId: number) =>
+    apiClient.post<{ running: boolean; reverted?: number; skipped?: number }>(`/api/change-log/runs/${runId}/undo/`).then((r) => r.data),
+  undoState: () =>
+    apiClient.get<{ running: boolean; run_id?: number; reverted?: number; skipped?: number; error?: string }>("/api/change-log/undo-state/").then((r) => r.data),
 };

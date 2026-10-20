@@ -329,7 +329,7 @@ def update_row(db: Session, table_name: str, pk: Any, changes: dict) -> dict:
         raise LookupError(f"{table_name} #{pk} nicht gefunden")
     db.commit()
     after = get_row(db, table_name, pk)
-    return {"row": after, "changed": _diff(before, after)}
+    return {"row": after, "changed": _diff(before, after), "before": before}
 
 
 def insert_row(db: Session, table_name: str, values: dict) -> dict:

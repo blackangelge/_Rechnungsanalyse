@@ -888,6 +888,14 @@ Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`
 - Tests: `tests/conftest.py` setzt `AUTH_ENABLED=false`; `tests/test_auth.py` schaltet es gezielt ein.
 - `alembic/env.py` ruft `fileConfig` nur noch auf, wenn kein Logging eingerichtet ist (sonst verstummen die Anwendungs-Logs nach der Migration im Backend-Prozess).
 
+### Änderungsprotokoll mit Rückgängig (`models/data_change.py`, `services/change_log.py`, `routers/change_log.py`, Migration `0015_data_changes`)
+
+- Jeder **echte** Nachrüst-Lauf (nicht die Vorschau), jede Änderung im Daten-Browser und jede freigegebene KI-Änderung legt einen Vorgang (`data_change_runs`) an und schreibt je geändertem Feld Alt-/Neuwert (`data_changes`, kanonischer Text: Zahlen auf Spaltengenauigkeit gerundet ohne Nullen).
+  Nachrüst-Läufe protokollieren Positionen (`quantity`, `unit`, `unit_price_netto`, `total_price`) und Extraktion (`total_amount_*`, `total_tax_value`, `validation_status/-details`); der Block (200 Belege) wird zusammen mit seinen Protokollzeilen committet/verworfen.
+- **Rückgängig** (`POST /api/change-log/runs/{id}/undo`, Hintergrundlauf, Stand `GET /undo-state`): setzt Alt-Werte zurück, aber nur wo der aktuelle Wert noch dem Neuwert entspricht — später erneut geänderte Felder bleiben unberührt (Status „übersprungen"). Ein Vorgang lässt sich nur einmal zurücknehmen.
+- Oberfläche: Einstellungen → Automatisierung → „Änderungsprotokoll" (Ansehen mit Beleg-Link, Rückgängig). Fehlt Migration 0015, läuft ein Nachrüst-Lauf trotzdem, meldet aber „nicht rückgängig machbar".
+- Nicht protokolliert: Löschen/Anlegen im Daten-Browser, normale KI-Analysen (dafür gibt es die Analyse-Historie).
+
 ### Daten-Browser und KI-Assistent (`services/db_tools.py`, `routers/db_browser.py`, `services/db_assistant_service.py`, `routers/db_assistant.py`, Seite `/daten`)
 
 - **Tabellen-CRUD** (`/api/db/tables[/{t}/rows[/{pk}]]`): alle ORM-Tabellen (aus `Base.metadata`) ansehen, durchsuchen (Freitext über alle Textspalten, alle Wörter; Spaltenfilter `f.<spalte>=wert`, leer = NULL), sortieren,
