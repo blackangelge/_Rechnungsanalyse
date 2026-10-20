@@ -34,13 +34,13 @@ class OrderPosition(Base):
     product_name: Mapped[str | None] = mapped_column(String(255), nullable=True)    # Artikelbezeichnung
     product_description: Mapped[str | None] = mapped_column(Text, nullable=True)    # Detailbeschreibung
     article_number: Mapped[str | None] = mapped_column(String(100), nullable=True)  # Artikelnummer des Lieferanten
-    unit_price_netto: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)   # Einzelpreis netto
+    unit_price_netto: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True, index=True)   # Einzelpreis netto
     unit_price_brutto: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)  # Einzelpreis brutto
     tax: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)      # Steuerbetrag dieser Position
     # Gesamtpreis der Position (Menge × Einzelpreis, nach Nachlass) — Grundlage der
     # Plausibilitätsprüfung; kann dort bei eindeutigen Einheitenfehlern korrigiert werden.
-    total_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
-    quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True) # Menge
+    total_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True, index=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True, index=True) # Menge
     unit: Mapped[str | None] = mapped_column(String(50), nullable=True)             # Mengeneinheit (z.B. "Stück", "kg")
     discount: Mapped[str | None] = mapped_column(String(100), nullable=True)        # Nachlass-Angabe (Freitext)
 

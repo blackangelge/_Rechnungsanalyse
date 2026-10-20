@@ -242,3 +242,11 @@ def test_units_are_converted_to_base_unit_in_list_and_filter(client, world):
     assert get(client, unit_group="mass")[1] == 4                  # kg, KG, kg, t
     assert get(client, unit_group="volume")[1] == 0
     assert client.get("/api/positions", params={"unit_group": "bogus"}).status_code == 422
+
+
+def test_summary_counts_positions_without_total_price(client, world):
+    from app.models.order_position import OrderPosition
+    world.db.query(OrderPosition).filter(OrderPosition.id == world.db.query(OrderPosition.id).first()[0]).update({"total_price": None})
+    world.db.commit()
+    s = client.get("/api/positions/summary").json()
+    assert s["without_total_price"] == 1 and s["count"] >= 1

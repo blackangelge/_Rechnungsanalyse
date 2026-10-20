@@ -1229,6 +1229,8 @@ export type PositionSort =
 export interface PositionSummary {
   count: number;
   documents: number;
+  /** Positionen ohne gespeicherten Gesamtpreis (Altbestand) — fehlen bei Preisfiltern */
+  without_total_price?: number;
   total_price_sum: number | null;
   unit_price_min: number | null;
   unit_price_avg: number | null;

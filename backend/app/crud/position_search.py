@@ -173,7 +173,8 @@ def summary(db: Session, **filters) -> dict:
         db,
         [func.count(OrderPosition.id), func.sum(OrderPosition.total_price),
          func.min(OrderPosition.unit_price_netto), func.avg(OrderPosition.unit_price_netto),
-         func.max(OrderPosition.unit_price_netto), func.count(func.distinct(Document.id))],
+         func.max(OrderPosition.unit_price_netto), func.count(func.distinct(Document.id)),
+         func.sum(case((OrderPosition.total_price.is_(None), 1), else_=0))],
         **filters,
     ).one()
     # umrechenbare Einheiten (t, kg, g …) werden in der Basiseinheit zusammengefasst, Rest nach Schreibweise
@@ -188,6 +189,8 @@ def summary(db: Session, **filters) -> dict:
     return {
         "count": total[0] or 0,
         "documents": total[5] or 0,
+        # Positionen ohne gespeicherten Gesamtpreis (Altbestand) fallen bei Preisfiltern heraus → Hinweis in der Oberfläche
+        "without_total_price": int(total[6] or 0),
         "total_price_sum": f(total[1]),
         "unit_price_min": f(total[2]),
         "unit_price_avg": f(total[3]),
