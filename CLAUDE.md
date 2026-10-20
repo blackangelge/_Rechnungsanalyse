@@ -619,11 +619,12 @@ nur bei Eingangsrechnungen mit verwertbarer KI-Antwort — **vor** `_db_analyze_
    - **Mengen- vs. Preiseinheit** (`_check_unit_vs_price_unit`): geht Menge × Einzelpreis = Positionspreis auf, obwohl `preiseinheit` (nur `raw_response`) eine andere Einheit
      derselben Dimension nennt als `unit` (z.B. „25,88 kg“ bei „421,10 je t“ — die KI hatte 25.880 kg zu 25,88 t umgerechnet), steht die Menge zahlenmäßig in der Preiseinheit →
      `unit` wird korrigiert (`corrections: {position, field: "unit", from, to}`; `update_validation` schreibt `order_positions.unit`), ohne Auto-Korrektur Warnung `unit_mismatch`.
-   - **Gewicht in Tonnen (`_normalize_mass_to_tonnen`→`_normalize_mass_to_tonnes`)**: am Ende von `validate_invoice` (nur bei `auto_correct`) werden Gewichtspositionen **in der Datenbank** auf t umgerechnet — **nur solche, die je Tonne bepreist sind** (`preiseinheit` t, oder Menge schon in t; Schreibweisen Tonnen/TO/to/tn → „t“). Preise je kg/g bleiben unverändert (Kleinmengen), im Workflow-Knoten per `mode: "all"` erzwingbar:
-     Menge in t, Einheit „t“, Einzelpreis € je t (aus `preiseinheit`, sonst Annahme Preis je Mengeneinheit bzw. schon je t — es gilt der Kandidat, bei dem Menge × Preis zum Positionspreis passt, sonst bleibt die
-     Position unverändert). Excel-Export und Auswertungen lesen damit direkt Tonnen. Originalwerte: `validation_details.normalizations` + `raw_response`. Zählt nicht als Korrektur (kein Statuswechsel).
-     `crud.document.update_validation` schreibt `{field: "normalize"}`-Einträge; Altbestand: `validation_backfill` im Modus `normalize_units` (Einstellungen → Automatisierung, „Einheiten auf Tonnen vereinheitlichen“) — alle Belege, Prüfstatus bleiben unberührt.
-     Basiseinheit der Artikelsuche (`unit_conversion.BASE_UNITS`): Gewicht = **t**.
+   - **Originalwerte bleiben erhalten (Grundsatz):** Menge, Einheit und Einzelpreis werden so gespeichert, wie sie auf der Rechnung stehen (z. B. 25.500 kg zu 412 €/t) — Datenbank, Beleg-Ansicht, Artikelsuche und Excel zeigen überall dasselbe.
+     `validate_invoice` rechnet **nicht** mehr automatisch auf Tonnen um (früher `_normalize_mass_to_tonnes` am Ende von `validate_invoice`; entfernt, weil Beleg-Ansicht/KI-Antwort und Artikelsuche/Excel dadurch auseinanderliefen).
+     Eine Umrechnung gibt es nur **ausdrücklich**: Workflow-Knoten „Einheiten vereinheitlichen“ (`normalize_units`) bzw. die Nachrüstung „Einheiten auf Tonnen vereinheitlichen“ (Originalwerte dann in `validation_details.normalizations`/`raw_response`).
+     Für schon umgerechnete Belege gibt es die Nachrüstung **„Originalwerte wiederherstellen“** (`validation_backfill.restore_original_units`, Einstellungen → Automatisierung): setzt Menge/Einheit/Einzelpreis aus `raw_response` zurück, aber nur wenn die gespeicherte Menge die
+     rein zahlenmäßige Umrechnung der Originalmenge ist (25,5 t ↔ 25.500 kg) oder nur die Schreibweise abweicht; echte Korrekturen (falsch beschriftete Einheit) und Gesamtpreise bleiben unberührt.
+     Die Artikelsuche zeigt umgerechnete Basiswerte (`= 25,5 t`) nur mit dem Schalter „Umgerechnete Werte zeigen“ (Standard aus); `/summary` fasst `by_unit` weiterhin in der Basiseinheit zusammen.
    - `ai_service.with_unit_rules` hängt an jeden Extraktionsprompt Zusatzregeln (Menge/Einheit wie gedruckt, deutsche Zahlen, `preiseinheit` je Position), sofern der Prompt
      `preiseinheit` nicht schon behandelt. Fehlt `preiseinheit`, kann der Widerspruch nicht erkannt werden.
    - `validation_details.position_calcs` = **Einzelrechnung je Artikel** (`_build_position_calcs`): Schritte „Menge × Einzelpreis = …“, Nachlass, Einheiten-Faktor, Vergleich mit dem Positionspreis,
@@ -895,7 +896,7 @@ Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`
   Schreib-/Systembefehle, kein Zugriff auf `users`/`api_key`/`pg_*`/`information_schema`); Änderungen kommen als **Vorschläge** zurück und werden erst durch Klick „Freigeben & speichern“ über `POST /api/db-assistant/apply` geschrieben
   (dieselben Prüfungen wie im Browser, im Log festgehalten). Nur Änderungen an einzelnen Zeilen (kein Einfügen/Löschen durch die KI).
 - Neue Tabellen erscheinen automatisch; ein Geheimnis in einer neuen Spalte gehört in `SECRET_COLUMNS`, eine neue Zugangs-Tabelle in `HIDDEN_TABLES` (`db_tools.py`). Tests: `tests/test_db_browser.py` (KI-Antworten werden vorgegeben).
-- Belege-Infos: Mengen/Einheit/Einzelpreis zeigen die **gespeicherten** Werte (z. B. auf Tonnen umgerechnet), der Wortlaut der Rechnung steht darunter („lt. Rechnung: 25.500 kg“) — Artikelsuche und Excel lesen immer die gespeicherten Werte.
+- Belege-Infos: Mengen/Einheit/Einzelpreis zeigen die **gespeicherten** Werte; weichen sie (Altbestand, früher umgerechnet) von der KI-Auslesung ab, steht der Wortlaut der Rechnung darunter („lt. Rechnung: 25.500 kg“).
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

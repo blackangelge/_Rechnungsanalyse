@@ -19,12 +19,13 @@ class BackfillStart(BaseModel):
     auto_correct: bool = True
     batch_ids: list[int] | None = None
     normalize_units: bool = False     # nur Gewichtseinheiten auf Tonnen vereinheitlichen (alle Belege)
+    restore_originals: bool = False   # Mengen/Einheiten/Einzelpreise wieder auf den Wortlaut der Rechnung zurücksetzen
 
 
 @router.get("")
-def backfill_status(batch_ids: list[int] | None = Query(default=None), normalize_units: bool = False):
+def backfill_status(batch_ids: list[int] | None = Query(default=None), normalize_units: bool = False, restore_originals: bool = False):
     state = validation_backfill.get_state()
-    state["pending"] = validation_backfill.count_pending(batch_ids, normalize_units)
+    state["pending"] = validation_backfill.count_pending(batch_ids, normalize_units, restore_originals)
     return state
 
 
@@ -32,7 +33,7 @@ def backfill_status(batch_ids: list[int] | None = Query(default=None), normalize
 def backfill_start(payload: BackfillStart):
     try:
         return validation_backfill.start(payload.dry_run, payload.auto_correct, payload.batch_ids,
-                                         normalize_units=payload.normalize_units)
+                                         normalize_units=payload.normalize_units, restore_originals=payload.restore_originals)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

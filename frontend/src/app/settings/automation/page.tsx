@@ -99,14 +99,15 @@ function ValidationBackfill() {
   const [state, setState] = useState<ValidationBackfillState | null>(null);
   const [autoCorrect, setAutoCorrect] = useState(true);
   const [normalizeUnits, setNormalizeUnits] = useState(false);   // Modus „Einheiten auf Tonnen vereinheitlichen"
+  const [restoreOriginals, setRestoreOriginals] = useState(false); // Modus „Originalwerte wiederherstellen"
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
-    try { setState(await validationBackfillApi.status(normalizeUnits)); } catch { /* beim nächsten Takt erneut */ }
+    try { setState(await validationBackfillApi.status(normalizeUnits, restoreOriginals)); } catch { /* beim nächsten Takt erneut */ }
   }
 
-  useEffect(() => { refresh(); }, [normalizeUnits]);
+  useEffect(() => { refresh(); }, [normalizeUnits, restoreOriginals]);
   useEffect(() => {
     if (!state?.running) return;
     const t = setInterval(refresh, 2000);
@@ -119,14 +120,18 @@ function ValidationBackfill() {
       "Nur Positionen, die je Tonne bepreist sind (Preiseinheit t), werden umgerechnet (kg → t, Tonnen/TO/to → t); Preise je kg/g bleiben unverändert. " +
       "Die ursprünglichen Werte bleiben in der gespeicherten KI-Antwort erhalten. Prüfstatus bleiben unverändert.",
     )) return;
-    if (!dryRun && !normalizeUnits && !confirm(
+    if (!dryRun && restoreOriginals && !confirm(
+      `Mengen, Einheiten und Einzelpreise bei bis zu ${state?.pending?.toLocaleString("de-DE") ?? "allen"} Belegen wieder auf den Wortlaut der Rechnung zurücksetzen?\n\n` +
+      "Zurückgesetzt werden nur Positionen, die früher auf Tonnen umgerechnet wurden (z. B. 25,5 t → 25.500 kg). Gesamtpreise, Prüfstatus und echte Korrekturen bleiben unverändert.",
+    )) return;
+    if (!dryRun && !normalizeUnits && !restoreOriginals && !confirm(
       `Prüfung für ${state?.pending?.toLocaleString("de-DE") ?? "alle ungeprüften"} Belege nachrüsten?\n\n` +
       (autoCorrect ? "Eindeutige Fehler (z.B. t/kg) werden dabei automatisch korrigiert. " : "") +
       "Fehlende Positions-Gesamtpreise werden aus der gespeicherten KI-Antwort ergänzt.",
     )) return;
     setBusy(true);
     setError(null);
-    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect, normalize_units: normalizeUnits })); }
+    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect, normalize_units: normalizeUnits, restore_originals: restoreOriginals })); }
     catch (err) { setError(extractApiError(err, "Start fehlgeschlagen")); }
     finally { setBusy(false); }
   }
@@ -151,16 +156,20 @@ function ValidationBackfill() {
       </p>
       <div className="mb-3 flex gap-4 text-sm text-gray-700" data-testid="backfill-mode">
         <label className="flex items-center gap-1.5">
-          <input type="radio" checked={!normalizeUnits} disabled={state?.running} onChange={() => setNormalizeUnits(false)} />
+          <input type="radio" checked={!normalizeUnits && !restoreOriginals} disabled={state?.running} onChange={() => { setNormalizeUnits(false); setRestoreOriginals(false); }} />
           Prüfung nachrüsten
         </label>
         <label className="flex items-center gap-1.5">
-          <input type="radio" checked={normalizeUnits} disabled={state?.running} onChange={() => setNormalizeUnits(true)} />
+          <input type="radio" checked={normalizeUnits} disabled={state?.running} onChange={() => { setNormalizeUnits(true); setRestoreOriginals(false); }} />
           Einheiten auf Tonnen vereinheitlichen (nur Positionen mit Preis je Tonne; Tonnen/TO/to → t)
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="radio" checked={restoreOriginals} disabled={state?.running} onChange={() => { setRestoreOriginals(true); setNormalizeUnits(false); }} />
+          Originalwerte wiederherstellen (Menge/Einheit wie auf der Rechnung)
         </label>
       </div>
       <p className="mb-4 text-sm text-gray-700" data-testid="backfill-pending">
-        {normalizeUnits ? "Zu prüfen" : "Noch ungeprüft"}: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
+        {normalizeUnits || restoreOriginals ? "Zu prüfen" : "Noch ungeprüft"}: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
       </p>
       <label className="mb-4 flex items-center gap-2 text-sm text-gray-700">
         <input type="checkbox" checked={autoCorrect} onChange={(e) => setAutoCorrect(e.target.checked)}
