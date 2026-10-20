@@ -888,6 +888,18 @@ Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`
 - Tests: `tests/conftest.py` setzt `AUTH_ENABLED=false`; `tests/test_auth.py` schaltet es gezielt ein.
 - `alembic/env.py` ruft `fileConfig` nur noch auf, wenn kein Logging eingerichtet ist (sonst verstummen die Anwendungs-Logs nach der Migration im Backend-Prozess).
 
+### Daten-Backup und Import-Tool (`services/data_backup.py`, `routers/data_backup.py`, Seite `/settings/data-backup`)
+
+- Sichert alles zu den Imports als **ZIP** in `EXPORT_BASE_PATH/backups/` (`daten-backup_YYYYMMDD-HHMMSS.zip`): `manifest.json` (Format 1, Zählungen, Import-Liste), `tables/<tabelle>.jsonl` für `import_batches`, `documents`, `invoice_extractions`, `order_positions`,
+  `document_versions`, `analysis_history`, `documents_token_counts` (+ optional `vendor`, `vendor_bank_accounts`), optional die **PDF-Dateien** (`files/docs/<id>.pdf`, `files/versions/<id>/v<n>.pdf`). Nicht enthalten: Einstellungen (KI, Prompts, Workflows → „Backups / Wiederherstellung“), Warteschlange, Benutzer, Änderungsprotokoll.
+  Auswahl einzelner Imports möglich; Platzbedarf wird vor dem Schreiben geprüft; `.part`-Datei, erst am Ende umbenannt; Abbrechen räumt auf. Läuft als Hintergrund-Thread (ein Auftrag gleichzeitig, Fortschritt `GET /api/data-backup/state`).
+- **Import** (`POST /api/data-backup/{name}/restore`): eine einzige Datenbank-Transaktion (Fehler/Abbruch → nichts geändert), `dry_run` = Vorschau (führt alles aus, verwirft es). Modi: `preserve` (Original-IDs — Wiederherstellung nach Datenverlust, vorhandene PDFs im Speicher passen weiter; gleiche ID + Firma + Jahr
+  = „bereits vorhanden“ → übersprungen, andere Daten unter derselben ID = Konflikt-Abbruch; Sequenzen werden nachgezogen) und `remap` (neue IDs, nichts wird überschrieben; Duplikat-Erkennung über Firma/Jahr/Zeitpunkt, `allow_duplicates` hebt sie auf; `stored_filename`/Versionspfade werden auf die neuen IDs umgeschrieben, PDFs aus dem Archiv).
+  Importierte Imports bekommen `folder_sync`/`auto_export` = aus; Belege in `processing`/`waiting_capacity` → `pending`; Speicherordner außerhalb von `STORAGE_PATH` werden auf `STORAGE_PATH/{Firma}_{Jahr}` umgebogen. Lieferanten: nur neue Namen, gleichnamige im Backup werden zusammengelegt, fehlende IBANs ergänzt.
+  Dateien werden nach dem Commit geschrieben (vorhandene Datei gleicher Größe bleibt). Namen im ZIP entstehen nur aus Zahlen (kein Pfad-Trick), Upload/Download/Löschen prüfen den Dateinamen (`NAME_RE`).
+- Frontend: Einstellungen → „Daten-Backup & Import“ (Backup erstellen mit Optionen, Liste, Download/Löschen/Hochladen, Import-Dialog mit Modus, Import-Auswahl, Vorschau, Fortschritt). Tests: `tests/test_data_backup.py`.
+- Neue Import-Tabelle mit Beleg-Bezug → in `IMPORT_TABLES` (`data_backup.py`) aufnehmen, sonst fehlt sie im Backup.
+
 ### Änderungsprotokoll mit Rückgängig (`models/data_change.py`, `services/change_log.py`, `routers/change_log.py`, Migration `0015_data_changes`)
 
 - Jeder **echte** Nachrüst-Lauf (nicht die Vorschau), jede Änderung im Daten-Browser und jede freigegebene KI-Änderung legt einen Vorgang (`data_change_runs`) an und schreibt je geändertem Feld Alt-/Neuwert (`data_changes`, kanonischer Text: Zahlen auf Spaltengenauigkeit gerundet ohne Nullen).
