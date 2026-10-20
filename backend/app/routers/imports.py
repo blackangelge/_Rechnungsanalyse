@@ -11,7 +11,8 @@ Endpunkte:
 import asyncio
 import io
 import logging
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -370,7 +371,7 @@ def export_batches_excel(
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -695,6 +696,16 @@ def delete_import(batch_id: int, db: Session = Depends(get_db)):
 
 # ─── GET /api/imports/{batch_id}/export ──────────────────────────────────────
 
+def _content_disposition(filename: str) -> str:
+    """Download-Header, der auch mit Sonderzeichen im Firmennamen (€, ł, Anführungszeichen …) funktioniert (RFC 5987)."""
+    import unicodedata
+    from urllib.parse import quote
+
+    ascii_name = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii")
+    ascii_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in ascii_name) or "Export.xlsx"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 def _get_export_config_fields(db: Session) -> tuple[list[str], list[str]]:
     """Liest die aktive Spaltenkonfiguration (ExportConfig, Singleton id=1)."""
     from app.models.export_config import (
@@ -798,7 +809,7 @@ def export_batch_excel(
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -834,7 +845,7 @@ def export_batch_excel_incremental(batch_id: int, db: Session = Depends(get_db))
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -858,6 +869,7 @@ def _build_export_excel(
     from zoneinfo import ZoneInfo
 
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
@@ -896,7 +908,34 @@ def _build_export_excel(
         return fill_a if row_idx % 2 == 0 else fill_b
 
     def _f(val):
-        return float(val) if val is not None else None
+        """Zahl oder None — nie eine Ausnahme (KI-Werte wie "19 %" oder "2,0" werden gelesen, Unbrauchbares wird leer)."""
+        if val is None or isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float, Decimal)):
+            return float(val)
+        if isinstance(val, str):
+            txt = val.strip().replace("%", "").replace("€", "").replace(" ", "")
+            if "," in txt:
+                txt = txt.replace(".", "").replace(",", ".")
+            try:
+                return float(txt)
+            except ValueError:
+                return None
+        return None
+
+    def _cell(val):
+        """Macht jeden Wert Excel-tauglich: Steuerzeichen entfernen, lange Texte kürzen, Listen/Objekte als Text."""
+        if val is None or isinstance(val, (bool, int, float, date, datetime)):
+            return val
+        if isinstance(val, Decimal):
+            return float(val)
+        if not isinstance(val, str):
+            try:
+                val = _json.dumps(val, ensure_ascii=False)
+            except (TypeError, ValueError):
+                val = str(val)
+        val = ILLEGAL_CHARACTERS_RE.sub("", val)
+        return val[:32000]
 
     def _dt(val):
         """Wandelt einen UTC-Zeitstempel in lokale Zeit um (für Excel-Anzeige ohne tzinfo)."""
@@ -922,8 +961,14 @@ def _build_export_excel(
         """Läuft eine Kette verschachtelter dict-Keys sicher ab, z.B.
         _nested(raw, "lieferant", "anschrift") → {} falls ein Zwischenschritt fehlt."""
         for k in keys:
-            d = (d or {}).get(k) or {}
+            d = d.get(k) if isinstance(d, dict) else None
+            if not isinstance(d, dict):
+                d = {}
         return d
+
+    def _frist(v):
+        n = _f(v)
+        return int(n) if n is not None and n == int(n) else (n if n is not None else (v if isinstance(v, str) else None))
 
     # ── Feld-Definitionen: (schlüssel, header, value_fn, format, breite) ─────
     # format: None | "eur" | "pct" | "date" | "datetime" | "center"
@@ -953,12 +998,7 @@ def _build_export_excel(
         ("rabatt",              "Rabatt (€)",             lambda d, e, raw: _f(e.discount_amount) if e else None,       "eur",       13),
         ("skonto_betrag",       "Skonto (€)",             lambda d, e, raw: _f(e.cash_discount_amount) if e else None,  "eur",       13),
         ("skonto_prozent",      "Skonto (%)",             lambda d, e, raw: _f(_nested(raw, "zahlungsinformationen", "skonto").get("prozent")), "pct", 10),
-        ("skonto_frist",        "Skonto Frist (Tage)",    lambda d, e, raw: (
-            lambda sk: (
-                int(sk["frist_tage"]) if isinstance(sk.get("frist_tage"), float) and sk["frist_tage"] == int(sk["frist_tage"])
-                else sk.get("frist_tage")
-            )
-        )(_nested(raw, "zahlungsinformationen", "skonto")),                                                                                       None,        12),
+        ("skonto_frist",        "Skonto Frist (Tage)",    lambda d, e, raw: _frist(_nested(raw, "zahlungsinformationen", "skonto").get("frist_tage")), None,   12),
         ("zahlungsbedingungen", "Zahlungsbedingungen",    lambda d, e, raw: e.payment_terms if e else None,             None,        42),
         ("kommentar",           "Kommentar",              lambda d, e, raw: d.comment,                                  None,        30),
         ("importiert_am",       "Importiert am",          lambda d, e, raw: _dt(d.created_at),                          "datetime",  18),
@@ -1012,7 +1052,11 @@ def _build_export_excel(
         raw  = _parse_raw(ex.raw_response if ex else None)
 
         for c, (key, header, val_fn, fmt, width) in enumerate(inv_defs, 1):
-            val  = val_fn(doc, ex, raw)
+            try:
+                val = _cell(val_fn(doc, ex, raw))
+            except Exception:   # ein unbrauchbarer Wert darf nie den ganzen Export kippen
+                logger.warning("Export: Beleg %s, Spalte %s nicht lesbar", doc.id, key, exc_info=True)
+                val = None
             cell = ws1.cell(row=r, column=c, value=val)
             cell.font = data_font
             cell.fill = fill
@@ -1033,13 +1077,17 @@ def _build_export_excel(
     for doc in docs:
         ex  = doc.extraction
         raw = _parse_raw(ex.raw_response if ex else None)
-        raw_pos_list = raw.get("positionen") or []
-        tax_map = {i: _f(p.get("steuersatz")) for i, p in enumerate(raw_pos_list)}
+        raw_pos_list = raw.get("positionen") if isinstance(raw.get("positionen"), list) else []
+        tax_map = {i: _f(p.get("steuersatz")) for i, p in enumerate(raw_pos_list) if isinstance(p, dict)}
 
         for pos in doc.order_positions:
             fill = _row_fill(r)
             for c, (key, header, val_fn, fmt, width) in enumerate(pos_defs, 1):
-                val  = val_fn(doc, ex, pos, tax_map)
+                try:
+                    val = _cell(val_fn(doc, ex, pos, tax_map))
+                except Exception:
+                    logger.warning("Export: Beleg %s, Position %s, Spalte %s nicht lesbar", doc.id, pos.id, key, exc_info=True)
+                    val = None
                 cell = ws2.cell(row=r, column=c, value=val)
                 cell.font = data_font
                 cell.fill = fill
