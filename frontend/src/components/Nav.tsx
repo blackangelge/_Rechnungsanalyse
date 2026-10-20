@@ -25,6 +25,7 @@ const SETTINGS_LINKS = [
   { href: "/settings/export",     label: "Export-Einstellungen" },
   { href: "/settings/automation", label: "Automatisierung" },
   { href: "/settings/backup",     label: "Backups / Wiederherstellung" },
+  { href: "/settings/data-backup", label: "Daten-Backup & Import" },
 ];
 
 const MAIN_LINKS = [

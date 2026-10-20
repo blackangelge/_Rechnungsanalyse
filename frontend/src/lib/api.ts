@@ -1452,3 +1452,74 @@ export const changeLogApi = {
   undoState: () =>
     apiClient.get<{ running: boolean; run_id?: number; reverted?: number; skipped?: number; error?: string }>("/api/change-log/undo-state/").then((r) => r.data),
 };
+
+// ─── Daten-Backup und Import ─────────────────────────────────────────────────
+
+export interface BackupManifestSummary {
+  created_at: string;
+  include_pdfs: boolean;
+  include_vendors: boolean;
+  scope: "all" | "selected";
+  counts: Record<string, number>;
+  files: { docs: number; versions: number; missing: number };
+  batches: { id: number; company_name: string; year: number; status: string; created_at: string | null; documents: number }[];
+}
+
+export interface BackupFile {
+  name: string;
+  size: number;
+  modified: string;
+  manifest: BackupManifestSummary | null;
+  error: string | null;
+}
+
+export interface BackupJobState {
+  running: boolean;
+  kind?: "backup" | "restore";
+  phase?: string;
+  done?: number;
+  total?: number;
+  files_done?: number;
+  warnings?: string[];
+  error?: string | null;
+  cancelled?: boolean;
+  dry_run?: boolean;
+  mode?: string;
+  name?: string;
+  started_at?: string;
+  finished_at?: string | null;
+  result?: {
+    name?: string;
+    size?: number;
+    counts?: Record<string, number>;
+    tables?: Record<string, number>;
+    skipped_batches?: { id: number; reason: string }[];
+    files?: Record<string, number>;
+  } | null;
+}
+
+export interface RestoreOptions {
+  mode: "preserve" | "remap";
+  batch_ids?: number[] | null;
+  restore_files: boolean;
+  include_vendors: boolean;
+  allow_duplicates: boolean;
+  dry_run: boolean;
+}
+
+export const dataBackupApi = {
+  overview: () => apiClient.get<{ path: string; backups: BackupFile[]; state: BackupJobState }>("/api/data-backup/").then((r) => r.data),
+  state: () => apiClient.get<BackupJobState>("/api/data-backup/state/").then((r) => r.data),
+  create: (opts: { include_pdfs: boolean; include_vendors: boolean; batch_ids?: number[] | null }) =>
+    apiClient.post<BackupJobState>("/api/data-backup/create/", opts).then((r) => r.data),
+  restore: (name: string, opts: RestoreOptions) =>
+    apiClient.post<BackupJobState>(`/api/data-backup/${encodeURIComponent(name)}/restore/`, opts).then((r) => r.data),
+  cancel: () => apiClient.post<{ cancelled: boolean }>("/api/data-backup/cancel/").then((r) => r.data),
+  remove: (name: string) => apiClient.delete(`/api/data-backup/${encodeURIComponent(name)}/`).then((r) => r.data),
+  downloadUrl: (name: string) => `/api/data-backup/${encodeURIComponent(name)}/download/`,
+  upload: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return apiClient.post("/api/data-backup/upload/", fd, { headers: { "Content-Type": undefined }, timeout: 0 }).then((r) => r.data);
+  },
+};
