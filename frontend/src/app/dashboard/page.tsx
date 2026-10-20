@@ -12,6 +12,7 @@
 
 "use client";
 
+import { downloadLinkHandler } from "@/lib/download";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ImportBatch, WorkerStats, importsApi, workerApi, extractApiError } from "@/lib/api";
@@ -164,6 +165,7 @@ export default function DashboardPage() {
           </span>
           <a
             href={importsApi.exportUrl(Array.from(selected))}
+            onClick={downloadLinkHandler(importsApi.exportUrl(Array.from(selected)))}
             download
             className="rounded border border-emerald-600 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
           >

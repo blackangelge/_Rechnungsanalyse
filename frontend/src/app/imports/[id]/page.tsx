@@ -11,6 +11,7 @@
 
 "use client";
 
+import { downloadLinkHandler } from "@/lib/download";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { BatchKiStats, BatchQueueStatus, ImportBatch, DocumentItem, importsApi } from "@/lib/api";
@@ -398,6 +399,7 @@ export default function ImportDetailPage() {
             </div>
             <a
               href={exportHref}
+              onClick={downloadLinkHandler(exportHref)}
               download
               className="rounded border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
             >
@@ -405,6 +407,7 @@ export default function ImportDetailPage() {
             </a>
             <a
               href={`/api/imports/${batchId}/export/new/`}
+              onClick={downloadLinkHandler(`/api/imports/${batchId}/export/new/`)}
               download
               title="Nur Belege, die seit dem letzten Abruf (manuell oder automatisch) fertig analysiert wurden"
               className="rounded border border-purple-600 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100"

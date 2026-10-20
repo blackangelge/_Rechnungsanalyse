@@ -9,6 +9,7 @@
 
 "use client";
 
+import { downloadLinkHandler } from "@/lib/download";
 import Link from "next/link";
 import { useState } from "react";
 import { ImportBatch, importsApi } from "@/lib/api";
@@ -181,6 +182,7 @@ export default function BatchTable({
                     </Link>
                     <a
                       href={importsApi.exportUrl([batch.id])}
+                      onClick={downloadLinkHandler(importsApi.exportUrl([batch.id]))}
                       download
                       title="Als Excel-Datei herunterladen"
                       className="rounded px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"

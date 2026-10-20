@@ -840,7 +840,7 @@ Ganze Imports lassen sich ausblenden, wenn sie gerade nicht wichtig sind — **n
 
 `GET /api/imports/export?ids=1&ids=2` — mehrere Imports in **eine** Datei (Dashboard: Imports ankreuzen → „↓ Excel exportieren"; zusätzlich Excel-Link je Zeile).
 Gleiche Spaltenkonfiguration wie der Einzelexport (`ExportConfig`); bei ≥ 2 Imports kommt am Ende beider Sheets die Spalte **„Import"** (`Firma Jahr (#id)`) dazu.
-Die Route muss **vor** `/{batch_id}` stehen. Ausgeblendete Imports sind exportierbar. Laufzeit: ≈ 5–8 ms je Beleg (10.000 Belege ≈ 50–80 s) —
+Die Route muss **vor** `/{batch_id}` stehen. Ausgeblendete Imports sind exportierbar. **Der Export ist gegen auffällige KI-Daten abgesichert** (`_build_export_excel`: `_cell()` entfernt Steuerzeichen/kürzt, Listen/Objekte werden Text; `_f()`/`_nested()` werfen nie; ein unlesbarer Wert wird leer + Log-Warnung statt HTTP 500; Dateiname per `_content_disposition()` mit RFC-5987 für Sonderzeichen im Firmennamen; `tests/test_export_robust.py`). Frontend: Excel-Links laufen über `lib/download.ts::downloadLinkHandler` und zeigen Serverfehler als Meldung statt eine JSON-Datei zu speichern. Laufzeit: ≈ 5–8 ms je Beleg (10.000 Belege ≈ 50–80 s) —
 der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
 
 ### Lieferanten: Dublettensuche und Zusammenführen (`services/supplier_dedup.py`, `crud/vendor.py::merge`)

@@ -139,7 +139,7 @@ def test_multi_export_has_import_column_and_all_rows(client, world):
     r = client.get("/api/imports/export", params={"ids": ids})
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
-    assert "Export_2_Imports_" in r.headers["content-disposition"] and r.headers["content-disposition"].endswith('.xlsx"')
+    assert "Export_2_Imports_" in r.headers["content-disposition"] and '.xlsx"' in r.headers["content-disposition"]
     wb = _wb(r)
     assert wb.sheetnames == ["Rechnungen", "Positionen"]
     inv, pos = wb["Rechnungen"], wb["Positionen"]
