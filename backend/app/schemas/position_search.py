@@ -46,6 +46,7 @@ class UnitSummary(BaseModel):
 class PositionSummary(BaseModel):
     count: int
     documents: int
+    without_total_price: int = 0
     total_price_sum: float | None = None
     unit_price_min: float | None = None
     unit_price_avg: float | None = None

@@ -108,6 +108,8 @@ export default function ArtikelPage() {
   const [searched, setSearched] = useState(false);
   const [capped, setCapped] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryDeferred, setSummaryDeferred] = useState(false);   // sehr breite Suche: Kennzahlen erst auf Klick (sonst Zeitüberschreitung)
+  const [hiddenCount, setHiddenCount] = useState(0);               // Anzahl ausgeblendeter Imports (werden standardmäßig nicht durchsucht)
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [optionsLoading, setOptionsLoading] = useState(false);
   const searchSeq = useRef(0);       // verwirft Antworten veralteter Suchen
@@ -148,13 +150,16 @@ export default function ArtikelPage() {
     const seq = ++searchSeq.current;
     setLoading(true);
     setError(null);
-    if (withSummary) loadSummary(f);
+    if (withSummary) { setSummaryDeferred(false); setSummary(null); setSummaryError(null); }
     try {
       const res = await positionsApi.search(toFilter(f), p, size, s, o);
       if (seq !== searchSeq.current) return;
       setItems(res.items);
       setTotal(res.total);
       setCapped(res.capped);
+      if (withSummary) {
+        if (res.capped) setSummaryDeferred(true); else loadSummary(f);
+      }
       setPage(p);
       setSearched(true);
     } catch (err) {
@@ -188,6 +193,11 @@ export default function ArtikelPage() {
     if (Object.values(initial).some(Boolean)) setShowMore(true);
     load(initial, 0, 50, undefined, "desc", true);
   }, [load]);
+
+  // Wie viele Imports sind ausgeblendet? (nur für den Hinweis „werden nicht durchsucht“)
+  useEffect(() => {
+    importsApi.list({ include_hidden: true }).then((all) => setHiddenCount(all.filter((b) => b.hidden_at).length)).catch(() => undefined);
+  }, []);
 
   // Auswahllisten neu laden, wenn „Ausgeblendete Imports einbeziehen" umgeschaltet wird
   const includeHiddenOptions = form.include_hidden === "1";
@@ -424,6 +434,25 @@ export default function ArtikelPage() {
         <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="capped">
           Mehr als {total.toLocaleString("de-DE")} Treffer — angezeigt werden die ersten {total.toLocaleString("de-DE")}.
           Mit Lieferant, Jahr oder einem genaueren Suchwort lässt sich das Ergebnis eingrenzen.
+        </div>
+      )}
+
+      {hiddenCount > 0 && applied.include_hidden !== "1" && !applied.batch_id && !applied.document_id && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800" data-testid="hidden-notice">
+          {hiddenCount} ausgeblendete{hiddenCount === 1 ? "r Import wird" : " Imports werden"} nicht durchsucht — deshalb fehlen ggf. Treffer.
+          <button onClick={() => { const next = { ...form, include_hidden: "1" }; setForm(next); apply(next); }} className="font-medium underline">Einbeziehen</button>
+        </div>
+      )}
+      {summary && (summary.without_total_price ?? 0) > 0 && (applied.total_price_min || applied.total_price_max) && (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="no-total-notice">
+          {(summary.without_total_price ?? 0).toLocaleString("de-DE")} Position(en) in dieser Auswahl haben keinen gespeicherten Gesamtpreis und können bei einem Preisfilter nicht gefunden werden.
+          Abhilfe: <Link href="/settings/automation" className="font-medium underline">Einstellungen → Automatisierung → „Prüfung für den Altbestand nachrüsten“</Link> (ohne KI).
+        </div>
+      )}
+      {summaryDeferred && !summary && !summaryLoading && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600" data-testid="summary-deferred">
+          Sehr viele Treffer — die Kennzahlen werden nicht automatisch berechnet (das kann lange dauern).
+          <button onClick={() => loadSummary(applied)} className="font-medium text-blue-700 underline">Kennzahlen berechnen</button>
         </div>
       )}
 
