@@ -119,6 +119,7 @@ export default function ArtikelPage() {
   const [units, setUnits] = useState<{ unit: string; count: number }[]>([]);
   const [showMore, setShowMore] = useState(false);
   const [showUnits, setShowUnits] = useState(false);
+  const [showBase, setShowBase] = useState(false);   // umgerechnete Basiswerte (t/l/m) nur auf Wunsch — Standard: Originalwerte wie auf der Rechnung
   const [unitTable, setUnitTable] = useState<{ group: string; label: string; base_unit: string; units: { unit: string; factor: number }[] }[]>([]);
 
   // Aktueller Zustand für Callbacks (wie bei den Belegen: Blättern/Sortieren setzt nichts anderes zurück)
@@ -335,6 +336,10 @@ export default function ArtikelPage() {
           }} data-testid="units-toggle" className="text-sm text-blue-600 hover:underline">
             {showUnits ? "Einheiten ausblenden" : "ⓘ Einheiten-Umrechnung"}
           </button>
+          <label className="flex cursor-pointer items-center gap-1.5 text-sm text-gray-600" title="Zeigt zusätzlich umgerechnete Werte (z. B. = 25,5 t) unter Menge und Preis. Die gespeicherten Originalwerte bleiben unverändert.">
+            <input type="checkbox" checked={showBase} onChange={(e) => setShowBase(e.target.checked)} data-testid="show-base" />
+            Umgerechnete Werte zeigen
+          </label>
           <button onClick={() => setShowMore((v) => !v)} className="text-sm text-blue-600 hover:underline">
             {showMore ? "Weniger Filter" : "Mehr Filter"}
           </button>
@@ -527,14 +532,14 @@ export default function ArtikelPage() {
                   <Highlight text={p.article_number} query={applied.q} />
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{num(p.quantity)} {p.unit ?? ""}
-                  {p.base_unit && (p.unit ?? "").trim().toLowerCase() !== p.base_unit && (
+                  {showBase && p.base_unit && (p.unit ?? "").trim().toLowerCase() !== p.base_unit && (
                     <div className="text-xs text-gray-400" title="Umgerechnet in die Basiseinheit">
                       = {num(p.base_quantity ?? null)} {p.base_unit}
                     </div>
                   )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{eur(p.unit_price, 4)}
-                  {p.base_unit && p.base_unit_price != null && (
+                  {showBase && p.base_unit && p.base_unit_price != null && (
                     <div className="text-xs text-gray-400" title="Positionspreis ÷ umgerechnete Menge">
                       = {eur(p.base_unit_price, 4)} / {p.base_unit}
                     </div>

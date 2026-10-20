@@ -1628,9 +1628,37 @@ function InfosView({
                           <td className="px-3 py-2 text-gray-500">{String(pos.position_nr ?? i + 1)}</td>
                           <td className="px-3 py-2">{String(pos.artikelbezeichnung ?? "–")}</td>
                           <td className="px-3 py-2 text-gray-500 text-xs">{String(pos.artikelnummer_lieferant ?? "–")}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{pos.menge != null ? String(pos.menge) : "–"}</td>
-                          <td className="px-3 py-2 text-gray-500">{String(pos.mengeneinheit ?? "–")}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{pos.einzelpreis != null ? fmt(pos.einzelpreis) : "–"}</td>
+                          {(() => {
+                            // Gespeicherte Werte (z.B. durch „Einheiten vereinheitlichen“ auf Tonnen umgerechnet) haben Vorrang;
+                            // der Wortlaut der Rechnung (KI-Auslesung) bleibt als Hinweis sichtbar. Artikelsuche und Excel lesen die gespeicherten Werte.
+                            const st = doc.order_positions.find((p) => p.position_index === i);
+                            const num2 = (v: unknown) => (v == null ? null : Number(String(v).replace(",", ".")));
+                            const rawQ = num2(pos.menge), rawU = String(pos.mengeneinheit ?? "").trim();
+                            const rawP = num2(pos.einzelpreis);
+                            const stQ = st?.quantity != null ? Number(st.quantity) : null;
+                            const stU = (st?.unit ?? "").trim();
+                            const stP = st?.unit_price_netto != null ? Number(st.unit_price_netto) : null;
+                            const qChanged = stQ != null && rawQ != null && (Math.abs(stQ - rawQ) > 1e-9 || (stU && stU.toLowerCase() !== rawU.toLowerCase()));
+                            const pChanged = stP != null && rawP != null && Math.abs(stP - rawP) > 0.00005;
+                            const orig = `lt. Rechnung: ${rawQ != null ? rawQ.toLocaleString("de-DE") : "–"} ${rawU}${rawP != null ? ` · ${fmt(rawP)}` : ""}`;
+                            return (
+                              <>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {qChanged ? (
+                                    <span className="font-medium text-emerald-700" title={orig}>{stQ!.toLocaleString("de-DE", { maximumFractionDigits: 6 })}</span>
+                                  ) : (pos.menge != null ? String(pos.menge) : "–")}
+                                  {qChanged && <div className="text-[10px] font-normal text-gray-400">{orig}</div>}
+                                </td>
+                                <td className="px-3 py-2 text-gray-500">
+                                  {qChanged && stU ? <span className="font-medium text-emerald-700">{stU}</span> : String(pos.mengeneinheit ?? "–")}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {pChanged ? <span className="font-medium text-emerald-700" title={`lt. Rechnung: ${fmt(rawP)}`}>{fmt(stP)}</span>
+                                    : (pos.einzelpreis != null ? fmt(pos.einzelpreis) : "–")}
+                                </td>
+                              </>
+                            );
+                          })()}
                           <td className="px-3 py-2 text-right tabular-nums">
                             {(() => {
                               // Gespeicherter (ggf. durch die Plausibilitätsprüfung korrigierter) Gesamtpreis

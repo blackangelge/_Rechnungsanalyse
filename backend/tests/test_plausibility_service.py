@@ -308,12 +308,22 @@ def test_same_units_or_unknown_price_unit_are_untouched():
     assert validate_invoice({"total_amount": 23.8}, pos, _raw(20.0)).status == STATUS_OK
 
 
-def test_kg_positions_are_normalized_to_tonnes_with_price_per_tonne():
-    """Rechnung: 25.880 kg zu 421,10 je t = 10.898,07 → in der Datenbank 25,88 t zu 421,10 €/t."""
+def test_validation_keeps_original_quantities_and_units():
+    """Rechnung: 25.500 kg zu 412 €/t — Menge/Einheit bleiben wie gedruckt (keine automatische Umrechnung auf Tonnen)."""
+    pos = [{"quantity": 25500, "unit": "kg", "unit_price": 412.0, "total_price": 10506.0}]
+    r = validate_invoice({"total_amount": 12502.14}, pos, _raw(10506.0, positions=[{"preiseinheit": "t"}]))
+    assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (25500, "kg", 412.0)
+    assert r.normalizations == [] and not r.corrections
+
+
+def test_explicit_normalization_to_tonnes_still_works():
+    """Der Workflow-Knoten / die Nachrüstung kann bewusst auf Tonnen umrechnen (Originalwerte stehen in `from`)."""
+    from app.services import plausibility_service as ps
     pos = [{"quantity": 25880, "unit": "kg", "unit_price": 421.10, "total_price": 10898.07}]
-    r = validate_invoice({"total_amount": 12968.7}, pos, _raw(10898.07, positions=[{"preiseinheit": "t"}]))
+    res = ps.ValidationResult(status=STATUS_UNCHECKED)
+    ps._normalize_mass_to_tonnes(res, pos, [{"preiseinheit": "t"}])
     assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (25.88, "t", 421.10)
-    assert r.normalizations[0]["from"]["unit"] == "kg" and not r.corrections
+    assert res.normalizations[0]["from"]["unit"] == "kg"
 
 
 def test_price_per_kg_is_not_converted_by_default_but_with_mode_all():
@@ -331,12 +341,16 @@ def test_price_per_kg_is_not_converted_by_default_but_with_mode_all():
     assert (pos[0]["quantity"], pos[0]["unit"], pos[0]["unit_price"]) == (0.5, "t", 400.0)
 
 
-def test_tonne_spellings_are_unified_to_t():
+def test_tonne_spellings_are_kept_by_validation_and_unified_only_explicitly():
+    from app.services import plausibility_service as ps
     for spelling in ("Tonnen", "TO", "to", "Tonne", "To.", "tn"):
         pos = [{"quantity": 2, "unit": spelling, "unit_price": 450.0, "total_price": 900.0}]
-        r = validate_invoice({"total_amount": 1071.0}, pos, _raw(900.0))
+        validate_invoice({"total_amount": 1071.0}, pos, _raw(900.0))
+        assert pos[0]["unit"] == spelling                                   # Prüfung ändert nichts
+        res = ps.ValidationResult(status=STATUS_UNCHECKED)
+        ps._normalize_mass_to_tonnes(res, pos, [])                          # nur auf ausdrücklichen Wunsch
         assert pos[0]["unit"] == "t" and pos[0]["quantity"] == 2, spelling
-        assert r.normalizations and r.normalizations[0]["from"]["unit"] == spelling
+        assert res.normalizations and res.normalizations[0]["from"]["unit"] == spelling
 
 
 def test_normalization_skipped_when_product_does_not_match_and_off_without_auto_correct():

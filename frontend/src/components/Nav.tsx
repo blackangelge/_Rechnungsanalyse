@@ -32,6 +32,7 @@ const MAIN_LINKS = [
   { href: "/belege",       label: "Belege" },
   { href: "/artikel",      label: "Artikel" },
   { href: "/lieferanten",  label: "Lieferanten" },
+  { href: "/daten",        label: "Daten" },
   { href: "/tasks",        label: "Tasks" },
   { href: "/logs",         label: "KI-Statistiken" },
 ];

@@ -502,9 +502,9 @@ def validate_invoice(
         else:
             calc("Netto + Steuer ↔ Brutto", expected_gross, gross)
 
-    # ── Einheiten vereinheitlichen (Gewicht → Tonnen), erst nach allen Korrekturen ──
-    if auto_correct:
-        _normalize_mass_to_tonnes(result, positions, raw_pos)
+    # Mengen und Einheiten bleiben so gespeichert, wie sie auf der Rechnung stehen (Datenbank, Beleg-Ansicht, Artikelsuche und
+    # Excel zeigen überall dieselben Originalwerte). Eine Umrechnung auf Tonnen gibt es nur ausdrücklich: Workflow-Knoten
+    # „Einheiten vereinheitlichen“ bzw. die Nachrüstung „Einheiten auf Tonnen vereinheitlichen“.
 
     result.position_calcs = _build_position_calcs(originals, positions, raw_pos, result)
 

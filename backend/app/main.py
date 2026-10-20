@@ -281,6 +281,7 @@ from app.routers import tasks
 from app.routers import positions as positions_router
 from app.routers import validation_backfill as validation_backfill_router
 from app.routers import export_settings as export_settings_router
+from app.routers import db_assistant, db_browser
 
 # Anmeldung selbst (Login/Logout/me) ist offen bzw. prüft sich selbst
 app.include_router(auth.router)                        # /api/auth/*
@@ -303,6 +304,8 @@ app.include_router(tasks.router, dependencies=_protected)                       
 app.include_router(validation_backfill_router.router, dependencies=_protected)  # /api/validation-backfill
 app.include_router(positions_router.router, dependencies=_protected)             # /api/positions/* (Artikelsuche)
 app.include_router(export_settings_router.router, dependencies=_protected)       # /api/settings/export
+app.include_router(db_browser.router, dependencies=_protected)                   # /api/db/* (Daten-Browser)
+app.include_router(db_assistant.router, dependencies=_protected)                 # /api/db-assistant/* (KI-Assistent)
 
 
 # ── Health-Check ────────────────────────────────────────────────────────────

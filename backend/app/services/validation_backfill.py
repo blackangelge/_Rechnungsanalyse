@@ -141,6 +141,44 @@ def normalize_extraction(extraction: InvoiceExtraction, positions: list[OrderPos
     return len(result.normalizations)
 
 
+def restore_original_units(extraction: InvoiceExtraction, positions: list[OrderPosition]) -> int:
+    """
+    Stellt Menge, Einheit und Einzelpreis wieder auf den Wortlaut der Rechnung (KI-Auslesung im `raw_response`) zurück, wenn sie
+    früher auf Tonnen vereinheitlicht wurden. Zurückgesetzt wird nur, wenn die gespeicherte Menge die ZAHLENMÄSSIGE Umrechnung der
+    Originalmenge ist (z. B. 25.500 kg ↔ 25,5 t) oder nur die Schreibweise abweicht („Tonnen“ ↔ „t“) — echte Korrekturen
+    (z. B. eine falsch beschriftete Einheit) bleiben unberührt. Prüfstatus/-details und Gesamtpreise bleiben unberührt. Kein Commit.
+    Rückgabe: Anzahl zurückgesetzter Positionen.
+    """
+    raw = _parse_raw(extraction.raw_response) or {}
+    raw_pos = raw.get("positionen") if isinstance(raw.get("positionen"), list) else []
+    ps = plausibility_service
+    restored = 0
+    for pos in positions:
+        i = pos.position_index
+        rp = raw_pos[i] if 0 <= i < len(raw_pos) and isinstance(raw_pos[i], dict) else None
+        if not rp or pos.quantity is None:
+            continue
+        raw_unit_text = rp.get("mengeneinheit")
+        raw_qty = ps._f(rp.get("menge"))
+        raw_unit, stored_unit = ps.parse_unit(raw_unit_text), ps.parse_unit(pos.unit)
+        if raw_qty is None or raw_unit is None or stored_unit is None:
+            continue
+        if raw_unit.dimension != "mass" or stored_unit.dimension != "mass":
+            continue
+        if str(raw_unit_text).strip() == str(pos.unit or "").strip() and abs(raw_qty - float(pos.quantity)) < 1e-9:
+            continue                                                    # schon im Originalzustand
+        converted = raw_qty * raw_unit.factor / stored_unit.factor
+        if abs(converted - float(pos.quantity)) > max(1e-6, abs(converted) * 1e-6):
+            continue                                                    # keine reine Umrechnung → echte Korrektur, nicht anfassen
+        pos.quantity = _dec(raw_qty)
+        pos.unit = str(raw_unit_text).strip()
+        price = ps._f(rp.get("einzelpreis"))
+        if price is not None:
+            pos.unit_price_netto = _dec(price)
+        restored += 1
+    return restored
+
+
 # ─── Hintergrund-Lauf ─────────────────────────────────────────────────────────
 
 _lock = threading.Lock()
@@ -149,9 +187,9 @@ _state: dict = {"running": False}
 
 
 def _empty_state(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, total: int,
-                 normalize_units: bool = False) -> dict:
+                 normalize_units: bool = False, restore_originals: bool = False) -> dict:
     return {
-        "running": True, "normalize_units": normalize_units, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
+        "running": True, "normalize_units": normalize_units, "restore_originals": restore_originals, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
         "total": total, "processed": 0, "filled_prices": 0, "corrections": 0,
         "outcomes": {}, "error_count": 0, "errors": [],
         "cancelled": False, "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": None,
@@ -163,7 +201,7 @@ def get_state() -> dict:
         return json.loads(json.dumps(_state))
 
 
-def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False):
+def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False, restore_originals: bool = False):
     """Fertig analysierte, nicht gelöschte Belege mit Extraktion; ohne Prüfstatus (außer im Modus „Einheiten“)."""
     q = (
         db.query(InvoiceExtraction.id)
@@ -173,29 +211,30 @@ def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool 
             Document.status == "done",
         )
     )
-    if not normalize_units:
+    if not (normalize_units or restore_originals):
         q = q.filter(InvoiceExtraction.validation_status.is_(None))
     if batch_ids:
         q = q.filter(Document.batch_id.in_(batch_ids))
     return q
 
 
-def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False) -> int:
+def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False, restore_originals: bool = False) -> int:
     db = SessionLocal()
     try:
-        return _base_query(db, batch_ids, normalize_units).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
+        return _base_query(db, batch_ids, normalize_units, restore_originals).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
     finally:
         db.close()
 
 
-def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normalize_units: bool = False) -> None:
+def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normalize_units: bool = False,
+         restore_originals: bool = False) -> None:
     last_id = 0
     try:
         while not _cancel.is_set():
             db = SessionLocal()
             try:
                 ids = [
-                    r[0] for r in _base_query(db, batch_ids, normalize_units)
+                    r[0] for r in _base_query(db, batch_ids, normalize_units, restore_originals)
                     .filter(InvoiceExtraction.id > last_id)
                     .order_by(InvoiceExtraction.id).limit(CHUNK_SIZE).all()
                 ]
@@ -213,7 +252,10 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
                     if _cancel.is_set():
                         break
                     try:
-                        if normalize_units:
+                        if restore_originals:
+                            n = restore_original_units(ext, by_doc.get(ext.document_id, []))
+                            info = {"outcome": "restored" if n else "unchanged", "filled_prices": 0, "corrections": n}
+                        elif normalize_units:
                             n = normalize_extraction(ext, by_doc.get(ext.document_id, []))
                             info = {"outcome": "normalized" if n else "unchanged", "filled_prices": 0, "corrections": n}
                         else:
@@ -257,16 +299,16 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
 
 
 def start(dry_run: bool = False, auto_correct: bool = True, batch_ids: list[int] | None = None,
-          background: bool = True, normalize_units: bool = False) -> dict:
+          background: bool = True, normalize_units: bool = False, restore_originals: bool = False) -> dict:
     """Startet einen Lauf. Läuft schon einer, wird er nicht gestartet (RuntimeError)."""
-    total = count_pending(batch_ids, normalize_units)
+    total = count_pending(batch_ids, normalize_units, restore_originals)
     with _lock:
         if _state.get("running"):
             raise RuntimeError("Es läuft bereits eine Nachrüstung")
         _cancel.clear()
         _state.clear()
-        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units))
-    args = (dry_run, auto_correct, batch_ids, normalize_units)
+        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units, restore_originals))
+    args = (dry_run, auto_correct, batch_ids, normalize_units, restore_originals)
     if background:
         threading.Thread(target=_run, args=args, name="validation-backfill", daemon=True).start()
     else:
