@@ -1324,3 +1324,86 @@ export const authApi = {
   changePassword: (current_password: string, new_password: string) =>
     apiClient.post("/api/auth/change-password", { current_password, new_password }).then(() => undefined),
 };
+
+// ─── Daten-Browser (CRUD) und KI-Assistent ───────────────────────────────────
+
+export interface DbColumn {
+  name: string;
+  type: "bool" | "int" | "zahl" | "datetime" | "date" | "json" | "text" | string;
+  nullable: boolean;
+  primary_key: boolean;
+  references: string | null;
+  secret: boolean;
+}
+
+export interface DbTable {
+  name: string;
+  count: number | null;
+  primary_key: string | null;
+  columns: DbColumn[];
+}
+
+export type DbRow = Record<string, unknown>;
+
+export const dbApi = {
+  tables: () => apiClient.get<DbTable[]>("/api/db/tables/").then((r) => r.data),
+  rows: async (
+    table: string,
+    p: { limit: number; offset: number; q?: string; sort?: string; order?: "asc" | "desc"; filters?: Record<string, string> },
+  ) => {
+    const params: Record<string, unknown> = { limit: p.limit, offset: p.offset, q: p.q || undefined, sort: p.sort, order: p.order };
+    Object.entries(p.filters ?? {}).forEach(([k, v]) => { params[`f.${k}`] = v; });
+    const r = await apiClient.get<DbRow[]>(`/api/db/tables/${table}/rows/`, { params });
+    const header = Number(r.headers["x-total-count"]);
+    return { items: r.data, total: Number.isFinite(header) ? header : r.data.length };
+  },
+  row: (table: string, pk: unknown) =>
+    apiClient.get<DbRow>(`/api/db/tables/${table}/rows/${encodeURIComponent(String(pk))}`).then((r) => r.data),
+  update: (table: string, pk: unknown, changes: Record<string, unknown>) =>
+    apiClient
+      .patch<{ row: DbRow; changed: Record<string, { alt: unknown; neu: unknown }> }>(
+        `/api/db/tables/${table}/rows/${encodeURIComponent(String(pk))}`, { changes })
+      .then((r) => r.data),
+  insert: (table: string, values: Record<string, unknown>) =>
+    apiClient.post<{ row: DbRow; pk: unknown }>(`/api/db/tables/${table}/rows/`, { values }).then((r) => r.data),
+  remove: (table: string, pk: unknown) =>
+    apiClient.delete(`/api/db/tables/${table}/rows/${encodeURIComponent(String(pk))}`).then((r) => r.data),
+};
+
+export interface AssistantStep {
+  sql: string;
+  ok: boolean;
+  error?: string;
+  row_count?: number;
+  columns?: string[];
+  rows?: unknown[][];
+  truncated?: boolean;
+}
+
+export interface AssistantProposal {
+  table: string;
+  id: unknown;
+  changes: Record<string, unknown>;
+  current: Record<string, unknown>;
+  reason: string;
+}
+
+export interface AssistantReply {
+  answer: string;
+  steps: AssistantStep[];
+  proposals: AssistantProposal[];
+  usage: { input_tokens: number; output_tokens: number; seconds: number; calls: number };
+}
+
+export const dbAssistantApi = {
+  models: () =>
+    apiClient.get<{ id: number; name: string; model_name: string; active: boolean; default: boolean }[]>("/api/db-assistant/models/")
+      .then((r) => r.data),
+  /** Lokale Modelle können mehrere Minuten brauchen → kein Zeitlimit im Browser (der Proxy erlaubt 15 Minuten) */
+  chat: (messages: { role: "user" | "assistant"; content: string }[], aiConfigId?: number, allowProposals = true) =>
+    apiClient
+      .post<AssistantReply>("/api/db-assistant/chat/", { messages, ai_config_id: aiConfigId ?? null, allow_proposals: allowProposals }, { timeout: 0 })
+      .then((r) => r.data),
+  apply: (p: { table: string; id: unknown; changes: Record<string, unknown>; reason: string }) =>
+    apiClient.post<{ row: DbRow; changed: Record<string, { alt: unknown; neu: unknown }> }>("/api/db-assistant/apply/", p).then((r) => r.data),
+};

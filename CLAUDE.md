@@ -884,6 +884,19 @@ Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`
 - Tests: `tests/conftest.py` setzt `AUTH_ENABLED=false`; `tests/test_auth.py` schaltet es gezielt ein.
 - `alembic/env.py` ruft `fileConfig` nur noch auf, wenn kein Logging eingerichtet ist (sonst verstummen die Anwendungs-Logs nach der Migration im Backend-Prozess).
 
+### Daten-Browser und KI-Assistent (`services/db_tools.py`, `routers/db_browser.py`, `services/db_assistant_service.py`, `routers/db_assistant.py`, Seite `/daten`)
+
+- **Tabellen-CRUD** (`/api/db/tables[/{t}/rows[/{pk}]]`): alle ORM-Tabellen (aus `Base.metadata`) ansehen, durchsuchen (Freitext über alle Textspalten, alle Wörter; Spaltenfilter `f.<spalte>=wert`, leer = NULL), sortieren,
+  paginieren (`X-Total-Count`), Zeile ändern (`PATCH`, nur bekannte Spalten, Typen werden geprüft/umgewandelt, Primärschlüssel unveränderlich), anlegen, löschen. Es laufen **keine** Plausibilitätsprüfungen und es werden keine Dateien mitgelöscht.
+  Ausgenommen: `users`, `user_sessions`; Spalte `ai_clients.api_key` wird maskiert und ist nicht schreibbar. Änderungen/Löschungen stehen im Backend-Log. Frontend: Schalter „Bearbeiten erlauben“ (Standard aus).
+- **KI-Assistent** (`/api/db-assistant/chat`, Tab „KI-Assistent“): läuft mit jeder KI-Konfiguration (OpenAI-kompatibel, auch LM Studio über `/v1/chat/completions`), ohne dass das Modell Tool-Calling kann — Protokoll mit JSON-Aktionen
+  (`sql` · `propose_update` · `final`), bis zu 8 Schritte pro Frage. Das Schema wird aus den Metadaten in den Prompt gebaut (+ `DOMAIN_NOTES` zu Gewichten/Einheiten/Status).
+  **Die KI schreibt nie selbst**: SELECT-Abfragen laufen in einer schreibgeschützten Transaktion (PostgreSQL `SET TRANSACTION READ ONLY`, `statement_timeout` 20 s, max. 200 Zeilen, Zellen gekürzt; nur eine Anweisung, Verbotsliste für
+  Schreib-/Systembefehle, kein Zugriff auf `users`/`api_key`/`pg_*`/`information_schema`); Änderungen kommen als **Vorschläge** zurück und werden erst durch Klick „Freigeben & speichern“ über `POST /api/db-assistant/apply` geschrieben
+  (dieselben Prüfungen wie im Browser, im Log festgehalten). Nur Änderungen an einzelnen Zeilen (kein Einfügen/Löschen durch die KI).
+- Neue Tabellen erscheinen automatisch; ein Geheimnis in einer neuen Spalte gehört in `SECRET_COLUMNS`, eine neue Zugangs-Tabelle in `HIDDEN_TABLES` (`db_tools.py`). Tests: `tests/test_db_browser.py` (KI-Antworten werden vorgegeben).
+- Belege-Infos: Mengen/Einheit/Einzelpreis zeigen die **gespeicherten** Werte (z. B. auf Tonnen umgerechnet), der Wortlaut der Rechnung steht darunter („lt. Rechnung: 25.500 kg“) — Artikelsuche und Excel lesen immer die gespeicherten Werte.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:
