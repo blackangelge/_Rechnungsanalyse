@@ -17,6 +17,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ChangeRuns from "@/components/settings/ChangeRuns";
 import {
   ValidationBackfillState, automationSettingsApi, pdfSettingsApi, validationBackfillApi, extractApiError,
 } from "@/lib/api";
@@ -220,8 +221,14 @@ function ValidationBackfill() {
             {(state?.error_count ?? 0) > 0 && ` · ${state?.error_count} Fehler`}
           </p>
           {state?.errors?.slice(0, 5).map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+          {!state?.dry_run && (state?.changed_fields ?? 0) > 0 && (
+            <p className="mt-1 text-xs text-emerald-700">
+              {(state?.changed_fields ?? 0).toLocaleString("de-DE")} Feld(er) in {(state?.changed_rows ?? 0).toLocaleString("de-DE")} Zeile(n) geändert — im Änderungsprotokoll unten festgehalten und dort rückgängig zu machen.
+            </p>
+          )}
         </div>
       )}
+      <ChangeRuns key={state?.finished_at ?? "init"} />
     </div>
   );
 }

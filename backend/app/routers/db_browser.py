@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.services import db_tools
+from app.services import change_log, db_tools
 from app.services.query_guard import clear_all_caches
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ def update_row(table: str, pk: str, body: RowChanges, db: Session = Depends(get_
     except (db_tools.DbToolError, LookupError) as exc:
         raise _http(exc)
     logger.info("Daten-Browser: %s #%s geändert: %s", table, pk, result["changed"])
+    change_log.log_manual_update(db, "browser", table, pk, result.pop("before"), result["row"])
     clear_all_caches()
     return result
 

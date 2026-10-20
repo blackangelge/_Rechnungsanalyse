@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import get_db
-from app.services import db_assistant_service, db_tools
+from app.services import change_log, db_assistant_service, db_tools
 from app.services.query_guard import clear_all_caches
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,7 @@ def apply(body: ApplyRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(exc))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc).strip("'\""))
+    change_log.log_manual_update(db, "assistant", body.table, body.id, result.pop("before"), result["row"], label=body.reason or None)
     logger.warning("Daten-Assistent: Vorschlag FREIGEGEBEN %s #%s: %s (Begründung: %s)", body.table, body.id, result["changed"], body.reason)
     clear_all_caches()
     return result

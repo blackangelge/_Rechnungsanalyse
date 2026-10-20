@@ -34,7 +34,7 @@ from app.database import SessionLocal
 from app.models.document import Document
 from app.models.invoice_extraction import InvoiceExtraction
 from app.models.order_position import OrderPosition
-from app.services import ai_service, plausibility_service
+from app.services import ai_service, change_log, plausibility_service
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,19 @@ def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = Fa
 def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normalize_units: bool = False,
          restore_originals: bool = False) -> None:
     last_id = 0
+    # Änderungsprotokoll: jeder echte (nicht Vorschau-)Lauf bekommt einen Vorgang mit Alt-/Neuwert je Feld → rückgängig machbar
+    kind = "backfill_restore" if restore_originals else "backfill_normalize" if normalize_units else "backfill_rules"
+    run_id = None
+    if not dry_run:
+        try:
+            run_id = change_log.start_run(kind, f"Nachrüstung ({kind.removeprefix('backfill_')})" + (f", Imports {batch_ids}" if batch_ids else ""))
+            with _lock:
+                _state["run_id"] = run_id
+        except Exception:                                    # noqa: BLE001 — ohne Protokoll darf der Lauf nicht scheitern, aber er soll es sagen
+            logger.warning("Änderungsprotokoll nicht verfügbar (Migration 0015 fehlt?) — Lauf ohne Protokoll", exc_info=True)
+            with _lock:
+                _state["errors"].append("Achtung: Änderungsprotokoll nicht verfügbar — dieser Lauf lässt sich nicht rückgängig machen.")
+    changed_rows = changed_fields = 0
     try:
         while not _cancel.is_set():
             db = SessionLocal()
@@ -248,10 +261,12 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
                           .order_by(OrderPosition.position_index).all()):
                     by_doc.setdefault(p.document_id, []).append(p)
 
+                chunk_rows = chunk_fields = 0
                 for ext in extractions:
                     if _cancel.is_set():
                         break
                     try:
+                        before = change_log.snapshot(ext, by_doc.get(ext.document_id, [])) if run_id else None
                         if restore_originals:
                             n = restore_original_units(ext, by_doc.get(ext.document_id, []))
                             info = {"outcome": "restored" if n else "unchanged", "filled_prices": 0, "corrections": n}
@@ -262,12 +277,19 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
                             info = backfill_extraction(
                                 db, ext, by_doc.get(ext.document_id, []), auto_correct=auto_correct
                             )
+                        if run_id:
+                            ch = change_log.diff_snapshots(run_id, before, change_log.snapshot(ext, by_doc.get(ext.document_id, [])))
+                            if ch:
+                                db.add_all(ch)
+                                chunk_rows += len({(c.table_name, c.row_id) for c in ch})
+                                chunk_fields += len(ch)
                         with _lock:
                             _state["outcomes"][info["outcome"]] = _state["outcomes"].get(info["outcome"], 0) + 1
                             _state["filled_prices"] += info["filled_prices"]
                             _state["corrections"] += info["corrections"]
                     except Exception as exc:                    # ein defekter Beleg stoppt nie den Lauf
-                        db.rollback()
+                        db.rollback()                                   # verwirft den ganzen Block (inkl. seiner Protokolleinträge)
+                        chunk_rows = chunk_fields = 0
                         logger.warning("Nachrüstung Beleg #%s: %s", ext.document_id, exc)
                         with _lock:
                             _state["error_count"] += 1
@@ -280,6 +302,8 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
                     db.rollback()
                 else:
                     db.commit()
+                    changed_rows += chunk_rows
+                    changed_fields += chunk_fields
             finally:
                 db.close()
     except Exception as exc:
@@ -287,8 +311,11 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
         with _lock:
             _state["errors"].append(f"Abbruch: {exc}")
     finally:
+        if run_id:
+            change_log.finish_run(run_id, changed_rows, changed_fields)
         with _lock:
             _state["running"] = False
+            _state["changed_rows"], _state["changed_fields"] = changed_rows, changed_fields
             _state["cancelled"] = _cancel.is_set()
             _state["finished_at"] = datetime.now(timezone.utc).isoformat()
         logger.info(
