@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { AssistantProposal, AssistantReply, AssistantStep, dbAssistantApi, extractApiError } from "@/lib/api";
+import { AssistantProposal, AssistantReanalysis, AssistantReply, AssistantStep, dbAssistantApi, extractApiError } from "@/lib/api";
 
 type Msg =
   | { role: "user"; content: string }
@@ -11,6 +11,7 @@ const EXAMPLES = [
   "Wie viele Belege hat jeder Import, und wie viele davon sind in „Prüfen!“?",
   "Zeige alle Positionen mit Kalkammonsalpeter und den Preis je Tonne pro Lieferant.",
   "Welche Positionen haben Menge in kg, aber einen Preis je Tonne? Nenne die Beleg-IDs.",
+  "Sende alle Belege, bei denen ein Gesamtpreis fehlt, erneut zur KI-Analyse.",
 ];
 
 function StepView({ s, i }: { s: AssistantStep; i: number }) {
@@ -76,6 +77,43 @@ function ProposalView({
   );
 }
 
+function ReanalysisView({
+  r, state, onApply, onDismiss, busy,
+}: {
+  r: AssistantReanalysis;
+  state: string | undefined;
+  onApply: () => void;
+  onDismiss: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="rounded border border-violet-300 bg-violet-50 p-3 text-sm" data-testid="reanalysis">
+      <div className="mb-1 font-medium text-violet-900">
+        Vorschlag: {r.count.toLocaleString("de-DE")} Beleg(e) erneut zur KI-Analyse senden
+      </div>
+      {r.reason && <div className="mb-2 text-xs text-violet-800">{r.reason}</div>}
+      <div className="mb-2 text-xs text-gray-700">
+        Beleg-IDs: {r.sample.map((d) => `#${d.id}`).join(", ")}{r.count > r.sample.length ? ` … (+${r.count - r.sample.length})` : ""}
+        {r.skipped > 0 && <> · {r.skipped} nicht geeignet (gelöscht / in Verarbeitung / unbekannt)</>}
+        {r.truncated && <> · <b>auf die ersten {r.count.toLocaleString("de-DE")} begrenzt</b></>}
+      </div>
+      <div className="mb-2 text-xs text-gray-500">
+        Die Belege werden in die Warteschlange eingereiht und von den Workern analysiert (KI-Konfiguration/Workflow wie üblich). Die bisherige
+        Auslesung bleibt in der Analyse-Historie des Belegs erhalten.
+      </div>
+      {state ? (
+        <div className="text-xs font-medium text-gray-700">{state}</div>
+      ) : (
+        <div className="flex gap-2">
+          <button onClick={onApply} disabled={busy} data-testid="apply-reanalysis"
+            className="rounded bg-violet-600 px-3 py-1 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50">Freigeben &amp; einreihen</button>
+          <button onClick={onDismiss} disabled={busy} className="rounded border border-gray-300 bg-white px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">Verwerfen</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Assistant() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -128,6 +166,29 @@ export default function Assistant() {
     }
   }
 
+  // Zustände der Wiederanalyse-Vorschläge liegen unter den Schlüsseln 1000 + Index (neben den Änderungsvorschlägen)
+  async function applyReanalysis(mi: number, ri: number) {
+    const m = messages[mi];
+    if (m.role !== "assistant" || !m.reply?.reanalysis) return;
+    const r = m.reply.reanalysis[ri];
+    if (!confirm(`${r.count.toLocaleString("de-DE")} Beleg(e) jetzt zur KI-Analyse einreihen?\n\nDie bisherige Auslesung wird ersetzt (bleibt in der Analyse-Historie).`)) return;
+    setApplying(true);
+    let text: string;
+    try {
+      const res = await dbAssistantApi.applyReanalysis({ document_ids: r.document_ids, reason: r.reason });
+      text = `✓ ${res.message}`;
+    } catch (e) {
+      text = `✗ ${extractApiError(e, "Einreihen fehlgeschlagen")}`;
+    } finally {
+      setApplying(false);
+    }
+    setMessages((all) => all.map((x, i) => (i === mi && x.role === "assistant" ? { ...x, applied: { ...x.applied, [1000 + ri]: text } } : x)));
+  }
+
+  function dismissReanalysis(mi: number, ri: number) {
+    setMessages((all) => all.map((x, i) => (i === mi && x.role === "assistant" ? { ...x, applied: { ...x.applied, [1000 + ri]: "Verworfen" } } : x)));
+  }
+
   function dismiss(mi: number, pi: number) {
     setMessages((all) => all.map((x, i) => (i === mi && x.role === "assistant" ? { ...x, applied: { ...x.applied, [pi]: "Verworfen" } } : x)));
   }
@@ -170,6 +231,10 @@ export default function Assistant() {
                   {m.reply.proposals.map((p, pi) => (
                     <ProposalView key={pi} p={p} state={m.applied?.[pi]} busy={applying}
                       onApply={() => apply(mi, pi)} onDismiss={() => dismiss(mi, pi)} />
+                  ))}
+                  {(m.reply.reanalysis ?? []).map((r, ri) => (
+                    <ReanalysisView key={`r${ri}`} r={r} state={m.applied?.[1000 + ri]} busy={applying}
+                      onApply={() => applyReanalysis(mi, ri)} onDismiss={() => dismissReanalysis(mi, ri)} />
                   ))}
                   <div className="text-[10px] text-gray-400">
                     {m.reply.usage.calls} KI-Aufruf(e) · {m.reply.usage.input_tokens.toLocaleString("de-DE")} Token ein / {m.reply.usage.output_tokens.toLocaleString("de-DE")} aus · {m.reply.usage.seconds} s

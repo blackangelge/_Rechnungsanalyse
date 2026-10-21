@@ -37,6 +37,12 @@ class ApplyRequest(BaseModel):
     reason: str = ""
 
 
+class ReanalysisRequest(BaseModel):
+    document_ids: list[int] = Field(..., min_length=1)
+    workflow_id: int | None = None
+    reason: str = ""
+
+
 @router.get("/models")
 def models(db: Session = Depends(get_db)):
     """KI-Konfigurationen, die der Assistent nutzen kann (die als Standard aktive zuerst)."""
@@ -79,3 +85,24 @@ def apply(body: ApplyRequest, db: Session = Depends(get_db)):
     logger.warning("Daten-Assistent: Vorschlag FREIGEGEBEN %s #%s: %s (Begründung: %s)", body.table, body.id, result["changed"], body.reason)
     clear_all_caches()
     return result
+
+
+@router.post("/apply-reanalysis")
+def apply_reanalysis(body: ReanalysisRequest, db: Session = Depends(get_db)):
+    """
+    Gibt einen Vorschlag „erneut zur KI-Analyse senden“ frei: reiht die Belege in die Worker-Warteschlange ein
+    (wie „KI-Analyse starten“ auf der Belege-Seite). Vorher werden die IDs erneut geprüft (vorhanden, nicht gelöscht,
+    nicht gerade in Verarbeitung); Belege mit wartendem Task werden übersprungen. Höchstens MAX_REANALYSIS je Freigabe.
+    """
+    from app.routers.documents import EnqueueRequest, enqueue_documents
+
+    ids = list(dict.fromkeys(body.document_ids))
+    if len(ids) > db_assistant_service.MAX_REANALYSIS:
+        raise HTTPException(status_code=400, detail=f"Höchstens {db_assistant_service.MAX_REANALYSIS} Belege je Freigabe.")
+    valid = db_assistant_service.filter_reanalysis_ids(db, ids)
+    if not valid:
+        raise HTTPException(status_code=400, detail="Keiner der Belege kommt in Frage (nicht vorhanden, gelöscht oder gerade in Verarbeitung).")
+    result = enqueue_documents(EnqueueRequest(document_ids=valid, workflow_id=body.workflow_id), db)
+    logger.warning("Daten-Assistent: erneute KI-Analyse FREIGEGEBEN für %d Beleg(e), %d eingereiht (Begründung: %s)",
+                   len(valid), result.enqueued, body.reason)
+    return {"requested": len(ids), "eligible": len(valid), "enqueued": result.enqueued, "message": result.message}

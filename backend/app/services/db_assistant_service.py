@@ -5,10 +5,11 @@ Funktioniert mit jedem OpenAI-kompatiblen Chat-Endpunkt (auch LM Studio / Ollama
 „Tool Calling“ beherrschen muss: Die KI antwortet in jedem Schritt mit genau einem JSON-Objekt
   {"tool": "sql", "query": "SELECT …"}                                        → Abfrage (nur lesen), Ergebnis kommt zurück
   {"tool": "propose_update", "table": …, "id": …, "changes": {…}, "reason": …} → Änderungsvorschlag
+  {"tool": "propose_reanalysis", "query": "SELECT id FROM documents …", "reason": …} → Vorschlag: Belege erneut zur KI-Analyse senden
   {"tool": "final", "answer": "…"}                                            → Antwort an den Nutzer
 Die Schleife führt Abfragen aus und gibt die Ergebnisse zurück, bis die KI „final“ liefert (max. MAX_STEPS).
 
-Die KI SCHREIBT NIE selbst: Änderungen sind nur Vorschläge, die der Nutzer in der Oberfläche freigeben muss
+Die KI SCHREIBT NIE selbst und stößt nichts selbst an: Änderungen und erneute Analysen sind nur Vorschläge, die der Nutzer in der Oberfläche freigeben muss
 (`routers/db_assistant.py::apply`). Abfragen laufen in einer schreibgeschützten Transaktion (siehe db_tools).
 """
 
@@ -31,6 +32,7 @@ from app.services.ai_url import build_ai_url
 logger = logging.getLogger(__name__)
 
 MAX_STEPS = 8
+MAX_REANALYSIS = 2000               # höchstens so viele Belege je Freigabe zur erneuten KI-Analyse
 REQUEST_TIMEOUT_SECONDS = 600
 MAX_HISTORY_CHARS = 60_000          # ältere Nachrichten werden gekürzt, damit der Kontext nicht überläuft
 
@@ -51,13 +53,18 @@ Antworte IMMER mit genau EINEM JSON-Objekt und sonst nichts (kein Fließtext dav
 
 1. Abfrage (nur lesen):      {"tool": "sql", "query": "SELECT ... LIMIT 50"}
 2. Änderungsvorschlag:       {"tool": "propose_update", "table": "order_positions", "id": 123, "changes": {"quantity": 25.5, "unit": "t"}, "reason": "kurze Begründung"}
-3. Endgültige Antwort:       {"tool": "final", "answer": "Antwort in Markdown, auf Deutsch"}
+3. Belege erneut zur KI-Analyse vorschlagen:
+   {"tool": "propose_reanalysis", "query": "SELECT d.id FROM documents d WHERE ...", "reason": "kurze Begründung"}
+   (die Abfrage liefert genau EINE Spalte mit Beleg-IDs, höchstens 2000; alternativ {"tool": "propose_reanalysis", "document_ids": [1, 2, 3], "reason": "…"})
+4. Endgültige Antwort:       {"tool": "final", "answer": "Antwort in Markdown, auf Deutsch"}
 
 Regeln:
 - Es ist nur EINE SELECT-/WITH-Abfrage pro Schritt erlaubt (kein ';'). Ergebnisse sind auf 200 Zeilen begrenzt — nutze LIMIT, Aggregate (COUNT, SUM, AVG, GROUP BY) und gezielte Spalten statt SELECT *.
 - Die Spalte raw_response ist sehr groß: nur gezielt lesen (z.B. mit LEFT(raw_response, 500) oder JSON-Operatoren), nicht komplett.
 - Du kannst Daten NIE selbst ändern. Wenn etwas geändert werden soll, schlage es mit propose_update vor (je Zeile ein Vorschlag, mit der Spalte `id` der Zeile);
   der Nutzer gibt jeden Vorschlag in der Oberfläche frei. Prüfe vorher per Abfrage, dass die Zeile existiert und der Wert wirklich falsch ist. Ändere nie ohne Auftrag des Nutzers.
+- Eine erneute KI-Analyse kostet KI-Zeit und ersetzt die gespeicherte Auslesung des Belegs (der alte Stand bleibt in der Analyse-Historie). Schlage sie nur auf ausdrücklichen Wunsch des Nutzers vor,
+  zähle die Belege vorher per Abfrage und nimm gelöschte (soft_deleted) sowie gerade verarbeitete Belege (status = 'processing') nicht auf. Der Nutzer gibt den Vorschlag frei.
 - Tabellen users/user_sessions und Zugangsdaten sind nicht zugänglich. Erfinde keine Daten: stütze jede Aussage auf Abfrageergebnisse, nenne Beleg-/Positions-IDs.
 - Wenn die Frage unklar ist, stelle in "final" eine kurze Rückfrage.
 - Antworte nach einem Fehler einer Abfrage nicht mit "final", sondern korrigiere die Abfrage.
@@ -169,16 +176,67 @@ def _result_message(res: dict) -> str:
     return head + json.dumps({"columns": res["columns"], "rows": res["rows"]}, ensure_ascii=False)
 
 
+def build_reanalysis_proposal(db: Session, action: dict) -> dict:
+    """
+    Prüft einen Vorschlag „Belege erneut analysieren“ (IDs aus `document_ids` oder aus einer SELECT-Abfrage mit einer ID-Spalte).
+    Es wird nichts gestartet. Rückgabe: {document_ids, count, skipped, truncated, sample, reason}.
+    """
+    ids: list[int] = []
+    truncated = False
+    if isinstance(action.get("document_ids"), list):
+        raw_ids = action["document_ids"]
+    elif action.get("query"):
+        res = db_tools.run_readonly_sql(db, str(action["query"]), max_rows=MAX_REANALYSIS, timeout_s=30)
+        if len(res["columns"]) != 1:
+            raise db_tools.DbToolError("Die Abfrage muss genau EINE Spalte mit Beleg-IDs liefern (z. B. SELECT d.id FROM documents d …).")
+        raw_ids = [r[0] for r in res["rows"]]
+        truncated = res["truncated"]
+    else:
+        raise db_tools.DbToolError("Angabe fehlt: 'query' (SELECT mit Beleg-IDs) oder 'document_ids'.")
+    for v in raw_ids:
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            raise db_tools.DbToolError(f"Keine gültige Beleg-ID: {v!r}") from None
+    ids = list(dict.fromkeys(ids))
+    if len(ids) > MAX_REANALYSIS:
+        ids, truncated = ids[:MAX_REANALYSIS], True
+    valid = filter_reanalysis_ids(db, ids)
+    if not valid:
+        raise db_tools.DbToolError("Keiner der Belege kommt in Frage (nicht vorhanden, gelöscht oder gerade in Verarbeitung).")
+    from app.models.document import Document
+    sample = [
+        {"id": d.id, "filename": d.original_filename, "status": d.status}
+        for d in db.query(Document).filter(Document.id.in_(valid[:10])).order_by(Document.id).all()
+    ]
+    return {
+        "document_ids": valid, "count": len(valid), "skipped": len(ids) - len(valid), "truncated": truncated,
+        "sample": sample, "reason": str(action.get("reason") or ""),
+    }
+
+
+def filter_reanalysis_ids(db: Session, ids: list[int]) -> list[int]:
+    """Nur vorhandene, nicht gelöschte Belege, die nicht gerade verarbeitet werden (Reihenfolge bleibt)."""
+    from app.models.document import Document
+    ok: set[int] = set()
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        ok.update(r[0] for r in db.query(Document.id).filter(
+            Document.id.in_(chunk), Document.soft_deleted == False, Document.status != "processing"))  # noqa: E712
+    return [i for i in ids if i in ok]
+
+
 # ─── Hauptschleife ────────────────────────────────────────────────────────────
 
 def run_chat(db: Session, config: AIClients, history: list[dict], allow_proposals: bool = True) -> dict:
     """
     Führt eine Unterhaltungsrunde aus. Rückgabe:
-      {"answer": str, "steps": [{"sql", "ok", "rows", "error"}], "proposals": [...], "usage": {...}}
+      {"answer": str, "steps": [{"sql", "ok", "rows", "error"}], "proposals": [...], "reanalysis": [...], "usage": {...}}
     """
     messages: list[dict] = [{"role": "system", "content": build_system_prompt()}] + _clip_history(history)
     steps: list[dict] = []
     proposals: list[dict] = []
+    reanalysis: list[dict] = []
     usage = {"input_tokens": 0, "output_tokens": 0, "seconds": 0.0, "calls": 0}
     answer: str | None = None
 
@@ -237,8 +295,22 @@ def run_chat(db: Session, config: AIClients, history: list[dict], allow_proposal
                 messages.append({"role": "user", "content": f"FEHLER beim Vorschlag: {exc}"})
             continue
 
-        messages.append({"role": "user", "content": 'Unbekanntes Werkzeug. Erlaubt: "sql", "propose_update", "final".'})
+        if tool == "propose_reanalysis":
+            if not allow_proposals:
+                messages.append({"role": "user", "content": "Vorschläge sind ausgeschaltet. Antworte mit tool=final."})
+                continue
+            try:
+                prop = build_reanalysis_proposal(db, action)
+                reanalysis.append(prop)
+                messages.append({"role": "user", "content": f"Vorschlag für {prop['count']} Beleg(e) gespeichert ({prop['skipped']} nicht geeignet"
+                                                            f"{', auf %d begrenzt' % MAX_REANALYSIS if prop['truncated'] else ''}); er wartet auf die Freigabe "
+                                                            "durch den Nutzer. Antworte jetzt mit tool=final und fasse zusammen."})
+            except db_tools.DbToolError as exc:
+                messages.append({"role": "user", "content": f"FEHLER beim Vorschlag: {exc}"})
+            continue
+
+        messages.append({"role": "user", "content": 'Unbekanntes Werkzeug. Erlaubt: "sql", "propose_update", "propose_reanalysis", "final".'})
 
     if answer is None:
         answer = "Ich konnte in der erlaubten Anzahl von Schritten keine endgültige Antwort finden. Bitte formuliere die Frage enger oder teile sie auf."
-    return {"answer": answer, "steps": steps, "proposals": proposals, "usage": usage}
+    return {"answer": answer, "steps": steps, "proposals": proposals, "reanalysis": reanalysis, "usage": usage}

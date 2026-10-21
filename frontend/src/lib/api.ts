@@ -1407,10 +1407,20 @@ export interface AssistantProposal {
   reason: string;
 }
 
+export interface AssistantReanalysis {
+  document_ids: number[];
+  count: number;
+  skipped: number;
+  truncated: boolean;
+  sample: { id: number; filename: string; status: string }[];
+  reason: string;
+}
+
 export interface AssistantReply {
   answer: string;
   steps: AssistantStep[];
   proposals: AssistantProposal[];
+  reanalysis?: AssistantReanalysis[];
   usage: { input_tokens: number; output_tokens: number; seconds: number; calls: number };
 }
 
@@ -1423,6 +1433,9 @@ export const dbAssistantApi = {
     apiClient
       .post<AssistantReply>("/api/db-assistant/chat/", { messages, ai_config_id: aiConfigId ?? null, allow_proposals: allowProposals }, { timeout: 0 })
       .then((r) => r.data),
+  /** Freigabe: Belege erneut zur KI-Analyse in die Warteschlange einreihen */
+  applyReanalysis: (p: { document_ids: number[]; reason: string }) =>
+    apiClient.post<{ requested: number; eligible: number; enqueued: number; message: string }>("/api/db-assistant/apply-reanalysis/", p).then((r) => r.data),
   apply: (p: { table: string; id: unknown; changes: Record<string, unknown>; reason: string }) =>
     apiClient.post<{ row: DbRow; changed: Record<string, { alt: unknown; neu: unknown }> }>("/api/db-assistant/apply/", p).then((r) => r.data),
 };
