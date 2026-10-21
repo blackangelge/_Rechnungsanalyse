@@ -1024,9 +1024,11 @@ Lädt alle **nicht-soft-gelöschten** Dokumente des Batches via `joinedload` fü
 |---|---|
 | Beleg-Nr., Rechnungsnr., Lieferant, Pos. | `Document` / `InvoiceExtraction` |
 | Artikelbezeichnung, Artikelnummer, Menge, Einheit | `OrderPosition` |
-| Einzelpreis (€), Gesamtpreis (€) | `OrderPosition` |
+| Einzelpreis (€), Gesamtpreis (€) | `OrderPosition.unit_price_netto` / `OrderPosition.total_price` (gespeicherte Werte — **keine Berechnung** wie Menge × Preis; früher war „Gesamtpreis“ fälschlich auf `unit_price_brutto` gemappt, das nie befüllt wird → leere Spalte) |
 | Steuersatz (%) | `raw_response → positionen[i].steuersatz` (Index = `position_index`) |
 | Nachlass | `OrderPosition` |
+
+**Grundsatz Export:** nur gespeicherte Werte, keine Excel-Formeln, keine Berechnung. Bewusste Darstellungs-Umwandlungen: Positionsnummer = `position_index + 1`; „Importiert am“ in lokaler Zeitzone; Seiten `0` → leer; Anschrift/USt-IdNr./Bank/Steuersatz/Skonto-% kommen aus dem gespeicherten KI-JSON (`raw_response`), weil es dafür keine Spalten gibt. Einzelpreise werden mit bis zu 4 Nachkommastellen angezeigt.
 
 **Wichtig:** Straße/PLZ/Ort sind nur befüllt wenn ein `Supplier`-Datensatz existiert
 (erfordert KI-Analyse). Steuersatz und Skonto-Details nur im neuen verschachtelten

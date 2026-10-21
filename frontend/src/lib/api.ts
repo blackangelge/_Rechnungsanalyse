@@ -1352,7 +1352,7 @@ export interface DbTable {
 export type DbRow = Record<string, unknown>;
 
 export const dbApi = {
-  tables: () => apiClient.get<DbTable[]>("/api/db/tables/").then((r) => r.data),
+  tables: () => apiClient.get<DbTable[]>("/api/db/tables/", { timeout: 120000 }).then((r) => r.data),
   rows: async (
     table: string,
     p: { limit: number; offset: number; q?: string; sort?: string; order?: "asc" | "desc"; filters?: Record<string, string> },

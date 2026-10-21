@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.types import JSON
 
 from app.config import settings
+import app.models  # noqa: F401  (registriert alle Tabellen in Base.metadata)
 from app.database import Base, SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -430,6 +431,7 @@ def _restore(path: Path, mode: str, batch_ids: list[int] | None, restore_files: 
         with zipfile.ZipFile(path) as zf:
             manifest = read_manifest(path)
             wanted = set(batch_ids) if batch_ids else None
+            restore_files = bool(restore_files and manifest.get("include_pdfs"))     # ohne PDFs im Backup gibt es nichts zurückzuschreiben
             in_zip = {b["id"] for b in manifest["batches"]}
             if wanted and not wanted <= in_zip:
                 raise BackupError("Import(s) nicht im Backup: " + ", ".join(f"#{i}" for i in sorted(wanted - in_zip)))

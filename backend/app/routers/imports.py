@@ -888,6 +888,7 @@ def _build_export_excel(
     fill_b    = PatternFill("solid", fgColor="F0F4F8")
     center    = Alignment(horizontal="center", vertical="center")
     fmt_eur   = '#,##0.00 €'
+    fmt_eur4  = '#,##0.00## €'          # Einzelpreise haben bis zu 4 Nachkommastellen — nicht auf 2 gerundet anzeigen
     fmt_pct   = '0.00"%"'
     fmt_date  = 'DD.MM.YYYY'
     fmt_dt    = 'DD.MM.YYYY HH:MM'
@@ -1014,8 +1015,9 @@ def _build_export_excel(
         ("artikelnummer",       "Artikelnummer",          lambda d, e, p, tm: p.article_number,                             None,      20),
         ("menge",               "Menge",                  lambda d, e, p, tm: _f(p.quantity),                               None,      12),
         ("einheit",             "Einheit",                lambda d, e, p, tm: p.unit,                                       None,      12),
-        ("einzelpreis",         "EP Netto (€)",           lambda d, e, p, tm: _f(p.unit_price_netto),                       "eur",     17),
-        ("gesamtpreis",         "EP Brutto (€)",          lambda d, e, p, tm: _f(p.unit_price_brutto),                      "eur",     17),
+        # Es werden ausschließlich gespeicherte Werte ausgegeben — keine Berechnung (kein Menge × Preis, keine Umrechnung)
+        ("einzelpreis",         "Einzelpreis (€)",        lambda d, e, p, tm: _f(p.unit_price_netto),                       "eur4",    17),
+        ("gesamtpreis",         "Gesamtpreis (€)",        lambda d, e, p, tm: _f(p.total_price),                            "eur",     17),
         ("steuersatz",          "Steuersatz (%)",         lambda d, e, p, tm: tm.get(p.position_index),                     "pct",     14),
         ("nachlass",            "Nachlass",               lambda d, e, p, tm: p.discount,                                   None,      22),
     ]
@@ -1092,6 +1094,7 @@ def _build_export_excel(
                 cell.font = data_font
                 cell.fill = fill
                 if fmt == "eur":      cell.number_format = fmt_eur
+                elif fmt == "eur4":   cell.number_format = fmt_eur4
                 elif fmt == "pct":    cell.number_format = fmt_pct
                 elif fmt == "center": cell.alignment = center
             r += 1
