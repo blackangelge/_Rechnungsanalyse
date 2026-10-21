@@ -5,6 +5,8 @@ Endpunkte:
   GET    /api/vendors          — alle Lieferanten auflisten
   GET    /api/vendors/duplicate-groups — Dublettensuche (IBAN, USt-IdNr., Steuernr., Name)
   POST   /api/vendors/merge    — Lieferanten zusammenführen
+  GET    /api/vendors/orphan-names     — Belege, deren Lieferantenname zu keinem Lieferanten gehört (mit Vorschlag)
+  POST   /api/vendors/reassign-names   — bestätigte Zuordnungen umschreiben (protokolliert, rückgängig machbar)
   GET    /api/vendors/{id}     — einzelnen Lieferanten abrufen
   PUT    /api/vendors/{id}     — Lieferantendaten aktualisieren
   PUT    /api/vendors/{id}/workflow — Analyse-Workflow des Lieferanten festlegen (null = Standard)
@@ -19,9 +21,12 @@ from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import get_db
-from app.schemas.vendor import DuplicateGroupRead, VendorMergeRequest, VendorMergeResult, VendorRead, VendorUpdate
+from app.schemas.vendor import (
+    DuplicateGroupRead, OrphanNamesRead, OrphanReassignRequest, OrphanReassignResult,
+    VendorMergeRequest, VendorMergeResult, VendorRead, VendorUpdate,
+)
 from app.schemas.workflow import SupplierWorkflowUpdate
-from app.services import supplier_dedup
+from app.services import supplier_dedup, vendor_repair
 
 router = APIRouter(prefix="/api/vendors", tags=["Lieferanten"])
 
@@ -131,6 +136,21 @@ def merge_vendors(payload: VendorMergeRequest, db: Session = Depends(get_db)):
         moved_documents=result.moved_documents,
         moved_bank_accounts=result.moved_bank_accounts,
     )
+
+
+@router.get("/orphan-names", response_model=OrphanNamesRead)
+def get_orphan_names(limit: int = Query(vendor_repair.DEFAULT_LIMIT, ge=1, le=2000), db: Session = Depends(get_db)):
+    """Verwaiste Belegnamen (z. B. nach früherem Zusammenführen) mit Zuordnungsvorschlag. Verändert nichts."""
+    return vendor_repair.find_orphans(db, limit)
+
+
+@router.post("/reassign-names", response_model=OrphanReassignResult)
+def reassign_orphan_names(payload: OrphanReassignRequest, db: Session = Depends(get_db)):
+    """Schreibt ausdrücklich bestätigte Zuordnungen um (eine Transaktion, im Änderungsprotokoll rückgängig machbar)."""
+    try:
+        return vendor_repair.apply(db, [(a.name, a.target_id) for a in payload.assignments])
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/{vendor_id}", response_model=VendorRead)

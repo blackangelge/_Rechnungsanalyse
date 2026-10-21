@@ -217,3 +217,60 @@ def test_merge_moves_documents_with_name_variants(client, world):
     assert world.docs["c1"].extraction.vendor_id == "Fremd AG"
     by_name = {v["name"]: v["document_count"] for v in client.get("/api/vendors").json()}
     assert by_name["ACME GmbH"] == 6
+
+
+# ─── Reparatur verwaister Belege ─────────────────────────────────────────────────
+
+def _orphan_doc(w, name, vat=None, iban=None):
+    d = crud.document.create(w.db, w.docs["a1"].batch_id, f"o{len(w.db.new)}.pdf", 1)
+    lief = {"name": name}
+    if vat:
+        lief["ust_id_nr"] = vat
+    if iban:
+        lief["bankverbindung"] = {"iban": iban}
+    crud.document.save_extraction(w.db, d.id, {"supplier_name": name}, [], json.dumps({"lieferant": lief}))
+    # save_extraction legt den Lieferanten an; verwaist wird der Beleg erst, wenn dieser (z. B. durch Zusammenführen) fehlt
+    w.db.query(Vendor).filter(Vendor.name == name, Vendor.id.notin_([w.a.id, w.b.id, w.c.id])).delete()
+    w.db.commit()
+    return d
+
+
+def test_orphans_are_found_with_suggestions(client, world):
+    _orphan_doc(world, "Völlig anderer Name", vat="de 123456789")             # über USt-IdNr. → "Acme GmbH & Co. KG"
+    _orphan_doc(world, "Weiterer Name", iban="DE89 3704 0044 0532 0130 00")  # über IBAN
+    _orphan_doc(world, "Acme")                                                 # gleicher Name ohne Rechtsform → "ACME GmbH"
+    _orphan_doc(world, "Unbekannt AG")                                      # kein Vorschlag
+    r = client.get("/api/vendors/orphan-names").json()
+    by = {o["name"]: o for o in r["orphans"]}
+    assert r["total"] == 4
+    assert by["Völlig anderer Name"]["suggestion"]["vendor_id"] == world.b.id
+    assert by["Völlig anderer Name"]["suggestion"]["confidence"] == "high"
+    assert by["Weiterer Name"]["suggestion"]["vendor_id"] == world.b.id
+    assert by["Acme"]["suggestion"]["confidence"] in ("medium", "high")
+    assert by["Unbekannt AG"]["suggestion"] is None
+    assert "Acme GmbH" not in by                                         # Schreibvariante eines vorhandenen Lieferanten
+
+
+def test_reassign_moves_documents_and_can_be_undone(client, world, sqlite_session_factory, monkeypatch):
+    monkeypatch.setattr("app.services.change_log.SessionLocal", sqlite_session_factory)
+    d1 = _orphan_doc(world, "Alter Name")
+    d2 = _orphan_doc(world, "Alter Name")
+    r = client.post("/api/vendors/reassign-names", json={"assignments": [{"name": "Alter Name", "target_id": world.a.id}]})
+    assert r.status_code == 200 and r.json()["moved_documents"] == 2
+    world.db.expire_all()
+    assert d1.extraction.vendor_id == d2.extraction.vendor_id == "ACME GmbH"
+    assert client.get("/api/vendors/orphan-names").json()["total"] == 0
+    from app.models.data_change import DataChange
+    assert world.db.query(DataChange).filter_by(run_id=r.json()["run_id"]).count() == 2
+    from app.services import change_log
+    change_log.start_undo(r.json()["run_id"], background=False)
+    world.db.expire_all()
+    assert d1.extraction.vendor_id == d2.extraction.vendor_id == "Alter Name"
+
+
+def test_reassign_unknown_vendor_changes_nothing(client, world):
+    d = _orphan_doc(world, "Alter Name")
+    r = client.post("/api/vendors/reassign-names", json={"assignments": [{"name": "Alter Name", "target_id": 99999}]})
+    assert r.status_code == 404
+    world.db.expire_all()
+    assert d.extraction.vendor_id == "Alter Name"
