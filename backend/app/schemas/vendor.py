@@ -78,3 +78,36 @@ class VendorMergeResult(BaseModel):
     merged_ids: list[int]
     moved_documents: int
     moved_bank_accounts: int
+
+
+class OrphanSuggestion(BaseModel):
+    vendor_id: int
+    vendor_name: str
+    reason: str
+    confidence: str               # high | medium | low
+    ambiguous: bool = False       # mehrere gleich gute Kandidaten
+
+
+class OrphanName(BaseModel):
+    name: str
+    document_count: int
+    suggestion: OrphanSuggestion | None = None
+
+
+class OrphanNamesRead(BaseModel):
+    total: int                    # alle verwaisten Namen (orphans enthält die häufigsten)
+    orphans: list[OrphanName]
+
+
+class OrphanAssignment(BaseModel):
+    name: str
+    target_id: int
+
+
+class OrphanReassignRequest(BaseModel):
+    assignments: list[OrphanAssignment] = Field(min_length=1)
+
+
+class OrphanReassignResult(BaseModel):
+    moved_documents: int
+    run_id: int | None = None

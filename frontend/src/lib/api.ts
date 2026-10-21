@@ -1005,7 +1005,19 @@ export interface DuplicateSearchOptions {
   maxKeyShare: number;           // Nummern, die bei mehr Lieferanten vorkommen, ignorieren
 }
 
+export interface OrphanName {
+  name: string;
+  document_count: number;
+  suggestion: { vendor_id: number; vendor_name: string; reason: string; confidence: "high" | "medium" | "low"; ambiguous: boolean } | null;
+}
+
 export const vendorsApi = {
+  /** Belegnamen ohne Lieferant (z. B. nach früherem Zusammenführen) mit Vorschlag — verändert nichts */
+  orphanNames: () =>
+    apiClient.get<{ total: number; orphans: OrphanName[] }>("/api/vendors/orphan-names").then((r) => r.data),
+  /** Bestätigte Zuordnungen umschreiben (protokolliert, rückgängig machbar) */
+  reassignNames: (assignments: { name: string; target_id: number }[]) =>
+    apiClient.post<{ moved_documents: number; run_id: number | null }>("/api/vendors/reassign-names", { assignments }).then((r) => r.data),
   /** Dublettensuche (IBAN, USt-IdNr., Steuernummer, Name) — verändert nichts */
   duplicateGroups: (opts?: DuplicateSearchOptions) =>
     apiClient

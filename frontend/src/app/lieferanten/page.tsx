@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import MergeModal from "@/components/suppliers/MergeModal";
 import CompareModal from "@/components/suppliers/CompareModal";
+import OrphanModal from "@/components/suppliers/OrphanModal";
 import {
   DuplicateGroup, DuplicateSearchOptions, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount, WorkflowListItem,
   vendorsApi, workflowsApi, extractApiError,
@@ -114,6 +115,7 @@ export default function LieferantenPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [dupeLoading, setDupeLoading] = useState(false);
   const [showDupeOptions, setShowDupeOptions] = useState(false);
+  const [showOrphans, setShowOrphans] = useState(false);
   const [dupeOpts, setDupeOpts] = useState<DuplicateSearchOptions>({
     criteria: ["iban", "vat_id", "tax_number", "name", "name_similar"],
     nameCheck: true, minNameSimilarity: 0.5, similarity: 0.88, maxKeyShare: 10,
@@ -206,6 +208,13 @@ export default function LieferantenPage() {
             className="rounded border border-amber-400 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50"
           >
             ⚙ Suchoptionen
+          </button>
+          <button
+            onClick={() => setShowOrphans(true)}
+            data-testid="orphans-open"
+            className="rounded border border-blue-400 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
+          >
+            Verwaiste Belege prüfen
           </button>
           <button
             onClick={handleFindDuplicates}
@@ -492,6 +501,14 @@ export default function LieferantenPage() {
           suppliers={compareVendors}
           onClose={() => setCompareVendors(null)}
           onMerge={(sup) => { setCompareVendors(null); setMergeVendors(sup); }}
+        />
+      )}
+
+      {showOrphans && (
+        <OrphanModal
+          vendors={vendors}
+          onClose={() => setShowOrphans(false)}
+          onDone={async (msg) => { setShowOrphans(false); setSuccessMsg(msg); await load(); }}
         />
       )}
 
