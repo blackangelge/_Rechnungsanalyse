@@ -1287,6 +1287,7 @@ export interface ValidationBackfillState {
   auto_correct?: boolean;
   normalize_units?: boolean;
   restore_originals?: boolean;
+  fill_prices?: boolean;
   run_id?: number;
   changed_rows?: number;
   changed_fields?: number;
@@ -1304,11 +1305,11 @@ export interface ValidationBackfillState {
 }
 
 export const validationBackfillApi = {
-  status: (normalizeUnits = false, restoreOriginals = false) =>
+  status: (normalizeUnits = false, restoreOriginals = false, fillPrices = false) =>
     apiClient
-      .get<ValidationBackfillState>("/api/validation-backfill/", { params: { normalize_units: normalizeUnits, restore_originals: restoreOriginals } })
+      .get<ValidationBackfillState>("/api/validation-backfill/", { params: { normalize_units: normalizeUnits, restore_originals: restoreOriginals, fill_prices: fillPrices } })
       .then((r) => r.data),
-  start: (opts: { dry_run: boolean; auto_correct: boolean; normalize_units?: boolean; restore_originals?: boolean }) =>
+  start: (opts: { dry_run: boolean; auto_correct: boolean; normalize_units?: boolean; restore_originals?: boolean; fill_prices?: boolean }) =>
     apiClient.post<ValidationBackfillState>("/api/validation-backfill/", opts).then((r) => r.data),
   cancel: () =>
     apiClient.post<{ cancelled: boolean }>("/api/validation-backfill/cancel").then((r) => r.data),

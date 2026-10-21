@@ -671,6 +671,7 @@ nach (125.000 Belege à 300/h KI-Analyse wären > 2 Wochen; die Nachrüstung sch
   Ein unterbrochener oder abgebrochener Lauf wird deshalb einfach neu gestartet.
 - Hintergrund-Thread in Blöcken à 200 (Keyset über die Extraktions-ID), Fortschritt im Speicher (ein Lauf gleichzeitig, sonst HTTP 409), Commit je Block,
   ein defekter Beleg stoppt den Lauf nicht (Fehlerzähler + erste 20 Meldungen). `dry_run` rechnet alles, verwirft aber die Änderungen.
+- **Modus „Gesamtpreise ergänzen“** (`fill_prices`, `fill_prices_extraction`): für Belege, die trotz vorhandenem Prüfstatus leere `order_positions.total_price` haben (Analyse zwischen Einführung der Prüfung und Migration/Fix). Betrifft alle fertigen Belege mit mindestens einer Position ohne Gesamtpreis; trägt NUR fehlende Werte (+ fehlendes Netto/Steuer) aus `raw_response → positionen[i].gesamtpreis` ein (auch „1.234,56 €“), rechnet nichts, ruft keine KI auf, ändert keinen Prüfstatus, vorhandene Werte bleiben. Protokolliert im Änderungsprotokoll (`backfill_fill_prices`, rückgängig). Fehlt der Wert in der KI-Antwort, bleibt er leer (kein Menge × Preis).
 - Endpunkte: `GET /api/validation-backfill` (Stand + Anzahl offener Belege), `POST` `{dry_run, auto_correct, batch_ids?}`, `POST /cancel`.
 - Frontend: Karte „Prüfung für den Altbestand nachrüsten" in Einstellungen → Automatisierung (Vorschau, Start, Fortschrittsbalken, Ergebnis je Status).
 
