@@ -85,7 +85,8 @@ def _export_one_batch(batch_id: int) -> None:
     from app.routers.imports import (
         _build_export_excel,
         _get_export_config_fields,
-        _query_batch_documents,
+        _count_documents,
+        _iter_documents,
     )
 
     db = SessionLocal()
@@ -94,9 +95,10 @@ def _export_one_batch(batch_id: int) -> None:
         if batch is None:
             return
 
-        docs = _query_batch_documents(db, batch.id, since=batch.last_exported_at)
+        doc_count = _count_documents(db, batch.id, since=batch.last_exported_at)
 
-        if docs:
+        if doc_count:
+            docs = _iter_documents(db, [batch.id], since=batch.last_exported_at)
             invoice_fields, position_fields = _get_export_config_fields(db)
             excel_bytes = _build_export_excel(batch, docs, invoice_fields, position_fields)
 
@@ -110,7 +112,7 @@ def _export_one_batch(batch_id: int) -> None:
             file_path.write_bytes(excel_bytes)
             log.info(
                 "Batch #%d: automatischer Export geschrieben (%s, %d Dokument(e))",
-                batch.id, file_path, len(docs),
+                batch.id, file_path, doc_count,
             )
         else:
             log.info("Batch #%d: automatischer Export übersprungen (keine neuen Dokumente)", batch.id)

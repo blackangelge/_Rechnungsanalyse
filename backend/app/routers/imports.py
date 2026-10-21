@@ -353,13 +353,7 @@ def export_batches_excel(
         raise HTTPException(
             status_code=404, detail="Import(s) nicht gefunden: " + ", ".join(f"#{i}" for i in missing)
         )
-    docs = (
-        db.query(_Doc)
-        .options(_jl(_Doc.extraction), _jl(_Doc.order_positions))
-        .filter(_Doc.batch_id.in_(ids), _Doc.soft_deleted == False)  # noqa: E712
-        .order_by(_Doc.batch_id, _Doc.id)
-        .all()
-    )
+    docs = _iter_documents(db, sorted(b.id for b in batches))
     invoice_fields, position_fields = _get_export_config_fields(db)
     excel_bytes = _build_export_excel(
         batches[0], docs, invoice_fields, position_fields, batches=batches if len(batches) > 1 else None
@@ -720,6 +714,43 @@ def _get_export_config_fields(db: Session) -> tuple[list[str], list[str]]:
     return invoice_fields, position_fields
 
 
+def _iter_documents(db: Session, batch_ids: list[int], since=None, chunk: int = 300):
+    """
+    Liefert die nicht-gelöschten Dokumente der Imports BLOCKWEISE (je Import nach ID; je Block Extraktion + Positionen),
+    gibt nach jedem Block den Speicher frei und hält so den Verbrauch unabhängig von der Importgröße klein.
+    `since` wie bei `_query_batch_documents`.
+    """
+    from sqlalchemy.orm import joinedload as _jl
+    from app.models.document import Document as _Doc
+
+    for bid in batch_ids:
+        last = 0
+        while True:
+            q = (
+                db.query(_Doc)
+                .options(_jl(_Doc.extraction), _jl(_Doc.order_positions))
+                .filter(_Doc.batch_id == bid, _Doc.soft_deleted == False, _Doc.id > last)  # noqa: E712
+            )
+            if since is not None:
+                q = q.filter(_Doc.status == "done", _Doc.updated_at > since)
+            docs = q.order_by(_Doc.id).limit(chunk).all()
+            if not docs:
+                break
+            last = docs[-1].id
+            yield from docs
+            db.expunge_all()
+
+
+def _count_documents(db: Session, batch_id: int, since=None) -> int:
+    from sqlalchemy import func as _func
+    from app.models.document import Document as _Doc
+
+    q = db.query(_func.count(_Doc.id)).filter(_Doc.batch_id == batch_id, _Doc.soft_deleted == False)  # noqa: E712
+    if since is not None:
+        q = q.filter(_Doc.status == "done", _Doc.updated_at > since)
+    return q.scalar() or 0
+
+
 def _query_batch_documents(db: Session, batch_id: int, since=None) -> list:
     """
     Lädt alle nicht-gelöschten Dokumente eines Batches (inkl. Extraktion + Positionen).
@@ -778,7 +809,7 @@ def export_batch_excel(
     if batch is None:
         raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
 
-    docs = _query_batch_documents(db, batch_id)
+    docs = _iter_documents(db, [batch_id])
 
     if date_from or date_to:
         local_tz = ZoneInfo(_settings.timezone)
@@ -797,7 +828,7 @@ def export_batch_excel(
             if date_to and d > date_to:
                 return False
             return True
-        docs = [d for d in docs if _in_date_range(d)]
+        docs = (d for d in docs if _in_date_range(d))
 
     invoice_fields, position_fields = _get_export_config_fields(db)
     excel_bytes = _build_export_excel(batch, docs, invoice_fields, position_fields)
@@ -832,7 +863,7 @@ def export_batch_excel_incremental(batch_id: int, db: Session = Depends(get_db))
     if batch is None:
         raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
 
-    docs = _query_batch_documents(db, batch_id, since=batch.last_exported_at)
+    docs = _iter_documents(db, [batch_id], since=batch.last_exported_at)
     invoice_fields, position_fields = _get_export_config_fields(db)
     excel_bytes = _build_export_excel(batch, docs, invoice_fields, position_fields)
 
@@ -869,6 +900,7 @@ def _build_export_excel(
     from zoneinfo import ZoneInfo
 
     from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -877,7 +909,9 @@ def _build_export_excel(
 
     _local_tz = ZoneInfo(_settings.timezone)
 
-    wb = Workbook()
+    # write_only: Zeilen werden direkt in eine temporäre Datei geschrieben statt als Zell-Objekte im Speicher gehalten
+    # (große Imports mit 100.000en Positionen brauchten sonst mehrere GB RAM → Absturz/Zeitüberschreitung)
+    wb = Workbook(write_only=True)
 
     # ── Styles ────────────────────────────────────────────────────────────────
     hdr_font  = Font(name="Arial", size=10, bold=True, color="FFFFFF")
@@ -893,13 +927,15 @@ def _build_export_excel(
     fmt_date  = 'DD.MM.YYYY'
     fmt_dt    = 'DD.MM.YYYY HH:MM'
 
-    def _header_row(ws, headers: list[str], row: int = 1):
-        for c, h in enumerate(headers, 1):
-            cell = ws.cell(row=row, column=c, value=h)
+    def _header_row(ws, headers: list[str]):
+        cells = []
+        for h in headers:
+            cell = WriteOnlyCell(ws, value=h)
             cell.font = hdr_font
             cell.fill = hdr_fill
             cell.alignment = hdr_align
-        ws.row_dimensions[row].height = 28
+            cells.append(cell)
+        ws.append(cells)
 
     def _set_widths(ws, widths: list[int]):
         for i, w in enumerate(widths, 1):
@@ -1032,80 +1068,72 @@ def _build_export_excel(
         inv_defs = inv_defs + [("import", "Import", lambda d, e, raw: _import_label.get(d.batch_id), None, 26)]
         pos_defs = pos_defs + [("import", "Import", lambda d, e, p, tm: _import_label.get(d.batch_id), None, 26)]
 
-    # ── Sheet 1: Rechnungen ───────────────────────────────────────────────────
-    ws1 = wb.active
-    ws1.title = "Rechnungen"
+    # ── Blätter anlegen (Spaltenbreiten/Fixierung müssen im write_only-Modus VOR den Zeilen gesetzt werden) ──
+    ws1 = wb.create_sheet("Rechnungen")
+    ws2 = wb.create_sheet("Positionen")
+    _set_widths(ws1, [d[4] for d in inv_defs])
+    _set_widths(ws2, [d[4] for d in pos_defs])
+    ws1.freeze_panes = "A3"
+    ws2.freeze_panes = "A2"
 
-    num_cols = max(len(inv_defs), 1)
-    ws1.merge_cells(f"A1:{get_column_letter(num_cols)}1")
-    ws1["A1"] = (
-        f"Export: {len(batches)} Imports" if batches and len(batches) > 1
-        else f"Export: {batch.company_name} {batch.year}"
+    title = WriteOnlyCell(
+        ws1,
+        value=(f"Export: {len(batches)} Imports" if batches and len(batches) > 1 else f"Export: {batch.company_name} {batch.year}"),
     )
-    ws1["A1"].font = Font(name="Arial", size=13, bold=True)
-    ws1["A1"].alignment = Alignment(vertical="center")
-    ws1.row_dimensions[1].height = 24
+    title.font = Font(name="Arial", size=13, bold=True)
+    ws1.append([title])
+    _header_row(ws1, [d[1] for d in inv_defs])
+    _header_row(ws2, [d[1] for d in pos_defs])
 
-    _header_row(ws1, [d[1] for d in inv_defs], row=2)
+    def _styled(ws, val, fmt, fill):
+        cell = WriteOnlyCell(ws, value=val)
+        cell.font = data_font
+        cell.fill = fill
+        if fmt == "eur":          cell.number_format = fmt_eur
+        elif fmt == "eur4":       cell.number_format = fmt_eur4
+        elif fmt == "pct":        cell.number_format = fmt_pct
+        elif fmt == "date":       cell.number_format = fmt_date
+        elif fmt == "datetime":   cell.number_format = fmt_dt
+        elif fmt == "center":     cell.alignment = center
+        return cell
 
-    for r, doc in enumerate(docs, start=3):
-        ex   = doc.extraction
-        fill = _row_fill(r)
-        raw  = _parse_raw(ex.raw_response if ex else None)
+    # ── Ein Durchlauf über die Belege (docs darf ein Generator sein) schreibt beide Blätter ──
+    r1, r2 = 3, 2
+    for doc in docs:
+        ex  = doc.extraction
+        raw = _parse_raw(ex.raw_response if ex else None)
 
-        for c, (key, header, val_fn, fmt, width) in enumerate(inv_defs, 1):
+        fill = _row_fill(r1)
+        row = []
+        for key, header, val_fn, fmt, width in inv_defs:
             try:
                 val = _cell(val_fn(doc, ex, raw))
             except Exception:   # ein unbrauchbarer Wert darf nie den ganzen Export kippen
                 logger.warning("Export: Beleg %s, Spalte %s nicht lesbar", doc.id, key, exc_info=True)
                 val = None
-            cell = ws1.cell(row=r, column=c, value=val)
-            cell.font = data_font
-            cell.fill = fill
-            if fmt == "eur":          cell.number_format = fmt_eur
-            elif fmt == "pct":        cell.number_format = fmt_pct
-            elif fmt == "date":       cell.number_format = fmt_date
-            elif fmt == "datetime":   cell.number_format = fmt_dt
-            elif fmt == "center":     cell.alignment = center
+            row.append(_styled(ws1, val, fmt, fill))
+        ws1.append(row)
+        r1 += 1
 
-    _set_widths(ws1, [d[4] for d in inv_defs])
-    ws1.freeze_panes = "A3"
-
-    # ── Sheet 2: Positionen ───────────────────────────────────────────────────
-    ws2 = wb.create_sheet("Positionen")
-    _header_row(ws2, [d[1] for d in pos_defs])
-
-    r = 2
-    for doc in docs:
-        ex  = doc.extraction
-        raw = _parse_raw(ex.raw_response if ex else None)
         raw_pos_list = raw.get("positionen") if isinstance(raw.get("positionen"), list) else []
         tax_map = {i: _f(p.get("steuersatz")) for i, p in enumerate(raw_pos_list) if isinstance(p, dict)}
-
         for pos in doc.order_positions:
-            fill = _row_fill(r)
-            for c, (key, header, val_fn, fmt, width) in enumerate(pos_defs, 1):
+            fill = _row_fill(r2)
+            row = []
+            for key, header, val_fn, fmt, width in pos_defs:
                 try:
                     val = _cell(val_fn(doc, ex, pos, tax_map))
                 except Exception:
                     logger.warning("Export: Beleg %s, Position %s, Spalte %s nicht lesbar", doc.id, pos.id, key, exc_info=True)
                     val = None
-                cell = ws2.cell(row=r, column=c, value=val)
-                cell.font = data_font
-                cell.fill = fill
-                if fmt == "eur":      cell.number_format = fmt_eur
-                elif fmt == "eur4":   cell.number_format = fmt_eur4
-                elif fmt == "pct":    cell.number_format = fmt_pct
-                elif fmt == "center": cell.alignment = center
-            r += 1
+                row.append(_styled(ws2, val, fmt, fill))
+            ws2.append(row)
+            r2 += 1
 
-    if r == 2:
-        ws2.cell(row=2, column=1, value="Keine Positionen vorhanden").font = Font(
-            name="Arial", size=10, color="888888", italic=True
-        )
-
-    _set_widths(ws2, [d[4] for d in pos_defs])
-    ws2.freeze_panes = "A2"
+    if r2 == 2:
+        note = WriteOnlyCell(ws2, value="Keine Positionen vorhanden")
+        note.font = Font(name="Arial", size=10, color="888888", italic=True)
+        ws2.append([note])
 
     # ── Bytes zurückgeben ─────────────────────────────────────────────────────
     buf = io.BytesIO()
