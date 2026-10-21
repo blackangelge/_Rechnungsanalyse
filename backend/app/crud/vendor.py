@@ -149,10 +149,16 @@ def delete(db: Session, vendor_id: int) -> bool:
     return True
 
 
+def name_key(name: str | None) -> str:
+    """Vergleichsschlüssel für Lieferantennamen: ohne Groß/Klein und mit vereinheitlichten Leerzeichen."""
+    return " ".join((name or "").split()).casefold()
+
+
 def get_document_counts(db: Session) -> dict[str, int]:
     """
-    Anzahl nicht gelöschter Belege je Lieferantenname. Die Verknüpfung Beleg ↔ Lieferant läuft in
-    diesem System über den extrahierten Namen (invoice_extractions.vendor_id), nicht über einen Fremdschlüssel.
+    Anzahl nicht gelöschter Belege je Lieferant, Schlüssel = `name_key(name)`. Die Verknüpfung Beleg ↔ Lieferant
+    läuft in diesem System über den extrahierten Namen (invoice_extractions.vendor_id), nicht über einen Fremdschlüssel;
+    Schreibvarianten (Groß/Klein, Leerzeichen) zählen zum selben Lieferanten. Abfrage mit `counts.get(name_key(v.name), 0)`.
     """
     rows = (
         db.query(InvoiceExtraction.vendor_id, func.count(InvoiceExtraction.id))
@@ -161,7 +167,11 @@ def get_document_counts(db: Session) -> dict[str, int]:
         .group_by(InvoiceExtraction.vendor_id)
         .all()
     )
-    return {name: n for name, n in rows}
+    counts: dict[str, int] = {}
+    for name, n in rows:
+        key = name_key(name)
+        counts[key] = counts.get(key, 0) + n
+    return counts
 
 
 # ─── Zusammenführen ───────────────────────────────────────────────────────────
@@ -264,12 +274,17 @@ def merge(
 
         moved = 0
         if update_document_names:                           # 4) Belege dem Ziel zuordnen
-            moved = (
-                db.query(InvoiceExtraction)
-                .filter(InvoiceExtraction.vendor_id.in_(old_names))
-                .filter(InvoiceExtraction.vendor_id != target.name)
-                .update({InvoiceExtraction.vendor_id: target.name}, synchronize_session=False)
-            )
+            old_keys = {name_key(n) for n in old_names}
+            variants = [                                     # exakte Namen UND Schreibvarianten (Groß/Klein, Leerzeichen)
+                n for (n,) in db.query(InvoiceExtraction.vendor_id).filter(InvoiceExtraction.vendor_id.isnot(None)).distinct()
+                if n != target.name and name_key(n) in old_keys
+            ]
+            for i in range(0, len(variants), 500):
+                moved += (
+                    db.query(InvoiceExtraction)
+                    .filter(InvoiceExtraction.vendor_id.in_(variants[i:i + 500]))
+                    .update({InvoiceExtraction.vendor_id: target.name}, synchronize_session=False)
+                )
         for s in sources:
             db.delete(s)
         db.commit()

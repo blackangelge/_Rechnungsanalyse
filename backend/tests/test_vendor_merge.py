@@ -186,3 +186,34 @@ def test_merge_is_atomic_on_failure(world, monkeypatch):
 def test_vendor_list_has_document_counts(client, world):
     counts = {v["name"]: v["document_count"] for v in client.get("/api/vendors").json()}
     assert counts == {"ACME GmbH": 2, "Acme GmbH & Co. KG": 1, "Fremd AG": 1}
+
+
+# ─── Namensvarianten: Belege müssen trotzdem mitwandern ─────────────────────────
+
+def _variant_docs(w):
+    def doc(name):
+        d = crud.document.create(w.db, w.docs["a1"].batch_id, f"v{len(w.db.new)}{name[:3]}.pdf", 1)
+        crud.document.save_extraction(w.db, d.id, {"supplier_name": name}, [], "{}")
+        return d
+    return {"case": doc("acme gmbh"), "space": doc("  ACME   GmbH "), "b_case": doc("ACME GMBH & CO. KG")}
+
+
+def test_document_counts_ignore_case_and_whitespace(client, world):
+    _variant_docs(world)
+    by_name = {v["name"]: v["document_count"] for v in client.get("/api/vendors").json()}
+    assert by_name["ACME GmbH"] == 4            # 2 exakt + 2 Schreibvarianten
+    assert by_name["Acme GmbH & Co. KG"] == 2   # 1 exakt + 1 Variante
+
+
+def test_merge_moves_documents_with_name_variants(client, world):
+    variants = _variant_docs(world)
+    r = client.post("/api/vendors/merge", json={"target_id": world.a.id, "source_ids": [world.b.id]})
+    assert r.status_code == 200, r.text
+    world.db.expire_all()
+    for key in ("a1", "a2", "b1"):
+        assert world.docs[key].extraction.vendor_id == "ACME GmbH"
+    for d in variants.values():
+        assert d.extraction.vendor_id == "ACME GmbH"
+    assert world.docs["c1"].extraction.vendor_id == "Fremd AG"
+    by_name = {v["name"]: v["document_count"] for v in client.get("/api/vendors").json()}
+    assert by_name["ACME GmbH"] == 6
