@@ -191,3 +191,61 @@ def test_parse_action_variants():
     assert p('<think>x {"a":1}</think>{"tool":"final","answer":"ok {x}"}')["answer"] == "ok {x}"
     assert p('Text davor {"tool":"sql","query":"SELECT \\"a\\" FROM t"} danach')["tool"] == "sql"
     assert p("kein json") is None
+
+
+# ─── Assistent: Belege erneut zur KI-Analyse vorschlagen ─────────────────────
+
+def _more_docs(db, data, n=3):
+    out = []
+    for i in range(n):
+        d = crud.document.create(db, data.batch_id, f"b{i}.pdf", 1)
+        d.status = "done"
+        out.append(d)
+    db.commit()
+    return out
+
+
+def test_assistant_reanalysis_proposal_does_not_start_anything(client, db, data, monkeypatch):
+    from app.models.workflow_task import WorkflowTask
+    docs = _more_docs(db, data)
+    docs[2].status = "processing"          # läuft gerade → nicht geeignet
+    db.commit()
+    _scripted(monkeypatch, [
+        json.dumps({"tool": "propose_reanalysis", "query": "SELECT d.id FROM documents d WHERE d.original_filename LIKE 'b%'", "reason": "neu lesen"}),
+        '{"tool": "final", "answer": "Vorschlag erstellt."}',
+    ])
+    body = client.post("/api/db-assistant/chat", json={"messages": [{"role": "user", "content": "Sende b* erneut"}]}).json()
+    prop = body["reanalysis"][0]
+    assert prop["count"] == 2 and prop["skipped"] == 1 and sorted(prop["document_ids"]) == sorted([docs[0].id, docs[1].id])
+    assert prop["sample"][0]["filename"].startswith("b")
+    assert db.query(WorkflowTask).count() == 0                    # nur ein Vorschlag, nichts eingereiht
+
+
+def test_assistant_reanalysis_query_needs_single_column(client, db, data, monkeypatch):
+    seen = _scripted(monkeypatch, [
+        '{"tool": "propose_reanalysis", "query": "SELECT id, status FROM documents"}',
+        '{"tool": "final", "answer": "ok"}',
+    ])
+    body = client.post("/api/db-assistant/chat", json={"messages": [{"role": "user", "content": "x"}]}).json()
+    assert body["reanalysis"] == []
+    assert any("EINE Spalte" in m["content"] for m in seen[1] if m["role"] == "user")
+
+
+def test_apply_reanalysis_enqueues_only_eligible(client, db, data):
+    from app.models.workflow_task import WorkflowTask
+    docs = _more_docs(db, data)
+    docs[2].status = "processing"
+    docs[1].soft_deleted = True
+    db.commit()
+    r = client.post("/api/db-assistant/apply-reanalysis",
+                    json={"document_ids": [docs[0].id, docs[1].id, docs[2].id, 99999], "reason": "Test"})
+    assert r.status_code == 200, r.text
+    assert r.json()["eligible"] == 1 and r.json()["enqueued"] == 1
+    assert [t.payload["document_id"] for t in db.query(WorkflowTask).all()] == [docs[0].id]
+    # (Doppel-Einreihung verhindert enqueue_documents per PostgreSQL-JSONB-Abfrage — in SQLite nicht prüfbar)
+
+
+def test_apply_reanalysis_rejects_nothing_eligible_and_too_many(client, db, data):
+    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": [99999]}).status_code == 400
+    too_many = list(range(1, db_assistant_service.MAX_REANALYSIS + 2))
+    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": too_many}).status_code == 400
