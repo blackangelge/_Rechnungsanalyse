@@ -167,6 +167,8 @@ function RowEditor({
 
 export default function TableBrowser() {
   const [tables, setTables] = useState<DbTable[]>([]);
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [tablesError, setTablesError] = useState<string | null>(null);
   const [current, setCurrent] = useState<string>("");
   const [rows, setRows] = useState<DbRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -188,12 +190,16 @@ export default function TableBrowser() {
   const table = tables.find((t) => t.name === current);
 
   const loadTables = useCallback(async () => {
+    setTablesLoading(true);
+    setTablesError(null);
     try {
       const t = await dbApi.tables();
       setTables(t);
       setCurrent((c) => c || (t.find((x) => x.name === "order_positions") ? "order_positions" : t[0]?.name ?? ""));
     } catch (e) {
-      setError(extractApiError(e, "Tabellen konnten nicht geladen werden"));
+      setTablesError(extractApiError(e, "Tabellen konnten nicht geladen werden"));
+    } finally {
+      setTablesLoading(false);
     }
   }, []);
   useEffect(() => { loadTables(); }, [loadTables]);
@@ -249,6 +255,16 @@ export default function TableBrowser() {
       {/* Tabellenliste */}
       <aside className="rounded-lg border bg-white p-2 shadow-sm" data-testid="table-list">
         <div className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-gray-400">Tabellen</div>
+        {tablesLoading && tables.length === 0 && <p className="px-2 py-1 text-xs text-gray-400">Lade Tabellen…</p>}
+        {tablesError && (
+          <div className="m-1 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700" data-testid="tables-error">
+            {tablesError}
+            <button onClick={loadTables} className="ml-2 font-medium underline">Erneut versuchen</button>
+          </div>
+        )}
+        {!tablesLoading && !tablesError && tables.length === 0 && (
+          <p className="px-2 py-1 text-xs text-gray-500">Keine Tabellen gefunden.</p>
+        )}
         <ul>
           {tables.map((t) => (
             <li key={t.name}>

@@ -1,0 +1,13 @@
+import { chromium } from "/opt/node-tools/node_modules/playwright/index.mjs";
+const b = await chromium.launch();
+const pg = await b.newPage();
+const logs = [];
+pg.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
+pg.on("pageerror", (e) => logs.push(`PAGEERROR ${e.message}`));
+pg.on("response", (r) => { if (r.url().includes("/api/")) logs.push(`${r.status()} ${r.url()}`); });
+await pg.goto("http://localhost:3100/daten", { waitUntil: "networkidle" });
+await pg.waitForTimeout(4000);
+console.log((await pg.innerText("body")).slice(0, 700));
+console.log(logs.slice(0, 25).join("\n"));
+await pg.screenshot({ path: "/tmp/daten.png", fullPage: true });
+await b.close();

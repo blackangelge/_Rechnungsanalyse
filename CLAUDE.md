@@ -844,7 +844,7 @@ Ganze Imports lassen sich ausblenden, wenn sie gerade nicht wichtig sind — **n
 
 `GET /api/imports/export?ids=1&ids=2` — mehrere Imports in **eine** Datei (Dashboard: Imports ankreuzen → „↓ Excel exportieren"; zusätzlich Excel-Link je Zeile).
 Gleiche Spaltenkonfiguration wie der Einzelexport (`ExportConfig`); bei ≥ 2 Imports kommt am Ende beider Sheets die Spalte **„Import"** (`Firma Jahr (#id)`) dazu.
-Die Route muss **vor** `/{batch_id}` stehen. Ausgeblendete Imports sind exportierbar. **Der Export ist gegen auffällige KI-Daten abgesichert** (`_build_export_excel`: `_cell()` entfernt Steuerzeichen/kürzt, Listen/Objekte werden Text; `_f()`/`_nested()` werfen nie; ein unlesbarer Wert wird leer + Log-Warnung statt HTTP 500; Dateiname per `_content_disposition()` mit RFC-5987 für Sonderzeichen im Firmennamen; `tests/test_export_robust.py`). Frontend: Excel-Links laufen über `lib/download.ts::downloadLinkHandler` und zeigen Serverfehler als Meldung statt eine JSON-Datei zu speichern. Laufzeit: ≈ 5–8 ms je Beleg (10.000 Belege ≈ 50–80 s) —
+Die Route muss **vor** `/{batch_id}` stehen. Ausgeblendete Imports sind exportierbar. **Der Export ist gegen auffällige KI-Daten abgesichert** (`_build_export_excel`: `_cell()` entfernt Steuerzeichen/kürzt, Listen/Objekte werden Text; `_f()`/`_nested()` werfen nie; ein unlesbarer Wert wird leer + Log-Warnung statt HTTP 500; Dateiname per `_content_disposition()` mit RFC-5987 für Sonderzeichen im Firmennamen; `tests/test_export_robust.py`). Frontend: Excel-Links laufen über `lib/download.ts::downloadLinkHandler` und zeigen Serverfehler als Meldung statt eine JSON-Datei zu speichern. **Speicher/Laufzeit:** `_build_export_excel` schreibt per openpyxl-`write_only`-Modus in **einem** Durchlauf über einen Beleg-Generator (`_iter_documents`: Blöcke à 300 Belege inkl. Positionen, danach `expunge_all`) — der Verbrauch ist unabhängig von der Importgröße (gemessen: 30.000 Belege / 390.000 Positionen ≈ 170 MB statt > 4 GB; die frühere Variante hielt alle ORM-Objekte und Zellen im Speicher und scheiterte bei sehr großen Imports mit Zeitüberschreitung/Speicherfehler). Im write_only-Modus gibt es keine verbundene Titelzelle und keine Zeilenhöhen. Laufzeit: ≈ 5–8 ms je Beleg (10.000 Belege ≈ 50–80 s) —
 der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
 
 ### Lieferanten: Dublettensuche und Zusammenführen (`services/supplier_dedup.py`, `crud/vendor.py::merge`)
@@ -1024,9 +1024,11 @@ Lädt alle **nicht-soft-gelöschten** Dokumente des Batches via `joinedload` fü
 |---|---|
 | Beleg-Nr., Rechnungsnr., Lieferant, Pos. | `Document` / `InvoiceExtraction` |
 | Artikelbezeichnung, Artikelnummer, Menge, Einheit | `OrderPosition` |
-| Einzelpreis (€), Gesamtpreis (€) | `OrderPosition` |
+| Einzelpreis (€), Gesamtpreis (€) | `OrderPosition.unit_price_netto` / `OrderPosition.total_price` (gespeicherte Werte — **keine Berechnung** wie Menge × Preis; früher war „Gesamtpreis“ fälschlich auf `unit_price_brutto` gemappt, das nie befüllt wird → leere Spalte) |
 | Steuersatz (%) | `raw_response → positionen[i].steuersatz` (Index = `position_index`) |
 | Nachlass | `OrderPosition` |
+
+**Grundsatz Export:** nur gespeicherte Werte, keine Excel-Formeln, keine Berechnung. Bewusste Darstellungs-Umwandlungen: Positionsnummer = `position_index + 1`; „Importiert am“ in lokaler Zeitzone; Seiten `0` → leer; Anschrift/USt-IdNr./Bank/Steuersatz/Skonto-% kommen aus dem gespeicherten KI-JSON (`raw_response`), weil es dafür keine Spalten gibt. Einzelpreise werden mit bis zu 4 Nachkommastellen angezeigt.
 
 **Wichtig:** Straße/PLZ/Ort sind nur befüllt wenn ein `Supplier`-Datensatz existiert
 (erfordert KI-Analyse). Steuersatz und Skonto-Details nur im neuen verschachtelten
