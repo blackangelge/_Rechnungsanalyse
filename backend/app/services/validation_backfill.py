@@ -241,6 +241,24 @@ def _empty_state(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None,
     }
 
 
+def analyze_tables() -> bool:
+    """
+    Aktualisiert die Planer-Statistik (`ANALYZE`) der großen Tabellen, damit die Indizes nach einem
+    Nachrüst-Lauf genutzt werden. Nur PostgreSQL; Fehler sind unkritisch (Autovacuum holt es sonst nach).
+    """
+    from app.database import engine
+    if engine.dialect.name != "postgresql":
+        return False
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            for table in ("order_positions", "invoice_extractions", "documents"):
+                conn.exec_driver_sql(f"ANALYZE {table}")
+        return True
+    except Exception:                                        # noqa: BLE001
+        logger.warning("ANALYZE nach der Nachrüstung nicht möglich", exc_info=True)
+        return False
+
+
 def get_state() -> dict:
     with _lock:
         return json.loads(json.dumps(_state))
@@ -367,6 +385,8 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
     finally:
         if run_id:
             change_log.finish_run(run_id, changed_rows, changed_fields)
+        if not dry_run and changed_rows:
+            analyze_tables()
         with _lock:
             _state["running"] = False
             _state["changed_rows"], _state["changed_fields"] = changed_rows, changed_fields
