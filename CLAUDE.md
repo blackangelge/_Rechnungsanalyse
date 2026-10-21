@@ -824,7 +824,7 @@ Durchsucht **alle Positionen (`order_positions`) aller Belege** — paginiert, s
 - Frontend `/artikel`: Tabelle, Kennzahlen und Filter-Optionen laden **unabhängig** (Ladebalken, Skeleton-Zeilen, „Suche läuft …").
   Dropdowns (Import/Jahr/Lieferant) in Belege und Artikel folgen „Ausgeblendete Imports einbeziehen".
 - Belege mit geöffneter PDF-Vorschau: kompakte Tabelle (Firma/Jahr/Seiten/Betrag/KI ausgeblendet, Aktionen ohne Umbruch).
-- Nach großen Datenänderungen (z.B. Nachrüstung) `VACUUM ANALYZE;` ausführen, damit der Planer die Indizes nutzt.
+- Nach echten Nachrüst-Läufen läuft `ANALYZE` automatisch (`validation_backfill.analyze_tables`) — auf dem NAS gibt es keinen Datenbank-Zugang.
 - **Preisfilter in der Artikelsuche** (`total_price_*`, `unit_price_*`, `quantity_*`): Migration `0014_position_price_indexes` legt B-Tree-Indizes auf diese Spalten an (vorher Vollscan → Zeitüberschreitung).
   Positionen ohne gespeicherten Gesamtpreis (`total_price IS NULL`, Altbestand vor der Plausibilitätsprüfung) finden Preisfilter nicht — `/summary` liefert `without_total_price`, die Oberfläche zeigt dann einen Hinweis mit Verweis auf die Nachrüstung.
   Ausgeblendete Imports werden ohne gewählten Import nicht durchsucht — die Seite zeigt „N ausgeblendete Imports werden nicht durchsucht · Einbeziehen“. Bei gedeckelter Trefferzahl (`X-Total-Capped`) werden die Kennzahlen nicht automatisch berechnet, sondern auf Klick.
