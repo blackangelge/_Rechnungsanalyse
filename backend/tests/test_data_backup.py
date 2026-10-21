@@ -232,3 +232,11 @@ def test_api_roundtrip_and_name_validation(world, db, dirs, sqlite_session_facto
         assert client.delete("/api/data-backup/kopie.zip").status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_restore_without_pdfs_in_backup_does_not_report_missing_files(world, db, dirs, monkeypatch):
+    name = _backup(include_pdfs=False)
+    _fresh_db(monkeypatch)
+    state = db_.restore_backup(name, mode="preserve", restore_files=True, dry_run=False, background=False)
+    assert state["error"] is None
+    assert state["result"]["files"] == {"written": 0, "existing": 0, "missing": 0} and not state["warnings"]
