@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/vendors", tags=["Lieferanten"])
 def _read(vendor, counts: dict[str, int]) -> VendorRead:
     """VendorRead inkl. Belegzähler (Verknüpfung über den Lieferantennamen)."""
     out = VendorRead.model_validate(vendor)
-    out.document_count = counts.get(vendor.name, 0)
+    out.document_count = counts.get(crud.vendor.name_key(vendor.name), 0)
     return out
 
 

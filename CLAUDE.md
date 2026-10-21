@@ -860,7 +860,7 @@ der Next.js-Rewrite-Proxy hat bereits `proxyTimeout` 920 s.
 - **Belege hängen nur über den Namen am Lieferanten** (`invoice_extractions.vendor_id` ist Text, kein Fremdschlüssel). Deshalb ist
   `update_document_names` hier standardmäßig **an**: Belege der Quellen (und des Ziels bei geändertem Namen) erhalten den endgültigen Namen,
   sonst verlieren sie die Zuordnung (Belegzähler, Workflow-Auswahl). Der Originalwortlaut bleibt in `raw_response`.
-- `VendorRead.document_count` = nicht gelöschte Belege mit diesem Namen (`crud.vendor.get_document_counts`, nur in Liste und Dublettensuche befüllt).
+- `VendorRead.document_count` = nicht gelöschte Belege mit diesem Namen (`crud.vendor.get_document_counts`, Schlüssel `name_key`: Groß/Klein und Leerzeichen egal; nur in Liste und Dublettensuche befüllt). Auch `merge` benennt Belege mit solchen Schreibvarianten um (früher nur exakt gleiche Namen → Belege „wanderten nicht mit“).
 - **Suchoptionen** (`GET /api/vendors/duplicate-groups?criteria=…&name_check=&min_name_similarity=&similarity=&max_key_share=`): gesuchte Merkmale
   einzeln wählbar; Standard `name_check=true` — IBAN/USt-IdNr./Steuernr.-Treffer verbinden nur Lieferanten mit Namensähnlichkeit ≥ 50 %
   (sonst wirft eine falsch gelesene Nummer, z.B. die des Rechnungsempfängers, fremde Lieferanten in eine Gruppe — Union-Find verkettet
