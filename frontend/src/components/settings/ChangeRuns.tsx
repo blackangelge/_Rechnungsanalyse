@@ -8,6 +8,7 @@ const KIND_LABEL: Record<string, string> = {
   backfill_rules: "Prüfung nachgerüstet",
   backfill_normalize: "Einheiten auf Tonnen",
   backfill_restore: "Originalwerte wiederhergestellt",
+  backfill_fill_prices: "Gesamtpreise ergänzt",
   browser: "Daten-Browser",
   assistant: "KI-Vorschlag freigegeben",
 };

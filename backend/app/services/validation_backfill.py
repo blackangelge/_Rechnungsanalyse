@@ -10,6 +10,9 @@ KI-Antwort (`invoice_extractions.raw_response`) rekonstruieren:
   2. die Regelprüfung (`plausibility_service.validate_invoice`, inkl. automatischer Korrektur
      eindeutiger Fehler) laufen lassen und das Ergebnis speichern
 
+Zusätzlicher Modus `fill_prices` („Gesamtpreise ergänzen“): trägt NUR fehlende Positions-Gesamtpreise (+ Netto/Steuer) aus der
+KI-Antwort ein — bei allen fertigen Belegen, auch solchen mit Prüfstatus; keine Berechnung, kein Prüfstatus.
+
 Zusätzlicher Modus `normalize_units`: rechnet bei ALLEN fertigen Belegen die Gewichtspositionen auf Tonnen um (Menge, Einheit,
 Einzelpreis je t), ohne Prüfstatus/-details anzufassen.
 
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -117,6 +121,47 @@ def backfill_extraction(
     return {"outcome": result.status, "filled_prices": filled, "corrections": len(result.corrections)}
 
 
+def _price(value) -> Decimal | None:
+    """Zahl aus der KI-Antwort lesen (auch „1.234,56 €“); nichts wird berechnet."""
+    if isinstance(value, str):
+        value = re.sub(r"[€$£¥\s]", "", value)
+    num = ai_service._num(value)
+    return _dec(num)
+
+
+def fill_prices_extraction(extraction: InvoiceExtraction, positions: list[OrderPosition]) -> int:
+    """
+    Trägt fehlende Positions-Gesamtpreise (und fehlendes Netto/Steuer) aus der gespeicherten KI-Antwort ein.
+    Es wird nichts berechnet und kein Prüfstatus verändert; bereits gespeicherte Werte bleiben unberührt.
+    Rückgabe: Anzahl ergänzter Felder.
+    """
+    raw = _parse_raw(extraction.raw_response)
+    if raw is None or (extraction.raw_response or "").startswith(_KI_ERROR_PREFIXES):
+        return 0
+    filled = 0
+    raw_pos = raw.get("positionen") if isinstance(raw.get("positionen"), list) else []
+    for pos in positions:
+        idx = pos.position_index
+        if pos.total_price is None and idx is not None and 0 <= idx < len(raw_pos) and isinstance(raw_pos[idx], dict):
+            value = _price(raw_pos[idx].get("gesamtpreis"))
+            if value is not None:
+                pos.total_price = value
+                filled += 1
+    zahlung = raw.get("zahlungsinformationen")
+    if isinstance(zahlung, dict):
+        if extraction.total_amount_netto is None:
+            value = _price(zahlung.get("gesamtbetrag_netto"))
+            if value is not None:
+                extraction.total_amount_netto = value
+                filled += 1
+        if extraction.total_tax_value is None:
+            value = _dec(ai_service._sum_tax(zahlung.get("umsatzsteuer_zusammenfassung")))
+            if value is not None:
+                extraction.total_tax_value = value
+                filled += 1
+    return filled
+
+
 def normalize_extraction(extraction: InvoiceExtraction, positions: list[OrderPosition]) -> int:
     """
     Nur Einheiten vereinheitlichen (Gewicht → t) — Prüfstatus und -details bleiben unberührt.
@@ -187,9 +232,9 @@ _state: dict = {"running": False}
 
 
 def _empty_state(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, total: int,
-                 normalize_units: bool = False, restore_originals: bool = False) -> dict:
+                 normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False) -> dict:
     return {
-        "running": True, "normalize_units": normalize_units, "restore_originals": restore_originals, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
+        "running": True, "normalize_units": normalize_units, "restore_originals": restore_originals, "fill_prices": fill_prices, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
         "total": total, "processed": 0, "filled_prices": 0, "corrections": 0,
         "outcomes": {}, "error_count": 0, "errors": [],
         "cancelled": False, "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": None,
@@ -201,7 +246,7 @@ def get_state() -> dict:
         return json.loads(json.dumps(_state))
 
 
-def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False, restore_originals: bool = False):
+def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False):
     """Fertig analysierte, nicht gelöschte Belege mit Extraktion; ohne Prüfstatus (außer im Modus „Einheiten“)."""
     q = (
         db.query(InvoiceExtraction.id)
@@ -211,26 +256,32 @@ def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool 
             Document.status == "done",
         )
     )
-    if not (normalize_units or restore_originals):
+    if fill_prices:
+        q = q.filter(
+            db.query(OrderPosition.id)
+            .filter(OrderPosition.document_id == InvoiceExtraction.document_id, OrderPosition.total_price.is_(None))
+            .exists()
+        )
+    elif not (normalize_units or restore_originals):
         q = q.filter(InvoiceExtraction.validation_status.is_(None))
     if batch_ids:
         q = q.filter(Document.batch_id.in_(batch_ids))
     return q
 
 
-def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False, restore_originals: bool = False) -> int:
+def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False) -> int:
     db = SessionLocal()
     try:
-        return _base_query(db, batch_ids, normalize_units, restore_originals).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
+        return _base_query(db, batch_ids, normalize_units, restore_originals, fill_prices).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
     finally:
         db.close()
 
 
 def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normalize_units: bool = False,
-         restore_originals: bool = False) -> None:
+         restore_originals: bool = False, fill_prices: bool = False) -> None:
     last_id = 0
     # Änderungsprotokoll: jeder echte (nicht Vorschau-)Lauf bekommt einen Vorgang mit Alt-/Neuwert je Feld → rückgängig machbar
-    kind = "backfill_restore" if restore_originals else "backfill_normalize" if normalize_units else "backfill_rules"
+    kind = "backfill_fill_prices" if fill_prices else "backfill_restore" if restore_originals else "backfill_normalize" if normalize_units else "backfill_rules"
     run_id = None
     if not dry_run:
         try:
@@ -247,7 +298,7 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
             db = SessionLocal()
             try:
                 ids = [
-                    r[0] for r in _base_query(db, batch_ids, normalize_units, restore_originals)
+                    r[0] for r in _base_query(db, batch_ids, normalize_units, restore_originals, fill_prices)
                     .filter(InvoiceExtraction.id > last_id)
                     .order_by(InvoiceExtraction.id).limit(CHUNK_SIZE).all()
                 ]
@@ -267,7 +318,10 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
                         break
                     try:
                         before = change_log.snapshot(ext, by_doc.get(ext.document_id, [])) if run_id else None
-                        if restore_originals:
+                        if fill_prices:
+                            n = fill_prices_extraction(ext, by_doc.get(ext.document_id, []))
+                            info = {"outcome": "filled" if n else "unchanged", "filled_prices": n, "corrections": 0}
+                        elif restore_originals:
                             n = restore_original_units(ext, by_doc.get(ext.document_id, []))
                             info = {"outcome": "restored" if n else "unchanged", "filled_prices": 0, "corrections": n}
                         elif normalize_units:
@@ -326,16 +380,16 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
 
 
 def start(dry_run: bool = False, auto_correct: bool = True, batch_ids: list[int] | None = None,
-          background: bool = True, normalize_units: bool = False, restore_originals: bool = False) -> dict:
+          background: bool = True, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False) -> dict:
     """Startet einen Lauf. Läuft schon einer, wird er nicht gestartet (RuntimeError)."""
-    total = count_pending(batch_ids, normalize_units, restore_originals)
+    total = count_pending(batch_ids, normalize_units, restore_originals, fill_prices)
     with _lock:
         if _state.get("running"):
             raise RuntimeError("Es läuft bereits eine Nachrüstung")
         _cancel.clear()
         _state.clear()
-        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units, restore_originals))
-    args = (dry_run, auto_correct, batch_ids, normalize_units, restore_originals)
+        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units, restore_originals, fill_prices))
+    args = (dry_run, auto_correct, batch_ids, normalize_units, restore_originals, fill_prices)
     if background:
         threading.Thread(target=_run, args=args, name="validation-backfill", daemon=True).start()
     else:
