@@ -1581,3 +1581,32 @@ export const UNIT_TYPE_LABELS: Record<string, string> = {
   stueck: "Stück", verpackung: "Verpackung", gewicht: "Gewicht", volumen: "Volumen", laenge: "Länge",
   flaeche: "Fläche", pauschal: "Pauschal", dienstleistung: "Dienstleistung", sonstige: "Sonstige",
 };
+
+// ─── Freie KI-Frage an Belege (mit Verlauf) ───────────────────────────────────
+
+export interface AiQueryField { key: string; label: string; kind: "text" | "iban" | "date" | "number" }
+export interface AiQueryHistoryItem { id: number; question: string; field_key: string | null; use_count: number; last_used_at: string | null }
+export interface AiAnswer {
+  id: number; document_id: number; question: string; field_key: string | null; answer: string | null; raw_answer: string | null;
+  valid: boolean; applied: boolean; note: string | null; old_value: string | null; change_run_id: number | null; model: string | null; created_at: string | null;
+}
+export interface AiQuestionState {
+  running: boolean; question?: string; field_key?: string | null; apply?: boolean; total?: number; processed?: number;
+  found?: number; not_found?: number; applied?: number; errors?: number; cancelled?: boolean;
+  results?: { document_id: number; answer: string | null; applied: boolean; note: string | null; change_run_id?: number | null }[];
+}
+
+export const aiQuestionsApi = {
+  fields: () => apiClient.get<AiQueryField[]>("/api/ai-questions/fields/").then((r) => r.data),
+  history: () => apiClient.get<AiQueryHistoryItem[]>("/api/ai-questions/").then((r) => r.data),
+  deleteHistory: (id: number) => apiClient.delete(`/api/ai-questions/${id}/`),
+  /** Lokale Modelle brauchen länger → kein Zeitlimit im Browser */
+  ask: (p: { document_id: number; question: string; field_key: string | null; ai_config_id?: number | null; apply: boolean }) =>
+    apiClient.post<AiAnswer>("/api/ai-questions/ask/", p, { timeout: 0 }).then((r) => r.data),
+  run: (p: { document_ids: number[]; question: string; field_key: string | null; ai_config_id?: number | null; apply: boolean }) =>
+    apiClient.post<AiQuestionState>("/api/ai-questions/run/", p).then((r) => r.data),
+  state: () => apiClient.get<AiQuestionState>("/api/ai-questions/state/").then((r) => r.data),
+  cancel: () => apiClient.post<{ cancelled: boolean }>("/api/ai-questions/cancel/").then((r) => r.data),
+  answers: (documentId: number) =>
+    apiClient.get<AiAnswer[]>("/api/ai-questions/answers/", { params: { document_id: documentId } }).then((r) => r.data),
+};

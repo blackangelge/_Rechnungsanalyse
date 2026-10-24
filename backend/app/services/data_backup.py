@@ -44,7 +44,7 @@ FORMAT_VERSION = 1
 CHUNK = 2000
 IMPORT_TABLES = [
     "import_batches", "documents", "invoice_extractions", "order_positions",
-    "document_versions", "analysis_history", "documents_token_counts",
+    "document_versions", "analysis_history", "documents_token_counts", "document_answers",
 ]
 VENDOR_TABLES = ["vendor", "vendor_bank_accounts"]
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,120}\.zip$")

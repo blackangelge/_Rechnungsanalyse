@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import Pager from "@/components/common/Pager";
 import { fetchAllPages, matchesWords } from "@/lib/loadAll";
 import AnalysisHistoryPanel from "@/components/belege/AnalysisHistoryPanel";
+import AskModal from "@/components/belege/AskModal";
 import PdfEditModal from "@/components/belege/PdfEditModal";
 import {
   DocumentDetail,
@@ -317,6 +318,7 @@ export default function BelegePage() {
   // Analyse-Workflow (leer = automatisch: Lieferant → Standard → klassisch)
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
+  const [askIds, setAskIds] = useState<number[] | null>(null);   // KI-Frage-Dialog (Beleg-IDs)
   const [onlyReextract, setOnlyReextract] = useState(false);   // nur neu auslesen, Dokumententyp nicht erneut erkennen
 
   // PDF-Bearbeitung (Modal „Seiten") + Sammel-Kürzen
@@ -947,6 +949,16 @@ export default function BelegePage() {
             </button>
             <span className="text-xs text-gray-400">Original bleibt als Version 1 erhalten. Automatisch vor jeder Analyse: Einstellungen → Automatisierung.</span>
           </div>
+
+          {/* KI-Frage (für die Auswahl) */}
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-gray-200 pt-3">
+            <span className={`text-sm font-medium ${selectedIds.size > 0 ? "text-blue-800" : "text-gray-500"}`}>KI-Frage:</span>
+            <button onClick={() => setAskIds(Array.from(selectedIds))} disabled={selectedIds.size === 0} data-testid="ask-selection"
+              className="rounded border border-violet-300 bg-white px-3 py-1 text-sm font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              Frage an die Auswahl stellen…
+            </button>
+            <span className="text-xs text-gray-400">z. B. „Wie heißt die IBAN?“ — die Antwort aktualisiert den Beleg, ohne alles neu auszulesen.</span>
+          </div>
         </div>
 
       </div>{/* Ende Kopfbereich */}
@@ -978,6 +990,12 @@ export default function BelegePage() {
                   className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
                   Nächste →
                 </button>
+                {infosDocId !== null && (
+                  <button onClick={() => setAskIds([infosDocId])} disabled={viewLoading} data-testid="ask-single"
+                    className="rounded border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-40 transition-colors">
+                    ❓ KI-Frage
+                  </button>
+                )}
                 {infosDocId !== null && (
                   <button
                     onClick={() => handleDeleteInInfos(infosDocId)}
@@ -1399,6 +1417,17 @@ export default function BelegePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {askIds && (
+        <AskModal
+          documentIds={askIds}
+          onClose={() => setAskIds(null)}
+          onChanged={async () => {
+            await loadDocuments(activeFilters, page);
+            if (viewMode === "infos" && infosDocId !== null) { try { setViewedDoc(await documentsApi.get(infosDocId)); } catch { /* ignorieren */ } }
+          }}
+        />
       )}
 
       {editDoc && (

@@ -688,6 +688,17 @@ Beispiel: 4.400 Schrauben, „90 € je 100“ (Preisbasis steht in der Spalte o
 - **Altbestand ohne KI:** Nachrüstung „Preisbasis & Verpackung erkennen“ (`validation_backfill.price_basis_extraction`): aus der KI-Antwort, aus den Beträgen (Menge × Preis ÷ 10/100/1000 = Positionspreis, nur bei genau einem passenden Faktor und ohne Nachlass-Erklärung), Verpackungsinhalt aus dem Artikeltext nur bei Verpackungseinheiten, Einheitentyp aus der Einheit. Überschreibt nichts, im Änderungsprotokoll rückgängig.
 - Anzeige: Belege-Infos („je 100 Stück“, „à 100 Stück“, Einheitentyp), Artikelsuche (zusätzlich „= 4.400 Stück · 0,90 € / Stück“).
 
+### Freie KI-Frage an Belege mit Verlauf (`services/ai_question_service.py`, `routers/ai_questions.py`, `models/ai_query.py`, Migration `0017_ai_questions`)
+
+„Wie heißt die IBAN?“ → die KI antwortet **nur mit dem Wert** (`ai_service.ask_question`, Bilder des Belegs, Temperatur 0, „NICHT GEFUNDEN“ bei fehlendem Wert), der Beleg wird aktualisiert, ohne alles neu auszulesen.
+
+- **Zielfeld** (Katalog `FIELDS`, `GET /api/ai-questions/fields`): IBAN, BIC, Bankname, USt-IdNr., Steuernummer, HRB, Lieferantenname, Rechnungsnr., -datum, Fälligkeit, Kundennr., Zahlungsbedingungen, Brutto, Netto. Geschrieben wird ins KI-JSON (`invoice_extractions.raw_response`, dort lesen Infos-Ansicht und Excel) und — wo es eine Spalte gibt — in die Spalte. Ohne Zielfeld wird die Antwort nur gespeichert.
+- **Prüfung der Antwort** (`clean_answer`): Denk-Blöcke/Anführungszeichen/Präfixe entfernt; IBAN (Format, in 4er-Gruppen), Datum (ISO), Zahl; Ungültiges oder „nicht gefunden“ ändert den Beleg **nicht** (Hinweis in der Antwort). Beleg ohne Rechnungsdaten bzw. mit nicht lesbarem KI-JSON: Antwort gespeichert, nichts geändert.
+- **Rückgängig:** jede Übernahme steht im Änderungsprotokoll (`ai_question`, Alt-/Neuwert von `raw_response` und Spalte); Button „Rückgängig“ im Dialog.
+- **Verlauf:** `ai_queries` (Frage + Zielfeld, gleiche Frage wird hochgezählt; Auswahl „Letzte Abfragen“ im Dialog, `GET/DELETE /api/ai-questions`), `document_answers` (jede Antwort je Beleg, `GET /api/ai-questions/answers?document_id=`; im Daten-Backup enthalten, `query_id` bewusst ohne FK).
+- **Mehrere Belege:** `POST /api/ai-questions/run` startet einen Hintergrundlauf (nacheinander, höchstens 500, Fortschritt `GET /state`, `POST /cancel`); ein fehlerhafter Beleg stoppt den Lauf nicht.
+- Oberfläche: Belege → Infos-Ansicht „❓ KI-Frage“ und Aktionsleiste „Frage an die Auswahl stellen…“ (`components/belege/AskModal.tsx`).
+
 ### Analyse-Historie (`crud/analysis_history.py`, `routers/document_history.py`)
 
 Wird ein Beleg erneut analysiert, ersetzt `save_extraction` Extraktion und Positionen (frühere Fehlanalysen haben so schon gute Daten
