@@ -117,7 +117,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.database import SessionLocal, get_db
 from app.schemas.document import DocumentCommentUpdate, DocumentDetail, DocumentListRead
-from app.services import ai_service, document_trash, pdf_edit_service, pdf_service, plausibility_service
+from app.services import ai_service, document_trash, pdf_edit_service, plausibility_service
 from app.services.query_guard import TTLCache, clear_all_caches
 
 logger = logging.getLogger(__name__)
@@ -1514,26 +1514,16 @@ async def _analyze_single_inner(
     skip_type_detection: bool = False,
 ) -> str:
     """
-    Eigentliche KI-Analyse-Logik für ein einzelnes Dokument (nach dem Duplikat-Check).
+    KI-Analyse eines einzelnen Dokuments (nach dem Duplikat-Check): löst den Workflow auf und führt ihn aus.
 
-    Diese Funktion durchläuft die vollständige Analyse-Pipeline:
-      Schritt 1 → Schritt 2 → Schritt 3 (Pfad B oder C) → Schritt 4
-
-    Die Entscheidung zwischen den Pfaden (B/C) hängt NUR davon ab, ob ein
-    Dokumententyp-Prompt in der DB konfiguriert ist — der bereits gespeicherte
-    existing_document_type spielt dabei bewusst KEINE Rolle mehr. Jeder Analyse-Aufruf
-    klassifiziert bei vorhandenem Typ-Prompt IMMER neu (Pfad B), auch wenn das
-    Dokument schon einmal als Eingangsrechnung erkannt wurde — sonst bliebe eine
-    einmal fälschlich als Eingangsrechnung erkannte Rechnung nach einer Prompt-
-    Korrektur für immer falsch klassifiziert, egal wie oft man sie neu analysiert.
+    Jede Analyse braucht einen ausdrücklich genannten Workflow (`workflow_id`); den klassischen Ablauf ohne Workflow gibt es nicht mehr.
+    Die Schritte (PDF kürzen, Typ erkennen, extrahieren, prüfen …) stehen im Workflow und laufen in `workflow_runner.analyze_with_workflow`.
 
     Args:
         doc_id:           ID des zu analysierenden Dokuments.
         ai_config_id:     ID der zu verwendenden KI-Konfiguration.
-        system_prompt_id: ID des Extraktionsprompts (None = Standard-Prompt).
-                           Wird erst in _db_analyze_read() in Text aufgelöst,
-                           nicht schon vom Aufrufer — siehe dortige Begründung.
-        workflow_id:      Optional explizit gewählter Workflow (sonst: Lieferant → Standard → klassisch).
+        system_prompt_id: ID des Extraktionsprompts (None = Standard-Prompt), wird erst im Workflow aufgelöst.
+        workflow_id:      Der Workflow, der ausgeführt wird (ohne Angabe oder bei gelöschtem Workflow: Beleg → error).
         skip_type_detection: True = bei bereits bekanntem Dokumententyp keine Typ-Erkennung (nur neu auslesen).
 
     Returns:
@@ -1541,7 +1531,7 @@ async def _analyze_single_inner(
         "ai_unavailable" — KI-Endpunkt nicht erreichbar (Task wird re-queued)
     """
     # ═══════════════════════════════════════════════════════════════════════════
-    # WORKFLOW-AUSWAHL: gewählter → Lieferanten- → Standard-Workflow, sonst klassischer Ablauf
+    # WORKFLOW: der ausdrücklich gewählte Workflow wird geladen und ausgeführt
     # ═══════════════════════════════════════════════════════════════════════════
     workflow = await asyncio.to_thread(_db_resolve_workflow, doc_id, workflow_id)
     if workflow is None:
@@ -1556,250 +1546,6 @@ async def _analyze_single_inner(
     return await workflow_runner.analyze_with_workflow(
         doc_id, ai_config_id, system_prompt_id, workflow, skip_type_detection
     )
-    # ── Klassischer Ablauf (ohne Workflow): im neuen System nicht mehr erreichbar, wird mit dem Altbestand entfernt ──
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ANALYSE-SCHRITT 1: DB-Daten lesen
-    # ═══════════════════════════════════════════════════════════════════════════
-    # asyncio.to_thread führt die synchrone _db_analyze_read-Funktion in einem
-    # separaten Thread aus, ohne den Event-Loop zu blockieren.
-    data = await asyncio.to_thread(_db_analyze_read, doc_id, ai_config_id, system_prompt_id)
-
-    if data is None:
-        # _db_analyze_read hat bereits den Status auf "error" gesetzt und geloggt
-        return "ok"
-
-    # Ergebnisse aus dem DB-Read-Dict auspacken
-    pdf_path: Path = data["pdf_path"]
-    original_filename: str = data["original_filename"]
-    batch_id: int | None = data["batch_id"]
-    doc_type_prompt_text: str | None = data["doc_type_prompt_text"]
-    system_prompt_text: str | None = data["system_prompt_text"]
-    document_types: list[dict] = data["document_types"]
-
-    # ── Phase 1b: PDF vorbereiten (ggf. automatisch kürzen, analysierte Version merken) ──
-    await asyncio.to_thread(_db_prepare_pdf, doc_id, original_filename, batch_id)
-
-    # Wortlaut der verwendeten Prompts am Dokument festhalten (Nachvollziehbarkeit).
-    # Der Typ-Prompt zählt nur, wenn die zweistufige Analyse wirklich läuft.
-    await asyncio.to_thread(
-        _db_save_used_prompts, doc_id, system_prompt_text,
-        doc_type_prompt_text if (doc_type_prompt_text and document_types) else None,
-    )
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ANALYSE-SCHRITT 2: PDF in Bilder umwandeln (Rendering)
-    # ═══════════════════════════════════════════════════════════════════════════
-    logger.info("Rendere PDF für Dokument #%d: %s", doc_id, pdf_path.name)
-    try:
-        # _run_ki_io verwendet den _KI_IO_EXECUTOR (nicht den Standard-Thread-Pool),
-        # um große Base64-Puffer nicht im normalen DB-Thread-Pool zu erzeugen.
-        # pdf_to_base64_images: synchron, blockierend, gibt Liste von Base64-Strings zurück.
-        images_b64: list = await _run_ki_io(
-            pdf_service.pdf_to_base64_images,
-            pdf_path,             # Absoluter Pfad zur PDF-Datei
-            data["img_dpi"],      # Render-Auflösung (Standard: 150 DPI)
-            data["img_format"],   # Bildformat ("PNG" oder "JPEG")
-            data["img_quality"],  # JPEG-Qualität (Standard: 85, nur bei JPEG relevant)
-        )
-    except Exception as exc:
-        logger.error("Fehler beim Rendern von #%d: %s", doc_id, exc)
-        await asyncio.to_thread(_set_error, doc_id, f"PDF-Rendering-Fehler: {exc}")
-        return "ok"
-
-    if not images_b64:
-        # Leere Liste = pypdfium2 konnte das PDF nicht lesen
-        # (z.B. verschlüsselt, korrupt oder kein gültiges PDF)
-        await asyncio.to_thread(_set_error, doc_id, "PDF konnte nicht gerendert werden")
-        return "ok"
-
-    # Seitenanzahl aus den gerenderten Bildern ableiten (ein Bild = eine Seite).
-    # Dies ist der finale, korrekte Wert — beim Import wurde page_count=0 gesetzt.
-    page_count = len(images_b64)
-
-    # ─── Config-Proxy ────────────────────────────────────────────────────────
-    # ai_service.extract_invoice_data() und detect_document_type() erwarten ein
-    # Objekt mit bestimmten Attributen (statt eines Dicts).
-    # Dieser Mini-Proxy bildet das DB-Modell AIClients nach, ohne SQLAlchemy
-    # oder eine DB-Session zu benötigen (alles bereits aus Phase 1 geladen).
-    class _ConfigProxy:
-        def __init__(self):
-            self.api_url       = data["ai_api_url"]
-            self.api_key       = data["ai_api_key"]
-            self.model_name    = data["ai_model_name"]
-            self.max_tokens    = data["ai_max_tokens"]
-            self.temperature   = data["ai_temperature"]
-            self.reasoning     = data["ai_reasoning"]
-            self.endpoint_type = data["ai_endpoint_type"]
-
-    config_proxy = _ConfigProxy()
-
-    # Bereits gespeicherter Typ aus der DB (0 = unbekannt/noch nie erkannt)
-    existing_document_type: int = data.get("existing_document_type", 0)
-    document_type_id: int | None = None  # Wird im Verlauf gesetzt
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ANALYSE-SCHRITT 3: Typ-Entscheidung und KI-Aufruf(e)
-    # ═══════════════════════════════════════════════════════════════════════════
-    #
-    # Zwei mögliche Pfade je nach Situation:
-    #
-    #   Pfad B: Typ-Erkennungs-Prompt vorhanden → IMMER zweistufig: erst (erneut) Typ
-    #           erkennen, dann ggf. Rechnungsdaten extrahieren. Gilt unabhängig vom
-    #           bereits gespeicherten existing_document_type — auch ein bereits als
-    #           Eingangsrechnung (1) bekanntes Dokument wird bei jedem expliziten
-    #           Analyse-Aufruf (manuell, "erneut senden", Worker-Retry) NEU klassifiziert,
-    #           nicht blind übernommen. Grund: Wurde der Typ-Erkennungs-Prompt in der
-    #           Zwischenzeit geändert (z.B. weil er Eingangsrechnungen fälschlich zu
-    #           breit erkannt hat), muss ein bereits als "Eingangsrechnung" gespeichertes
-    #           Dokument bei erneuter Analyse gegen den NEUEN Prompt erneut geprüft werden
-    #           — sonst bleibt eine einmal falsch erkannte Eingangsrechnung für immer
-    #           fälschlich als solche stehen, egal wie oft man sie neu analysiert. Zwei
-    #           frühere Kurzschluss-Pfade ("Pfad A" für bekannte Nicht-Eingangsrechnungen,
-    #           die Sonderbehandlung für existing_document_type==1 in Pfad C) wurden
-    #           deshalb entfernt. Siehe CLAUDE.md/Bekannte Fallstricke.
-    #
-    #   Pfad C: Kein Typ-Prompt konfiguriert → direkt Rechnungsdaten extrahieren
-    #           (einstufiger Legacy-Modus, keine Typklassifizierung möglich/nötig)
-
-    # „Nur neu auslesen“: Hat der Beleg schon einen Dokumententyp, wird er nicht erneut erkannt (Pfad C: direkte Extraktion,
-    # der gespeicherte Typ bleibt unverändert). Ohne gespeicherten Typ läuft die Erkennung wie üblich.
-    skip_detection = bool(skip_type_detection and existing_document_type)
-    if skip_detection:
-        logger.info("Dokument #%d: Typ-Erkennung übersprungen (nur neu auslesen, Typ %s)", doc_id, existing_document_type)
-
-    # ─── PFAD B: Typ-Erkennungs-Prompt vorhanden → IMMER (erneut) klassifizieren ──
-    if doc_type_prompt_text and document_types and not skip_detection:
-        # ── KI-Aufruf 1: Dokumententyp erkennen ─────────────────────────────
-        # detect_document_type ist SYNCHRON → läuft in asyncio.to_thread
-        logger.info(
-            "Starte Dokumententyp-Erkennung für #%d (%d Seite(n))",
-            doc_id, page_count
-        )
-        type_id, type_name, _type_raw, type_stats = await asyncio.to_thread(
-            ai_service.detect_document_type,
-            images_b64,           # Gerenderte PDF-Seiten als Base64-Liste
-            config_proxy,         # KI-Verbindungsparameter
-            document_types,       # Liste aller möglichen Typen (KI wählt daraus)
-            doc_type_prompt_text, # Inhalt des Typ-Erkennungs-Prompts
-        )
-        # detect_document_type gibt zurück:
-        #   type_id:    Erkannte Typ-ID (None wenn KI keinen gültigen Typ lieferte)
-        #   type_name:  Erkannter Typ-Name (None wenn type_id None)
-        #   _type_raw:  Vollständige KI-Antwort (für Fehleranalyse)
-        #   type_stats: Token-Statistiken des ersten KI-Aufrufs
-
-        # ── Sofortiger Abbruch bei KI-Verbindungsfehler ──────────────────────
-        # Verbindungsfehler (Timeout, 429, Netzwerk-Down) sind keine Dokument-Fehler.
-        # Das Dokument bleibt im Status "processing", damit es beim nächsten
-        # Worker-Versuch erneut analysiert wird (kein verlorenes Dokument).
-        if _is_ai_conn_error(_type_raw):
-            logger.warning(
-                "Dokument #%d: KI-Verbindungsfehler bei Typ-Erkennung — Retry möglich",
-                doc_id,
-            )
-            return "ai_unavailable"  # Signalisiert dem Worker: erneut versuchen
-
-        # Erkannten Typ merken für späteren _db_analyze_write-Aufruf
-        document_type_id = type_id
-
-        # ── Sofortspeicherung des erkannten Typs ─────────────────────────────
-        # Wichtig: Typ in DB sichern BEVOR extract_invoice_data startet.
-        # Falls die Extraktion fehlschlägt (Timeout, 429, Absturz),
-        # ist der Typ trotzdem bereits persistiert.
-        await asyncio.to_thread(_db_save_document_type, doc_id, type_id)
-
-        # ── Entscheidung: Eingangsrechnung oder nicht? ────────────────────────
-        if type_id != 1:
-            # Kein Eingangsrechnungs-Typ → Analyse beendet, keine Extraktion
-            # (z.B. Lieferschein, Mahnung, Kontoauszug)
-            del images_b64   # Bilder freigeben — nicht mehr benötigt
-            await asyncio.to_thread(
-                _db_type_only_finish,
-                doc_id, type_id, type_name, page_count,
-                batch_id, original_filename,
-                type_stats,   # Token-Stats aus Typ-Erkennung speichern
-            )
-            return "ok"
-
-        # ── type_id == 1: Eingangsrechnung erkannt → Extraktion starten ──────
-        logger.info(
-            "Dokument #%d: Eingangsrechnung erkannt — starte Extraktion", doc_id
-        )
-
-        # ── KI-Aufruf 2: Rechnungsdaten extrahieren ──────────────────────────
-        # extract_invoice_data ist SYNCHRON → läuft in asyncio.to_thread
-        extracted_fields, order_positions, raw_response, inv_stats = await asyncio.to_thread(
-            ai_service.extract_invoice_data,
-            images_b64,         # Dieselben Base64-Bilder wie in KI-Aufruf 1
-            config_proxy,       # Dieselbe KI-Konfiguration
-            system_prompt_text, # Inhalt des Extraktionsprompts (type=1)
-        )
-        # Bilder bleiben noch erhalten: die Plausibilitätsprüfung (Phase 3c) braucht sie
-        # ggf. für eine zweite KI-Abfrage.
-
-        # ── Verbindungsfehler bei der Extraktion prüfen ──────────────────────
-        if _is_ai_conn_error(raw_response):
-            logger.warning(
-                "Dokument #%d: KI-Verbindungsfehler bei Extraktion — Retry möglich",
-                doc_id,
-            )
-            return "ai_unavailable"
-
-        # Statistiken beider KI-Aufrufe zu einer Gesamtstatistik zusammenführen
-        # (Typ-Erkennung + Extraktion = Gesamtkosten für dieses Dokument)
-        ki_stats = _merge_ki_stats(type_stats, inv_stats)
-
-    else:
-        # ─── PFAD C: Direkte Extraktion (einstufig, Legacy-Modus) ────────────
-        # Wird nur erreicht wenn KEIN Typ-Erkennungs-Prompt konfiguriert ist (oder die
-        # Dokumententypen-Liste leer ist) — dann ist eine Typklassifizierung ohnehin
-        # nicht möglich, also direkt extrahieren. document_type_id bleibt None, d.h.
-        # ein eventuell bereits gespeicherter Typ bleibt unverändert (_db_analyze_write
-        # überschreibt document_type nur, wenn document_type_id gesetzt ist).
-        logger.info(
-            "Starte KI-Extraktion für Dokument #%d (%d Seite(n))",
-            doc_id, page_count
-        )
-
-        # ── KI-Aufruf: Rechnungsdaten extrahieren ────────────────────────────
-        extracted_fields, order_positions, raw_response, ki_stats = await asyncio.to_thread(
-            ai_service.extract_invoice_data,
-            images_b64,         # Gerenderte PDF-Seiten als Base64-Liste
-            config_proxy,       # KI-Verbindungsparameter
-            system_prompt_text, # Extraktionsprompt (oder None für KI-eigenen Prompt)
-        )
-        # Bilder bleiben noch erhalten (siehe Pfad B: zweite KI-Abfrage der Plausibilitätsprüfung)
-
-        # ── Verbindungsfehler prüfen ──────────────────────────────────────────
-        if _is_ai_conn_error(raw_response):
-            logger.warning(
-                "Dokument #%d: KI-Verbindungsfehler bei Extraktion — Retry möglich",
-                doc_id,
-            )
-            return "ai_unavailable"
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ANALYSE-SCHRITT 4: Ergebnisse in DB schreiben
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Dieser Schritt wird nur erreicht wenn die Extraktion erfolgreich war
-    # (oder mit KI-Fehlerantwort, aber ohne Verbindungsfehler).
-    # _db_analyze_write setzt das Dokument auf "done" oder "error".
-    # ── Phase 3c: Plausibilitätsprüfung (Regeln → zweite KI-Abfrage → Markierung) ──
-    (extracted_fields, order_positions, raw_response,
-     ki_stats, validation) = await _plausibility_pass(
-        doc_id, images_b64, config_proxy, system_prompt_text,
-        extracted_fields, order_positions, raw_response, ki_stats,
-    )
-    del images_b64   # Bilder freigeben — nicht mehr gebraucht
-
-    await asyncio.to_thread(
-        _db_analyze_write,
-        doc_id, original_filename, batch_id, data["ai_model_name"],
-        page_count, extracted_fields, order_positions, raw_response,
-        ki_stats, document_type_id, validation,
-    )
-    return "ok"
 
 
 # ─── API-Endpunkte (Dokument-Detail, Preview, Kommentar, Soft-Delete) ─────────

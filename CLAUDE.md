@@ -749,18 +749,15 @@ Endpunkte (`/api/documents`): `GET /{id}/versions`, `GET /{id}/versions/{n}/prev
 ### Workflows (`services/workflow_service.py`, `services/workflow_runner.py`, `routers/workflows.py`)
 
 Ein **Workflow** legt als Graph fest, welche Schritte die KI-Analyse eines Belegs durchläuft und welche Systemprompts dabei gelten (Editor wie
-bei n8n, siehe Frontend). Er ist optional: **ohne Standard-Workflow läuft der klassische Ablauf** (`_analyze_single_inner`, Phasen 1–4).
+bei n8n, siehe Frontend). **Jede Analyse braucht einen ausdrücklich gewählten Workflow** (siehe „Entscheidung: nur Workflows“ unten); den klassischen Ablauf ohne Workflow gibt es nicht mehr.
 
-**Auswahl** (`_db_resolve_workflow` in `documents.py`, pro Dokument, in `_analyze_single_inner` ganz am Anfang): 1. explizit gewählter
-Workflow (`workflow_id` im Task-Payload bzw. in `EnqueueRequest`/`AnalyzeRequest`) → 2. Workflow des Lieferanten (`vendor.workflow_id`; der
-Lieferant wird über den **extrahierten Namen** `invoice_extractions.vendor_id` — ohne Groß/Klein — in der Tabelle `vendor` gesucht, greift also nur,
-wenn der Beleg schon einmal analysiert wurde, z.B. bei erneuter Analyse; es gibt in diesem Projekt keine FK von der Extraktion zum Lieferanten) →
-3. Standard-Workflow (`workflows.is_default`, höchstens einer) → 4. klassischer Ablauf.
+**Auswahl** (`_db_resolve_workflow` in `documents.py`, pro Dokument, in `_analyze_single_inner`): der explizit genannte Workflow (`workflow_id` im Task-Payload bzw. in `EnqueueRequest`/`AnalyzeRequest`).
+Frühere Stufen (Lieferanten-Workflow, Standard-Workflow, klassischer Ablauf) sind entfernt.
 
 **Worker-Integration:** Der Task-Payload (`workflow_tasks.payload`) transportiert nur die ID (`workflow_id`, optional) — `AIDispatcherClient._handle_process_document`
 reicht sie an `_analyze_single(doc_id, server.id, system_prompt_id, workflow_id)` weiter. Der Workflow-Lauf teilt die KI-Konfiguration (`server.id`) des
 Workers; ein Knoten kann eine andere KI-Konfiguration erzwingen (`ai_config_id`). **KI-Verbindungsfehler** (Timeout/429/Netz) in einem Knoten brechen den Lauf mit
-`ai_unavailable` ab (Worker reiht neu ein, Beleg wird **nicht** auf `error` gesetzt) — wie im klassischen Ablauf.
+`ai_unavailable` ab (Worker reiht neu ein, Beleg wird **nicht** auf `error` gesetzt) — der Beleg bleibt dann unverändert in der Warteschlange.
 
 **Kürzen vor der Kapazitätsprüfung:** `worker.prepare_pdf_for_task` → `documents._db_prepare_for_capacity`: im Workflow-Modus zählen nur die **führenden**
 „PDF kürzen"-Knoten (`workflow_service.leading_trim_pages`, direkt hinter Start), sonst die globale Auto-Kürzen-Einstellung. Die globale Einstellung gilt im Workflow-Modus nicht.
@@ -784,7 +781,7 @@ Regeln (`validate_graph`, beim Speichern erzwungen → HTTP 422): genau ein Star
 keine Zyklen; Verzweigung nur mit `true`/`false`; Operatoren passend zum Feld. Nur Warnungen: nicht erreichbare Knoten, offene Verzweigungsausgänge, keine
 Extraktion, Prüfung vor Extraktion, fehlende Prompt-/KI-IDs. Fehlt eine Kante, endet der Ablauf dort.
 
-**„Nur neu auslesen“ (`skip_type_detection`):** `EnqueueRequest`/`AnalyzeRequest` → Task-Payload → `_analyze_single(..., skip_type_detection)`. Hat der Beleg schon einen Dokumententyp, wird er übernommen (keine Typ-Erkennung, eine KI-Anfrage weniger; klassischer Ablauf = direkte Extraktion, Workflow-Knoten `detect_type` setzt den gespeicherten Typ ohne KI). Ohne gespeicherten Typ läuft die Erkennung normal. Belege-Seite: Checkbox „nur neu auslesen“ in der Analyse-Leiste; KI-Assistent: `"only_extract": true` im Vorschlag.
+**„Nur neu auslesen“ (`skip_type_detection`):** `EnqueueRequest`/`AnalyzeRequest` → Task-Payload → `_analyze_single(..., skip_type_detection)`. Hat der Beleg schon einen Dokumententyp, wird er übernommen (keine Typ-Erkennung, eine KI-Anfrage weniger; der Workflow-Knoten `detect_type` setzt den gespeicherten Typ ohne KI). Ohne gespeicherten Typ läuft die Erkennung normal. Belege-Seite: Checkbox „nur neu auslesen“ in der Analyse-Leiste; KI-Assistent: `"only_extract": true` im Vorschlag.
 
 **Datenfluss je Knoten** (`workflow_trace`, Ansicht `components/belege/WorkflowTraceView.tsx` im KI-Modal der Belege): Jeder Ablaufeintrag enthält zusätzlich `config`, `input`/`output` (Datenstand vor/nach dem Knoten:
 Felder, Positionen — max. 100 —, Prüfstatus/-meldungen), `changes` (`diff_snapshots`: Pfad/vorher/nachher — leer = Knoten hat nichts verändert) und `io` (`prompt`, `response`, `model`, `notes`; Prompt/Antwort auf 20.000 Zeichen gekürzt).
@@ -994,7 +991,7 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - **Entscheidung: nur Workflows, kein „Standard“** (Migration `0020_batch_workflow`): jede Analyse nennt ihren Workflow ausdrücklich. `POST /api/documents/analyze|enqueue` und `/api/db-assistant/apply-reanalysis` verlangen `workflow_id` (422),
   `import_batches.workflow_id` ist Pflicht bei „Analyse nach Import“ und Ordner-Sync (400), `POST /{id}/requeue` nimmt den Workflow des Imports, `PATCH …/automation` setzt ihn; Ordner-Sync ohne Workflow importiert, analysiert aber nicht (Log-Warnung).
   `_db_resolve_workflow` lädt nur noch die genannte ID — kein Standard-Workflow, keine Lieferanten-Zuordnung, kein klassischer Ablauf (ohne Workflow → Beleg `error` „Kein Workflow gewählt“). Entfernt: `set-default`/`clear-default`, `PUT /api/vendors/{id}/workflow`.
-  Der klassische Code in `_analyze_single_inner` bleibt unerreichbar stehen und wird mit dem Altbestand entfernt; die Spalten `workflows.is_default` und `vendor.workflow_id` bleiben vorerst.
+  Der klassische Ablauf in `_analyze_single_inner` ist entfernt (die Funktion löst nur noch den Workflow auf und ruft `workflow_runner.analyze_with_workflow`); die Helfer `_db_analyze_*`, `_db_type_only_finish`, `_plausibility_pass` usw. bleiben, weil die Workflow-Knoten sie nutzen. Die Spalten `workflows.is_default` und `vendor.workflow_id` bleiben vorerst.
 - **Schemagesteuerter Excel-Export (Phase 5, Migration `0021_export_templates`)** — `services/schema_export.py`, `models/export_template.py`, `routers/export_templates.py`, Seed `services/export_seed.py`. Spalten, Reihenfolge, Überschriften (`display_name`) und Zellformate
   (`output_format`, sonst Standard je Typ) kommen aus der Schema-Definition; Auswahl und Layout aus der Vorlage (`config`: `entities[{entity, fields}]`, `vendor[...]` Lieferantenspalten, `flat{root, child}`). Echte Excel-Typen (Datum, Zahl mit Format, Boolean).
   Layouts: `sheet_per_entity` (Blatt je Entität, verbunden über Datensatz-/Eltern-/Beleg-/Lieferant-ID; Stammdaten-Blatt mit den vorkommenden Lieferanten) und `flat` (eine Zeile je Position mit wiederholtem Belegkopf; Belege ohne Positionen bekommen eine Zeile).
