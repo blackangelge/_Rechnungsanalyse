@@ -91,7 +91,7 @@ function PdfTrimSettings() {
 
 const OUTCOME_LABELS: Record<string, string> = {
   ok: "In Ordnung", corrected: "Automatisch korrigiert", needs_review: "Prüfen!",
-  filled: "Gesamtpreis ergänzt", normalized: "Auf Tonnen umgerechnet", unchanged: "Unverändert (keine Gewichtseinheit / nicht umrechenbar)",
+  filled: "Gesamtpreis ergänzt", basis_set: "Preisbasis/Verpackung/Typ ergänzt", normalized: "Auf Tonnen umgerechnet", unchanged: "Unverändert (keine Gewichtseinheit / nicht umrechenbar)",
   unchecked: "Nicht prüfbar", skipped_no_data: "Übersprungen (keine verwertbare KI-Antwort)",
 };
 
@@ -102,14 +102,15 @@ function ValidationBackfill() {
   const [normalizeUnits, setNormalizeUnits] = useState(false);   // Modus „Einheiten auf Tonnen vereinheitlichen"
   const [restoreOriginals, setRestoreOriginals] = useState(false); // Modus „Originalwerte wiederherstellen"
   const [fillPrices, setFillPrices] = useState(false);       // Modus „Gesamtpreise ergänzen"
+  const [priceBasis, setPriceBasis] = useState(false);       // Modus „Preisbasis & Verpackung erkennen"
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
-    try { setState(await validationBackfillApi.status(normalizeUnits, restoreOriginals, fillPrices)); } catch { /* beim nächsten Takt erneut */ }
+    try { setState(await validationBackfillApi.status(normalizeUnits, restoreOriginals, fillPrices, priceBasis)); } catch { /* beim nächsten Takt erneut */ }
   }
 
-  useEffect(() => { refresh(); }, [normalizeUnits, restoreOriginals, fillPrices]);
+  useEffect(() => { refresh(); }, [normalizeUnits, restoreOriginals, fillPrices, priceBasis]);
   useEffect(() => {
     if (!state?.running) return;
     const t = setInterval(refresh, 2000);
@@ -117,6 +118,10 @@ function ValidationBackfill() {
   }, [state?.running]);
 
   async function start(dryRun: boolean) {
+    if (!dryRun && priceBasis && !confirm(
+      `Preisbasis (Preis je 100 …), Verpackungsinhalt und Einheitentyp bei ${state?.pending?.toLocaleString("de-DE") ?? "allen betroffenen"} Belegen ermitteln?\n\n` +
+      "Nur aus bereits gespeicherten Daten (KI-Antwort, Beträge, Artikeltext) — keine KI, nichts wird überschrieben, nichts geraten. Menge, Einheit und Preise bleiben unverändert. Rückgängig im Änderungsprotokoll.",
+    )) return;
     if (!dryRun && fillPrices && !confirm(
       `Fehlende Gesamtpreise bei ${state?.pending?.toLocaleString("de-DE") ?? "allen betroffenen"} Belegen aus der gespeicherten KI-Antwort ergänzen?\n\n` +
       "Es wird nichts berechnet und die KI nicht aufgerufen. Nur leere Gesamtpreise (und fehlendes Netto/Steuer) werden gefüllt; vorhandene Werte und Prüfstatus bleiben unverändert. Der Lauf ist im Änderungsprotokoll rückgängig zu machen.",
@@ -130,14 +135,14 @@ function ValidationBackfill() {
       `Mengen, Einheiten und Einzelpreise bei bis zu ${state?.pending?.toLocaleString("de-DE") ?? "allen"} Belegen wieder auf den Wortlaut der Rechnung zurücksetzen?\n\n` +
       "Zurückgesetzt werden nur Positionen, die früher auf Tonnen umgerechnet wurden (z. B. 25,5 t → 25.500 kg). Gesamtpreise, Prüfstatus und echte Korrekturen bleiben unverändert.",
     )) return;
-    if (!dryRun && !normalizeUnits && !restoreOriginals && !fillPrices && !confirm(
+    if (!dryRun && !normalizeUnits && !restoreOriginals && !fillPrices && !priceBasis && !confirm(
       `Prüfung für ${state?.pending?.toLocaleString("de-DE") ?? "alle ungeprüften"} Belege nachrüsten?\n\n` +
       (autoCorrect ? "Eindeutige Fehler (z.B. t/kg) werden dabei automatisch korrigiert. " : "") +
       "Fehlende Positions-Gesamtpreise werden aus der gespeicherten KI-Antwort ergänzt.",
     )) return;
     setBusy(true);
     setError(null);
-    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect, normalize_units: normalizeUnits, restore_originals: restoreOriginals, fill_prices: fillPrices })); }
+    try { setState(await validationBackfillApi.start({ dry_run: dryRun, auto_correct: autoCorrect, normalize_units: normalizeUnits, restore_originals: restoreOriginals, fill_prices: fillPrices, price_basis: priceBasis })); }
     catch (err) { setError(extractApiError(err, "Start fehlgeschlagen")); }
     finally { setBusy(false); }
   }
@@ -162,24 +167,29 @@ function ValidationBackfill() {
       </p>
       <div className="mb-3 flex gap-4 text-sm text-gray-700" data-testid="backfill-mode">
         <label className="flex items-center gap-1.5">
-          <input type="radio" checked={!normalizeUnits && !restoreOriginals && !fillPrices} disabled={state?.running} onChange={() => { setNormalizeUnits(false); setRestoreOriginals(false); setFillPrices(false); }} />
+          <input type="radio" checked={!normalizeUnits && !restoreOriginals && !fillPrices && !priceBasis} disabled={state?.running} onChange={() => { setNormalizeUnits(false); setRestoreOriginals(false); setFillPrices(false); setPriceBasis(false); }} />
           Prüfung nachrüsten
         </label>
         <label className="flex items-center gap-1.5">
-          <input type="radio" checked={normalizeUnits} disabled={state?.running} onChange={() => { setNormalizeUnits(true); setRestoreOriginals(false); setFillPrices(false); }} />
+          <input type="radio" checked={normalizeUnits} disabled={state?.running} onChange={() => { setNormalizeUnits(true); setRestoreOriginals(false); setFillPrices(false); setPriceBasis(false); }} />
           Einheiten auf Tonnen vereinheitlichen (nur Positionen mit Preis je Tonne; Tonnen/TO/to → t)
         </label>
         <label className="flex items-center gap-1.5">
-          <input type="radio" checked={restoreOriginals} disabled={state?.running} onChange={() => { setRestoreOriginals(true); setNormalizeUnits(false); setFillPrices(false); }} />
+          <input type="radio" checked={restoreOriginals} disabled={state?.running} onChange={() => { setRestoreOriginals(true); setNormalizeUnits(false); setFillPrices(false); setPriceBasis(false); }} />
           Originalwerte wiederherstellen (Menge/Einheit wie auf der Rechnung)
         </label>
         <label className="flex items-center gap-1.5">
-          <input type="radio" data-testid="backfill-mode-fill" checked={fillPrices} disabled={state?.running} onChange={() => { setFillPrices(true); setNormalizeUnits(false); setRestoreOriginals(false); }} />
+          <input type="radio" data-testid="backfill-mode-fill" checked={fillPrices} disabled={state?.running} onChange={() => { setFillPrices(true); setNormalizeUnits(false); setRestoreOriginals(false); setPriceBasis(false); }} />
           Gesamtpreise ergänzen (fehlende Werte aus der KI-Antwort, auch bei bereits geprüften Belegen)
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="radio" data-testid="backfill-mode-basis" checked={priceBasis} disabled={state?.running}
+            onChange={() => { setPriceBasis(true); setFillPrices(false); setNormalizeUnits(false); setRestoreOriginals(false); }} />
+          Preisbasis &amp; Verpackung erkennen (Preis je 100 …, Inhalt je VPE, Einheitentyp)
         </label>
       </div>
       <p className="mb-4 text-sm text-gray-700" data-testid="backfill-pending">
-        {fillPrices ? "Belege mit fehlendem Gesamtpreis" : normalizeUnits || restoreOriginals ? "Zu prüfen" : "Noch ungeprüft"}: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
+        {priceBasis ? "Belege mit Positionen ohne Preisbasis-/Typangabe" : fillPrices ? "Belege mit fehlendem Gesamtpreis" : normalizeUnits || restoreOriginals ? "Zu prüfen" : "Noch ungeprüft"}: <b>{state ? state.pending.toLocaleString("de-DE") : "…"}</b> Beleg(e)
       </p>
       <label className="mb-4 flex items-center gap-2 text-sm text-gray-700">
         <input type="checkbox" checked={autoCorrect} onChange={(e) => setAutoCorrect(e.target.checked)}

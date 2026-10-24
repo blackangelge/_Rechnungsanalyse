@@ -43,5 +43,10 @@ class OrderPosition(Base):
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True, index=True) # Menge
     unit: Mapped[str | None] = mapped_column(String(50), nullable=True)             # Mengeneinheit (z.B. "Stück", "kg")
     discount: Mapped[str | None] = mapped_column(String(100), nullable=True)        # Nachlass-Angabe (Freitext)
+    # Preisbasis und Verpackung (alles optional; NULL = nicht angegeben, Altbestand):
+    price_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)  # Einzelpreis gilt je N Einheiten (z.B. 100 = „Preis je 100 Stück“)
+    pack_size: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)       # Inhalt einer Verpackungs-/Verkaufseinheit (z.B. 100)
+    pack_unit: Mapped[str | None] = mapped_column(String(50), nullable=True)               # Einheit dieses Inhalts (z.B. „Stück“)
+    unit_type: Mapped[str | None] = mapped_column(String(20), nullable=True)               # Art der Mengeneinheit: stueck | verpackung | gewicht | volumen | laenge | flaeche | pauschal | dienstleistung | sonstige
 
     document: Mapped["Document"] = relationship("Document", back_populates="order_positions")  # noqa: F821

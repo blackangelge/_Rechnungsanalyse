@@ -10,6 +10,9 @@ KI-Antwort (`invoice_extractions.raw_response`) rekonstruieren:
   2. die Regelprüfung (`plausibility_service.validate_invoice`, inkl. automatischer Korrektur
      eindeutiger Fehler) laufen lassen und das Ergebnis speichern
 
+Zusätzlicher Modus `price_basis` („Preisbasis & Verpackung erkennen“): setzt für Positionen ohne Angaben `price_quantity`/`pack_size`/`pack_unit`/`unit_type`
+aus der KI-Antwort, den gespeicherten Beträgen (Menge × Preis ÷ 10/100/1000 = Positionspreis) und dem Artikeltext; keine KI, kein Überschreiben.
+
 Zusätzlicher Modus `fill_prices` („Gesamtpreise ergänzen“): trägt NUR fehlende Positions-Gesamtpreise (+ Netto/Steuer) aus der
 KI-Antwort ein — bei allen fertigen Belegen, auch solchen mit Prüfstatus; keine Berechnung, kein Prüfstatus.
 
@@ -104,7 +107,7 @@ def backfill_extraction(
     pos_dicts = [
         {
             "quantity": p.quantity, "unit": p.unit, "unit_price": p.unit_price_netto,
-            "total_price": p.total_price, "discount": p.discount,
+            "total_price": p.total_price, "discount": p.discount, "price_quantity": p.price_quantity,
         }
         for p in positions
     ]
@@ -160,6 +163,89 @@ def fill_prices_extraction(extraction: InvoiceExtraction, positions: list[OrderP
                 extraction.total_tax_value = value
                 filled += 1
     return filled
+
+
+_PIECE_UNITS = {"stück", "stueck", "stk", "st", "pcs", "pc", "stck", "stk.", "st."}
+_PACK_UNITS = {"vpe", "ve", "pack", "pkg", "pck", "packung", "karton", "ktn", "box", "gebinde", "sack", "palette", "pal", "bund", "set", "kiste", "eimer", "dose", "rolle"}
+_LUMP_UNITS = {"pauschal", "psch", "pausch", "psch.", "lfd", "lot"}
+_DIM_TYPE = {"mass": "gewicht", "volume": "volumen", "length": "laenge", "area": "flaeche"}
+_PACK_TEXT_RES = [
+    re.compile(r"\b(?:vpe|ve|verkaufseinheit|verpackungseinheit|inhalt)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:st\w*|pcs)?", re.IGNORECASE),
+    re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:st\.?|stk\.?|stück|stueck|pcs)\s*/\s*(?:ve|vpe|pack|pkg|karton|box)\b", re.IGNORECASE),
+    re.compile(r"\b(?:à|a|je|pro)\s*(\d+(?:[.,]\d+)?)\s*(?:st\.?|stk\.?|stück|stueck|pcs)\b", re.IGNORECASE),
+    re.compile(r"\b(\d+)er[- ]?(?:pack|packung|set)\b", re.IGNORECASE),
+]
+
+
+def _unit_type_of(unit: str | None) -> str | None:
+    """Art der Mengeneinheit aus der Einheit selbst (nur wenn eindeutig)."""
+    key = " ".join((unit or "").lower().replace(".", "").split())
+    if not key:
+        return None
+    if key in {u.replace(".", "") for u in _PIECE_UNITS}:
+        return "stueck"
+    if key in _PACK_UNITS:
+        return "verpackung"
+    if key in _LUMP_UNITS:
+        return "pauschal"
+    info = plausibility_service.parse_unit(unit)
+    if info is not None and info.dimension in _DIM_TYPE:
+        return _DIM_TYPE[info.dimension]
+    return None
+
+
+def price_basis_extraction(extraction: InvoiceExtraction, positions: list[OrderPosition]) -> int:
+    """
+    Ermittelt für Positionen OHNE Angaben Preisbasis (`price_quantity`), Verpackungsinhalt (`pack_size`/`pack_unit`) und Einheitentyp (`unit_type`):
+      1. aus der gespeicherten KI-Antwort (`preis_je_menge`, `preiseinheit`, `verpackungsinhalt`, `mengeneinheit_typ`), falls dort vorhanden
+      2. Preisbasis aus den gespeicherten Beträgen: passt Menge × Einzelpreis nicht zum Positionspreis, aber Menge × Einzelpreis ÷ 10/100/1000 genau → Basis N
+         (nur wenn genau ein Faktor passt und kein Nachlass die Abweichung erklärt)
+      3. Verpackungsinhalt aus dem Artikeltext („VE = 100“, „100 Stück/VE“) — nur bei Verpackungseinheiten (VPE, Pack, Karton …)
+      4. Einheitentyp aus der Einheit
+    Vorhandene Werte werden nie überschrieben; es wird nichts berechnet, was nicht belegt ist. Rückgabe: Anzahl gesetzter Felder.
+    """
+    raw = _parse_raw(extraction.raw_response) or {}
+    raw_pos = raw.get("positionen") if isinstance(raw.get("positionen"), list) else []
+    set_fields = 0
+    for pos in positions:
+        rp = raw_pos[pos.position_index] if 0 <= (pos.position_index or 0) < len(raw_pos) and isinstance(raw_pos[pos.position_index], dict) else {}
+        if pos.price_quantity is None:
+            n = ai_service._price_basis(rp) if rp else None
+            if n is None and pos.quantity is not None and pos.unit_price_netto is not None and pos.total_price is not None:
+                qty, price, total = float(pos.quantity), float(pos.unit_price_netto), float(pos.total_price)
+                expected = qty * price
+                if not plausibility_service._close(expected, total) and not any(
+                    plausibility_service._close(v, total) for v in plausibility_service._discounted_values(expected, pos.discount)
+                ):
+                    hits = [f for f in (10.0, 100.0, 1000.0) if plausibility_service._close(expected / f, total)]
+                    if len(hits) == 1:
+                        n = hits[0]
+            if n is not None:
+                pos.price_quantity = _dec(n)
+                set_fields += 1
+        if pos.pack_size is None:
+            size = ai_service._num(rp.get("verpackungsinhalt")) if rp else None
+            unit_txt = rp.get("verpackungsinhalt_einheit") if rp else None
+            if size is None and _unit_type_of(pos.unit) == "verpackung":
+                text = f"{pos.product_name or ''} {pos.product_description or ''}"
+                for rx in _PACK_TEXT_RES:
+                    m = rx.search(text)
+                    if m and ai_service._num(m.group(1)) and ai_service._num(m.group(1)) > 1:
+                        size, unit_txt = ai_service._num(m.group(1)), "Stück"
+                        break
+            if size is not None and size > 0:
+                pos.pack_size = _dec(size)
+                set_fields += 1
+                if pos.pack_unit is None and unit_txt:
+                    pos.pack_unit = str(unit_txt)[:50]
+                    set_fields += 1
+        if pos.unit_type is None:
+            t = ai_service._unit_type(rp.get("mengeneinheit_typ")) if rp else None
+            t = t or ("verpackung" if pos.pack_size is not None else _unit_type_of(pos.unit))
+            if t:
+                pos.unit_type = t
+                set_fields += 1
+    return set_fields
 
 
 def normalize_extraction(extraction: InvoiceExtraction, positions: list[OrderPosition]) -> int:
@@ -232,9 +318,9 @@ _state: dict = {"running": False}
 
 
 def _empty_state(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, total: int,
-                 normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False) -> dict:
+                 normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False, price_basis: bool = False) -> dict:
     return {
-        "running": True, "normalize_units": normalize_units, "restore_originals": restore_originals, "fill_prices": fill_prices, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
+        "running": True, "normalize_units": normalize_units, "restore_originals": restore_originals, "fill_prices": fill_prices, "price_basis": price_basis, "dry_run": dry_run, "auto_correct": auto_correct, "batch_ids": batch_ids,
         "total": total, "processed": 0, "filled_prices": 0, "corrections": 0,
         "outcomes": {}, "error_count": 0, "errors": [],
         "cancelled": False, "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": None,
@@ -264,7 +350,7 @@ def get_state() -> dict:
         return json.loads(json.dumps(_state))
 
 
-def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False):
+def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False, price_basis: bool = False):
     """Fertig analysierte, nicht gelöschte Belege mit Extraktion; ohne Prüfstatus (außer im Modus „Einheiten“)."""
     q = (
         db.query(InvoiceExtraction.id)
@@ -274,7 +360,14 @@ def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool 
             Document.status == "done",
         )
     )
-    if fill_prices:
+    if price_basis:
+        q = q.filter(
+            db.query(OrderPosition.id)
+            .filter(OrderPosition.document_id == InvoiceExtraction.document_id,
+                    OrderPosition.price_quantity.is_(None), OrderPosition.unit_type.is_(None))
+            .exists()
+        )
+    elif fill_prices:
         q = q.filter(
             db.query(OrderPosition.id)
             .filter(OrderPosition.document_id == InvoiceExtraction.document_id, OrderPosition.total_price.is_(None))
@@ -287,19 +380,19 @@ def _base_query(db: Session, batch_ids: list[int] | None, normalize_units: bool 
     return q
 
 
-def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False) -> int:
+def count_pending(batch_ids: list[int] | None = None, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False, price_basis: bool = False) -> int:
     db = SessionLocal()
     try:
-        return _base_query(db, batch_ids, normalize_units, restore_originals, fill_prices).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
+        return _base_query(db, batch_ids, normalize_units, restore_originals, fill_prices, price_basis).with_entities(func.count(InvoiceExtraction.id)).scalar() or 0
     finally:
         db.close()
 
 
 def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normalize_units: bool = False,
-         restore_originals: bool = False, fill_prices: bool = False) -> None:
+         restore_originals: bool = False, fill_prices: bool = False, price_basis: bool = False) -> None:
     last_id = 0
     # Änderungsprotokoll: jeder echte (nicht Vorschau-)Lauf bekommt einen Vorgang mit Alt-/Neuwert je Feld → rückgängig machbar
-    kind = "backfill_fill_prices" if fill_prices else "backfill_restore" if restore_originals else "backfill_normalize" if normalize_units else "backfill_rules"
+    kind = "backfill_price_basis" if price_basis else "backfill_fill_prices" if fill_prices else "backfill_restore" if restore_originals else "backfill_normalize" if normalize_units else "backfill_rules"
     run_id = None
     if not dry_run:
         try:
@@ -316,7 +409,7 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
             db = SessionLocal()
             try:
                 ids = [
-                    r[0] for r in _base_query(db, batch_ids, normalize_units, restore_originals, fill_prices)
+                    r[0] for r in _base_query(db, batch_ids, normalize_units, restore_originals, fill_prices, price_basis)
                     .filter(InvoiceExtraction.id > last_id)
                     .order_by(InvoiceExtraction.id).limit(CHUNK_SIZE).all()
                 ]
@@ -336,7 +429,10 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
                         break
                     try:
                         before = change_log.snapshot(ext, by_doc.get(ext.document_id, [])) if run_id else None
-                        if fill_prices:
+                        if price_basis:
+                            n = price_basis_extraction(ext, by_doc.get(ext.document_id, []))
+                            info = {"outcome": "basis_set" if n else "unchanged", "filled_prices": n, "corrections": 0}
+                        elif fill_prices:
                             n = fill_prices_extraction(ext, by_doc.get(ext.document_id, []))
                             info = {"outcome": "filled" if n else "unchanged", "filled_prices": n, "corrections": 0}
                         elif restore_originals:
@@ -400,16 +496,16 @@ def _run(dry_run: bool, auto_correct: bool, batch_ids: list[int] | None, normali
 
 
 def start(dry_run: bool = False, auto_correct: bool = True, batch_ids: list[int] | None = None,
-          background: bool = True, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False) -> dict:
+          background: bool = True, normalize_units: bool = False, restore_originals: bool = False, fill_prices: bool = False, price_basis: bool = False) -> dict:
     """Startet einen Lauf. Läuft schon einer, wird er nicht gestartet (RuntimeError)."""
-    total = count_pending(batch_ids, normalize_units, restore_originals, fill_prices)
+    total = count_pending(batch_ids, normalize_units, restore_originals, fill_prices, price_basis)
     with _lock:
         if _state.get("running"):
             raise RuntimeError("Es läuft bereits eine Nachrüstung")
         _cancel.clear()
         _state.clear()
-        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units, restore_originals, fill_prices))
-    args = (dry_run, auto_correct, batch_ids, normalize_units, restore_originals, fill_prices)
+        _state.update(_empty_state(dry_run, auto_correct, batch_ids, total, normalize_units, restore_originals, fill_prices, price_basis))
+    args = (dry_run, auto_correct, batch_ids, normalize_units, restore_originals, fill_prices, price_basis)
     if background:
         threading.Thread(target=_run, args=args, name="validation-backfill", daemon=True).start()
     else:
