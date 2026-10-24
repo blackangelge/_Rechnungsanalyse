@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 # ─── Knotentypen und ihre Konfiguration ───────────────────────────────────────
 
-NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "validate", "normalize_units", "ai_refine", "end")
+NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "validate", "normalize_units", "ai_refine", "end")
 # Knoten, die Extraktionsdaten bearbeiten (ohne vorherige Extraktion wirkungslos bzw. nur eingeschränkt)
 DATA_NODES = ("validate", "normalize_units")
 MAX_STEPS = 100   # Schutz gegen Endlosschleifen (Zyklen werden zusätzlich beim Speichern verboten)
@@ -48,6 +48,14 @@ class ExtractConfig(BaseModel):
     system_prompt_id: int | None = None      # None = in der Analyse gewählter / Standard-Prompt
     ai_config_id: int | None = None          # None = in der Analyse gewählte / Standard-KI
     format_prompt_id: int | None = None      # Prompt vom Typ „Antwortformat“ (None = Standardformat, falls der Prompt keins beschreibt)
+
+
+class SchemaExtractConfig(BaseModel):
+    """Schemagesteuerte Extraktion: JSON-Schema und Prompt entstehen aus der Schema-Definition (kein eigener Prompt nötig)."""
+
+    ai_config_id: int | None = None          # None = in der Analyse gewählte KI
+    schema_version_id: int | None = None     # None = aktive Schema-Version
+    system_prompt_id: int | None = None      # optionaler Baustein: Zusatzanweisung hinter dem generierten Prompt
 
 
 class ValidateConfig(BaseModel):
@@ -88,7 +96,7 @@ class BranchConfig(BaseModel):
 
 CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "start": EmptyConfig, "end": EmptyConfig, "trim_pages": TrimConfig,
-    "detect_type": DetectConfig, "extract": ExtractConfig,
+    "detect_type": DetectConfig, "extract": ExtractConfig, "schema_extract": SchemaExtractConfig,
     "validate": ValidateConfig, "branch": BranchConfig,
     "normalize_units": NormalizeConfig, "ai_refine": RefineConfig,
 }
@@ -306,7 +314,7 @@ def validate_graph(graph: Any) -> GraphReport:
                     rep.warnings.append(
                         f"Verzweigung '{_label(node)}': Ausgang '{'Ja' if handle == 'true' else 'Nein'}' "
                         "ist nicht verbunden — der Ablauf endet dort")
-    if not any(n.get("type") == "extract" and nid in reachable for nid, n in by_id.items()):
+    if not any(n.get("type") in ("extract", "schema_extract") and nid in reachable for nid, n in by_id.items()):
         rep.warnings.append("Es wird keine Rechnungsextraktion ausgeführt")
     _warn_validate_before_extract(rep, by_id, outgoing, start_id)
     return rep
@@ -326,7 +334,7 @@ def _warn_validate_before_extract(rep: GraphReport, by_id: dict, outgoing: dict,
         if ntype in DATA_NODES and not extracted and nid not in flagged:
             flagged.add(nid)
             rep.warnings.append(f"'{_label(by_id[nid])}' liegt vor jeder Extraktion und wird übersprungen")
-        extracted = extracted or ntype == "extract"
+        extracted = extracted or ntype in ("extract", "schema_extract")
         for handle in output_handles(ntype):
             nxt = outgoing.get((nid, handle))
             if nxt:
@@ -516,7 +524,30 @@ def templates() -> list[dict]:
         "edges": [_edge("start", "extract"), _edge("extract", "validate"), _edge("validate", "units"),
                   _edge("units", "end")],
     }
+    schema = {
+        "nodes": [
+            _node("start", "start", "Start", 0, 60),
+            _node("extract", "schema_extract", "Schema-Extraktion", 240, 60),
+            _node("end", "end", "Fertig", 500, 60),
+        ],
+        "edges": [_edge("start", "extract"), _edge("extract", "end")],
+    }
+    schema_trimmed = {
+        "nodes": [
+            _node("start", "start", "Start", 0, 60),
+            _node("trim", "trim_pages", "Auf erste Seite kürzen", 220, 60, {"max_pages": 1}),
+            _node("extract", "schema_extract", "Schema-Extraktion", 480, 60),
+            _node("end", "end", "Fertig", 740, 60),
+        ],
+        "edges": [_edge("start", "trim"), _edge("trim", "extract"), _edge("extract", "end")],
+    }
     return [
+        {"key": "schema", "name": "Schema-Extraktion",
+         "description": "Extrahiert nach der aktiven Schema-Definition (Structured Outputs) und speichert die Datensätze.",
+         "graph": schema},
+        {"key": "schema_trimmed", "name": "Schema-Extraktion, erst kürzen",
+         "description": "Kürzt die PDF auf die erste Seite und extrahiert dann nach dem Schema.",
+         "graph": schema_trimmed},
         {"key": "standard", "name": "Standard (wie bisher)",
          "description": "Dokumententyp erkennen → nur bei Eingangsrechnung extrahieren und prüfen.",
          "graph": standard},

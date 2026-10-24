@@ -66,6 +66,8 @@ class RunContext:
     existing_type_id: int | None = None
 
     # Laufzeitzustand
+    schema_done: bool = False             # Schema-Extraktion hat Datensätze gespeichert
+    schema_summary: dict = field(default_factory=dict)
     images: list | None = None
     page_count: int = 0
     type_detected: bool = False
@@ -270,6 +272,32 @@ def _db_finish_empty(doc_id: int, page_count: int, batch_id: int | None, filenam
         db.close()
 
 
+def _db_finish_schema(doc_id: int, page_count: int, batch_id: int | None, filename: str, ki_stats: dict | None) -> None:
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is not None:
+            if page_count > 0:
+                doc.page_count = page_count
+            doc.status = "done"
+            db.commit()
+            stats = ki_stats or {}
+            if stats:
+                from app.models.document_token_count import DocumentTokenCount
+                db.add(DocumentTokenCount(
+                    document_id=doc_id, input_token_count=stats.get("input_tokens") or 0,
+                    output_token_count=stats.get("output_tokens") or 0, reasoning_count=stats.get("reasoning_tokens") or 0,
+                    time_spent_seconds=stats.get("total_duration") or 0.0,
+                ))
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+        logger.info("Schema-Extraktion abgeschlossen: %s", filename)
+    finally:
+        db.close()
+
+
 # ─── Knoten ───────────────────────────────────────────────────────────────────
 
 async def _h_start(cfg, ctx: RunContext):
@@ -374,6 +402,58 @@ async def _h_extract(cfg, ctx: RunContext):
     return NodeResult(detail=f"{len(positions)} Position(en), Modell {getattr(proxy, 'model_name', '?')}")
 
 
+def _db_schema_prepare(version_id: int | None, extra_instruction: str | None):
+    from app.services import schema_extraction
+    db = SessionLocal()
+    try:
+        return schema_extraction.prepare(db, version_id, extra_instruction)
+    finally:
+        db.close()
+
+
+def _db_schema_finish(doc_id: int, prepared, parsed: dict):
+    from app.services import schema_extraction
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, doc_id)
+        return schema_extraction.finish(db, doc, prepared, parsed)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+async def _h_schema_extract(cfg, ctx: RunContext):
+    from app.services import schema_extraction, structured_ai
+    from app.services.schema_pipeline import SchemaValidationFailed
+    extra = await asyncio.to_thread(_db_prompt_text, cfg.system_prompt_id) if cfg.system_prompt_id else None
+    proxy = await asyncio.to_thread(_db_ai_proxy, cfg.ai_config_id) if cfg.ai_config_id else ctx.ai_proxy
+    try:
+        prepared = await asyncio.to_thread(_db_schema_prepare, cfg.schema_version_id, extra)
+    except schema_extraction.ExtractionSetupError as exc:
+        raise RuntimeError(str(exc)) from exc
+    images = await ctx.ensure_images()
+    result = await asyncio.to_thread(
+        structured_ai.call_structured, proxy, prepared.system_prompt, prepared.user_text, images, prepared.response_format,
+    )
+    ctx.add_stats(result.ki_stats)
+    ctx.node_io = {"prompt": _clip(prepared.system_prompt), "response": _clip(result.raw), "model": getattr(proxy, "model_name", None),
+                   "notes": [f"Schema-Version {prepared.version_number}, Antwortformat json_schema"]}
+    if _docs()._is_ai_conn_error(result.raw):
+        raise AIUnavailable(f"KI nicht erreichbar bei der Schema-Extraktion: {result.raw[:120]}")
+    if result.error or result.parsed is None:
+        raise RuntimeError(result.error or "Keine auswertbare Antwort")
+    try:
+        saved = await asyncio.to_thread(_db_schema_finish, ctx.doc_id, prepared, result.parsed)
+    except SchemaValidationFailed as exc:
+        raise RuntimeError("Antwort entspricht nicht dem Schema: " + "; ".join(exc.messages[:5])) from exc
+    ctx.schema_done = True
+    ctx.schema_summary = {"records": saved.record_count, "issues": saved.issue_count, "unknown_units": saved.unknown_units,
+                          "version": prepared.version_number}
+    return NodeResult(detail=f"{saved.record_count} Datensatz/-sätze, {saved.issue_count} Hinweis(e), Schema v{prepared.version_number}")
+
+
 async def _h_validate(cfg, ctx: RunContext):
     if not ctx.extracted:
         return NodeResult(detail="übersprungen — keine Extraktion vorhanden")
@@ -435,7 +515,7 @@ async def _h_refine(cfg, ctx: RunContext):
 
 HANDLERS = {
     "start": _h_start, "end": _h_end, "trim_pages": _h_trim, "detect_type": _h_detect,
-    "branch": _h_branch, "extract": _h_extract, "validate": _h_validate,
+    "branch": _h_branch, "extract": _h_extract, "schema_extract": _h_schema_extract, "validate": _h_validate,
     "normalize_units": _h_normalize, "ai_refine": _h_refine,
 }
 
@@ -513,7 +593,9 @@ async def analyze_with_workflow(
         ctx.page_count = len(ctx.images)
     ctx.images = None
 
-    if ctx.extracted:
+    if ctx.schema_done:
+        await asyncio.to_thread(_db_finish_schema, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename, ctx.ki_stats)
+    elif ctx.extracted:
         await asyncio.to_thread(
             docs._db_analyze_write, doc_id, ctx.original_filename, ctx.batch_id, ctx.ai_model_name,
             ctx.page_count, ctx.fields, ctx.positions, ctx.raw, ctx.ki_stats,
@@ -527,15 +609,23 @@ async def analyze_with_workflow(
     else:
         await asyncio.to_thread(_db_finish_empty, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename)
     try:
-        saved = await asyncio.to_thread(_db_saved_snapshot, doc_id)
-        final = _snapshot(ctx)
-        trace.append({
-            "node_id": "__saved__", "type": "saved", "label": "In Datenbank gespeichert", "status": "ok",
-            "duration_s": 0.0, "detail": f"{len(saved['positions'])} Position(en) gespeichert", "branch": None,
-            "input": final, "output": saved,
-            "changes": workflow_service.diff_snapshots(
-                {"fields": {}, "positions": final["positions"]}, {"fields": {}, "positions": saved["positions"]}),
-        })
+        if ctx.schema_done:
+            s = ctx.schema_summary
+            trace.append({
+                "node_id": "__saved__", "type": "saved", "label": "In Datenbank gespeichert", "status": "ok", "duration_s": 0.0,
+                "detail": f"{s.get('records', 0)} Datensatz/-sätze (Schema v{s.get('version')}), {s.get('issues', 0)} Hinweis(e)",
+                "branch": None, "input": {}, "output": s, "changes": [],
+            })
+        else:
+            saved = await asyncio.to_thread(_db_saved_snapshot, doc_id)
+            final = _snapshot(ctx)
+            trace.append({
+                "node_id": "__saved__", "type": "saved", "label": "In Datenbank gespeichert", "status": "ok",
+                "duration_s": 0.0, "detail": f"{len(saved['positions'])} Position(en) gespeichert", "branch": None,
+                "input": final, "output": saved,
+                "changes": workflow_service.diff_snapshots(
+                    {"fields": {}, "positions": final["positions"]}, {"fields": {}, "positions": saved["positions"]}),
+            })
     except Exception as exc:        # Protokoll darf nie die Analyse gefährden
         logger.warning("Gespeicherter Datenstand von #%d nicht protokolliert: %s", doc_id, exc)
     await asyncio.to_thread(_db_save_run, doc_id, workflow, trace)
