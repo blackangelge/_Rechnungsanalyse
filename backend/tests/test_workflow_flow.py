@@ -187,7 +187,7 @@ def test_node_prompt_and_ai_config_overrides(env, monkeypatch):
     g["nodes"][1]["data"]["config"] = {"system_prompt_id": prompt.id, "ai_config_id": other.id}
     env.add_workflow(g, default=True)
     doc = env.analyze(env.make_doc(), prompt="IGNORIERT")
-    assert ai.calls[0][2] == "SPEZIAL-PROMPT" and ai.calls[0][3] == "anderes-modell"
+    assert ai.calls[0][2].startswith("SPEZIAL-PROMPT") and ai.calls[0][3] == "anderes-modell"      # + automatisch angehängtes Antwortformat
     assert doc.used_system_prompt == "SPEZIAL-PROMPT"
     assert "anderes-modell" in doc.workflow_run[1]["detail"]
 
@@ -392,8 +392,8 @@ def test_worker_payload_workflow_reaches_analysis(env, monkeypatch):
 
     seen = {}
 
-    async def fake_analyze(doc_id, server_id, prompt_id, workflow_id=None):
-        seen.update(doc=doc_id, server=server_id, prompt=prompt_id, workflow=workflow_id)
+    async def fake_analyze(doc_id, server_id, prompt_id, workflow_id=None, skip_type_detection=False):
+        seen.update(doc=doc_id, server=server_id, prompt=prompt_id, workflow=workflow_id, skip=skip_type_detection)
         return "ok"
 
     monkeypatch.setattr(docs_router, "_analyze_single", fake_analyze)
@@ -402,7 +402,10 @@ def test_worker_payload_workflow_reaches_analysis(env, monkeypatch):
     client = AIDispatcherClient.__new__(AIDispatcherClient)
     result = asyncio.run(client._handle_process_document(
         server, {"kind": "process_document", "document_id": 5, "system_prompt_id": 3, "workflow_id": 9}))
-    assert seen == {"doc": 5, "server": 7, "prompt": 3, "workflow": 9} and result["result_code"] == "ok"
+    assert seen == {"doc": 5, "server": 7, "prompt": 3, "workflow": 9, "skip": False} and result["result_code"] == "ok"
+    asyncio.run(client._handle_process_document(
+        server, {"kind": "process_document", "document_id": 5, "skip_type_detection": True}))
+    assert seen["skip"] is True
 
 
 def test_ai_unavailable_in_workflow_keeps_document_for_retry(env, monkeypatch):
@@ -538,3 +541,79 @@ def test_trace_explains_why_normalization_did_nothing(env, monkeypatch):
     env.add_workflow(_chain(("extract", {}), ("normalize_units", {})), default=True)
     nu = next(t for t in env.analyze(env.make_doc()).workflow_run if t["type"] == "normalize_units")
     assert nu["changes"] == [] and any("nicht je Tonne" in n for n in nu["io"]["notes"])
+
+
+# ─── Nur neu auslesen (Typ nicht erneut erkennen) ─────────────────────────────
+
+def test_only_reextract_skips_type_detection_in_classic_flow(env, monkeypatch):
+    ai = FakeAI(monkeypatch)
+    doc = env.analyze(env.make_doc())
+    assert ai.names() == ["detect", "extract"] and doc.document_type == 1
+    ai.calls.clear()
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None, True))
+    env.db.expire_all()
+    doc = env.db.get(type(doc), doc.id)
+    assert ai.names() == ["extract"] and doc.status == "done" and doc.document_type == 1      # Typ unverändert übernommen
+
+
+def test_only_reextract_detects_type_when_none_is_stored(env, monkeypatch):
+    ai = FakeAI(monkeypatch)
+    doc = env.make_doc()
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None, True))
+    assert ai.names() == ["detect", "extract"]                       # kein gespeicherter Typ → normal erkennen
+
+
+def test_only_reextract_in_workflow_keeps_stored_type_without_ai_call(env, monkeypatch):
+    ai = FakeAI(monkeypatch)
+    env.add_workflow(_tpl("standard"), default=True)
+    doc = env.analyze(env.make_doc())
+    assert ai.names() == ["detect", "extract"]
+    ai.calls.clear()
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None, True))
+    env.db.expire_all()
+    doc = env.db.get(type(doc), doc.id)
+    assert ai.names() == ["extract"] and doc.status == "done" and doc.document_type == 1
+    detect_entry = next(t for t in doc.workflow_run if t["type"] == "detect_type")
+    assert "übernommen" in (detect_entry.get("detail") or "")
+
+
+def test_enqueue_stores_skip_flag_in_payload(client, env):
+    from app.models.workflow_task import WorkflowTask
+    doc = env.make_doc()
+    r = client.post("/api/documents/enqueue", json={"document_ids": [doc.id], "skip_type_detection": True})
+    assert r.status_code == 200
+    assert env.db.query(WorkflowTask).one().payload.get("skip_type_detection") is True
+
+
+# ─── Antwortformat ─────────────────────────────────────────────────────────────
+
+def test_default_response_format_is_appended_when_prompt_has_no_structure():
+    out = ai_service.with_response_format("Lies die Rechnung.")
+    assert "artikelbezeichnung" in out and "positionen" in out
+    full = "Antworte mit {\"positionen\": [{\"artikelbezeichnung\": ...}]}"
+    assert ai_service.with_response_format(full) == full                       # beschreibt die Struktur schon
+    assert ai_service.with_response_format("X", "MEIN FORMAT").endswith("MEIN FORMAT")
+
+
+def test_extract_node_sends_prompt_with_default_or_chosen_format(env, monkeypatch):
+    ai = FakeAI(monkeypatch)
+    fmt = SystemPrompt(name="Format A", content="FORMAT-A-INHALT", type=3)
+    env.db.add(fmt)
+    env.db.commit()
+    wf = env.add_workflow(_chain(("extract", {"format_prompt_id": fmt.id})), default=True)
+    doc = env.analyze(env.make_doc(), prompt="Mein Prompt ohne Struktur")
+    assert ai.calls[0][2].startswith("Mein Prompt ohne Struktur") and ai.calls[0][2].endswith("FORMAT-A-INHALT")
+    assert doc.used_system_prompt == "Mein Prompt ohne Struktur"            # gespeichert wird der Prompt wie angelegt
+    ai.calls.clear()
+    crud.workflow.delete(env.db, wf.id)
+    env.add_workflow(_chain(("extract", {})), default=True)
+    env.analyze(doc, prompt="Mein Prompt ohne Struktur")
+    assert "ANTWORTFORMAT" in ai.calls[0][2] and "artikelbezeichnung" in ai.calls[0][2]
+
+
+def test_default_format_endpoint_and_type3_prompts_are_not_exclusive(client, db):
+    r = client.get("/api/settings/system-prompts/default-format")
+    assert r.status_code == 200 and "artikelbezeichnung" in r.json()["content"]
+    for n in ("A", "B"):
+        assert client.post("/api/settings/system-prompts", json={"name": n, "content": "x", "type": 3}).status_code == 201
+    assert [p["type"] for p in client.get("/api/settings/system-prompts").json()].count(3) == 2

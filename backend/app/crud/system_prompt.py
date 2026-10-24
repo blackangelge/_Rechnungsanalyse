@@ -4,6 +4,7 @@ CRUD-Operationen für die system_prompts-Tabelle.
 Prompt-Typen:
   _TYPE_DOC_TYPE = 0  — Dokumententyp-Erkennung (detect_document_type)
   _TYPE_DEFAULT  = 1  — Standard-Extraktion für Eingangsrechnungen (extract_invoice_data)
+  _TYPE_FORMAT   = 3  — Antwortformat (JSON-Struktur der Antwort), im Workflow-Knoten „Daten extrahieren“/„KI-Nachbearbeitung“ wählbar; beliebig viele.
   _TYPE_WORKFLOW = 2  — Workflow-Baustein: wird NIE automatisch gewählt, nur ausdrücklich
                         (Workflow-Knoten, KI-Test, Auswahl in der Analyse). Beliebig viele möglich.
 
@@ -21,6 +22,7 @@ from app.schemas.system_prompt import SystemPromptCreate, SystemPromptUpdate
 _TYPE_DOC_TYPE = 0      # Dokumententyp-Erkennungsprompt
 _TYPE_DEFAULT  = 1      # Standard-Extraktionsprompt (Eingangsrechnung)
 _TYPE_WORKFLOW = 2      # Workflow-Baustein (nie automatisch gewählt)
+_TYPE_FORMAT   = 3      # Antwortformat: beschreibt die erwartete JSON-Struktur, wird in Workflow-Knoten an den Prompt gehängt (beliebig viele)
 _UNIQUE_TYPES = (_TYPE_DOC_TYPE, _TYPE_DEFAULT)
 
 

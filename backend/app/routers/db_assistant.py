@@ -40,6 +40,7 @@ class ApplyRequest(BaseModel):
 class ReanalysisRequest(BaseModel):
     document_ids: list[int] = Field(..., min_length=1)
     workflow_id: int | None = None
+    skip_type_detection: bool = False     # Dokumententyp nicht neu erkennen, nur neu auslesen
     reason: str = ""
 
 
@@ -102,7 +103,7 @@ def apply_reanalysis(body: ReanalysisRequest, db: Session = Depends(get_db)):
     valid = db_assistant_service.filter_reanalysis_ids(db, ids)
     if not valid:
         raise HTTPException(status_code=400, detail="Keiner der Belege kommt in Frage (nicht vorhanden, gelöscht oder gerade in Verarbeitung).")
-    result = enqueue_documents(EnqueueRequest(document_ids=valid, workflow_id=body.workflow_id), db)
+    result = enqueue_documents(EnqueueRequest(document_ids=valid, workflow_id=body.workflow_id, skip_type_detection=body.skip_type_detection), db)
     logger.warning("Daten-Assistent: erneute KI-Analyse FREIGEGEBEN für %d Beleg(e), %d eingereiht (Begründung: %s)",
                    len(valid), result.enqueued, body.reason)
     return {"requested": len(ids), "eligible": len(valid), "enqueued": result.enqueued, "message": result.message}

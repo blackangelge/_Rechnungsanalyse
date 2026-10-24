@@ -92,6 +92,7 @@ function ReanalysisView({
         Vorschlag: {r.count.toLocaleString("de-DE")} Beleg(e) erneut zur KI-Analyse senden
       </div>
       {r.reason && <div className="mb-2 text-xs text-violet-800">{r.reason}</div>}
+      {r.skip_type_detection && <div className="mb-2 text-xs text-violet-800">Nur neu auslesen: der Dokumententyp wird nicht erneut erkannt.</div>}
       <div className="mb-2 text-xs text-gray-700">
         Beleg-IDs: {r.sample.map((d) => `#${d.id}`).join(", ")}{r.count > r.sample.length ? ` … (+${r.count - r.sample.length})` : ""}
         {r.skipped > 0 && <> · {r.skipped} nicht geeignet (gelöscht / in Verarbeitung / unbekannt)</>}
@@ -175,7 +176,7 @@ export default function Assistant() {
     setApplying(true);
     let text: string;
     try {
-      const res = await dbAssistantApi.applyReanalysis({ document_ids: r.document_ids, reason: r.reason });
+      const res = await dbAssistantApi.applyReanalysis({ document_ids: r.document_ids, reason: r.reason, skip_type_detection: r.skip_type_detection });
       text = `✓ ${res.message}`;
     } catch (e) {
       text = `✗ ${extractApiError(e, "Einreihen fehlgeschlagen")}`;

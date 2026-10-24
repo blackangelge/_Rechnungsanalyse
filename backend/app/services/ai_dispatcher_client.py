@@ -236,6 +236,8 @@ class AIDispatcherClient:
         system_prompt_id: int | None = payload.get("system_prompt_id")
         # Optional explizit gewählter Analyse-Workflow (sonst automatische Auswahl in _analyze_single)
         workflow_id: int | None = payload.get("workflow_id")
+        # „Nur neu auslesen“: gespeicherten Dokumententyp übernehmen statt erneut zu erkennen
+        skip_type_detection: bool = bool(payload.get("skip_type_detection"))
 
         # Dokument-Status auf "processing" setzen damit das Frontend den Spinner zeigt.
         # Läuft in einem Thread damit der Event-Loop nicht blockiert wird.
@@ -255,6 +257,7 @@ class AIDispatcherClient:
                 server.id,
                 system_prompt_id,
                 workflow_id,
+                skip_type_detection,
             )
         except Exception as exc:
             log.error(

@@ -118,6 +118,13 @@ def list_system_prompts(db: Session = Depends(get_db)):
     return crud.system_prompt.get_all(db)
 
 
+@router.get("/system-prompts/default-format")
+def default_response_format():
+    """Das eingebaute Standard-Antwortformat (Vorlage für einen Prompt vom Typ 3 „Antwortformat“)."""
+    from app.services import ai_service
+    return {"content": ai_service.DEFAULT_RESPONSE_FORMAT}
+
+
 @router.post("/system-prompts", response_model=SystemPromptRead, status_code=201)
 def create_system_prompt(payload: SystemPromptCreate, db: Session = Depends(get_db)):
     """

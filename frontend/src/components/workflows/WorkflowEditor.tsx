@@ -223,6 +223,13 @@ function Inspector({
               {prompts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </Field>
+          <Field label="Antwortformat" hint="Prompt vom Typ „Antwortformat“ (Einstellungen → Systemprompts). Leer = Standardformat, falls der Prompt die JSON-Struktur nicht selbst beschreibt.">
+            <select className={inputCls} value={cfg.format_prompt_id ?? ""}
+              onChange={(e) => onChange({ config: { format_prompt_id: num(e.target.value) } })}>
+              <option value="">Automatisch (Standardformat)</option>
+              {prompts.filter((p) => p.type === 3).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
           <Field label="KI-Konfiguration" hint="Leer = in der Analyse gewählte bzw. Standard-KI.">
             <select className={inputCls} value={cfg.ai_config_id ?? ""}
               onChange={(e) => onChange({ config: { ai_config_id: num(e.target.value) } })}>
@@ -274,6 +281,13 @@ function Inspector({
               onChange={(e) => onChange({ config: { system_prompt_id: num(e.target.value) } })}>
               <option value="">— bitte wählen —</option>
               {prompts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Antwortformat" hint="Prompt vom Typ „Antwortformat“ (Einstellungen → Systemprompts). Leer = Standardformat, falls der Prompt die JSON-Struktur nicht selbst beschreibt.">
+            <select className={inputCls} value={cfg.format_prompt_id ?? ""}
+              onChange={(e) => onChange({ config: { format_prompt_id: num(e.target.value) } })}>
+              <option value="">Automatisch (Standardformat)</option>
+              {prompts.filter((p) => p.type === 3).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </Field>
           <Field label="KI-Konfiguration" hint="Leer = bisherige bzw. Standard-KI.">

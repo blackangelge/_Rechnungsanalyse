@@ -593,11 +593,12 @@ export const documentsApi = {
   confirmValidation: (id: number) =>
     apiClient.post<DocumentDetail>(`/api/documents/${id}/validation/confirm`).then((r) => r.data),
   /** Dokumente in die Worker-Warteschlange einreihen; optional mit einem bestimmten Analyse-Workflow */
-  enqueue: (documentIds: number[], workflowId?: number) =>
+  enqueue: (documentIds: number[], workflowId?: number, skipTypeDetection = false) =>
     apiClient
       .post<{ enqueued: number; message: string }>("/api/documents/enqueue", {
         document_ids: documentIds,
         ...(workflowId ? { workflow_id: workflowId } : {}),
+        ...(skipTypeDetection ? { skip_type_detection: true } : {}),
       })
       .then((r) => r.data),
 };
@@ -713,7 +714,7 @@ export interface SystemPrompt {
   id: number;
   name: string;
   content: string;
-  /** 0 = Dokumententyp-Erkennung, 1 = Standard-Extraktion (Eingangsrechnung), 2 = Workflow-Baustein */
+  /** 0 = Dokumententyp-Erkennung, 1 = Standard-Extraktion (Eingangsrechnung), 2 = Workflow-Baustein, 3 = Antwortformat */
   type: number;
   created_at: string;
   updated_at: string;
@@ -737,6 +738,9 @@ export const systemPromptsApi = {
   /** Als Standard-Extraktionsprompt setzen — bisherige Standards werden zu Workflow-Bausteinen */
   setDefault: (id: number) =>
     apiClient.post<SystemPrompt>(`/api/settings/system-prompts/${id}/set-default/`).then((r) => r.data),
+  /** Das eingebaute Standard-Antwortformat (Vorlage für einen Prompt vom Typ 3) */
+  defaultFormat: () =>
+    apiClient.get<{ content: string }>("/api/settings/system-prompts/default-format/").then((r) => r.data.content),
 };
 
 // ─── Typen: Dokumententypen (statisch) ───────────────────────────────────────
@@ -825,6 +829,8 @@ export interface WorkflowNodeConfig {
   // detect_type / extract
   system_prompt_id?: number | null;
   ai_config_id?: number | null;
+  // extract / ai_refine: Prompt vom Typ „Antwortformat“
+  format_prompt_id?: number | null;
   // normalize_units
   target?: "t" | "kg";
   mode?: "tonne_prices" | "all";
@@ -1433,6 +1439,7 @@ export interface AssistantReanalysis {
   truncated: boolean;
   sample: { id: number; filename: string; status: string }[];
   reason: string;
+  skip_type_detection?: boolean;
 }
 
 export interface AssistantReply {
@@ -1453,7 +1460,7 @@ export const dbAssistantApi = {
       .post<AssistantReply>("/api/db-assistant/chat/", { messages, ai_config_id: aiConfigId ?? null, allow_proposals: allowProposals }, { timeout: 0 })
       .then((r) => r.data),
   /** Freigabe: Belege erneut zur KI-Analyse in die Warteschlange einreihen */
-  applyReanalysis: (p: { document_ids: number[]; reason: string }) =>
+  applyReanalysis: (p: { document_ids: number[]; reason: string; skip_type_detection?: boolean }) =>
     apiClient.post<{ requested: number; eligible: number; enqueued: number; message: string }>("/api/db-assistant/apply-reanalysis/", p).then((r) => r.data),
   apply: (p: { table: string; id: unknown; changes: Record<string, unknown>; reason: string }) =>
     apiClient.post<{ row: DbRow; changed: Record<string, { alt: unknown; neu: unknown }> }>("/api/db-assistant/apply/", p).then((r) => r.data),
