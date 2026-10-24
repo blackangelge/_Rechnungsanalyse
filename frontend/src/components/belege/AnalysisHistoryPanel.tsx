@@ -142,7 +142,7 @@ export default function AnalysisHistoryPanel({
         </span>
       </summary>
       <div className="border-t border-gray-100 p-4">
-        {err && <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{err}</div>}
+        {err && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">{err}</div>}
         <ul className="space-y-2">
           {items.map((h) => (
             <li key={h.id} className="rounded border border-gray-200" data-testid="history-entry">

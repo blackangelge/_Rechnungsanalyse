@@ -85,7 +85,7 @@ const COLUMNS: { key: PositionSort; label: string; align?: "right" }[] = [
   { key: "document_id", label: "Beleg" },
 ];
 
-const field = "rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none";
+const field = "input py-1.5";
 
 // ─── Seite ────────────────────────────────────────────────────────────────────
 

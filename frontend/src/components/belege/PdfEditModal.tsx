@@ -199,7 +199,7 @@ export default function PdfEditModal({
                       onKeyDown={(e) => e.key === "Enter" && applySpec()}
                       placeholder="2-100"
                       className="w-36 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none" />
-                    <button onClick={applySpec} className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100">
+                    <button onClick={applySpec} className="btn btn-secondary btn-sm">
                       Auswählen
                     </button>
                   </div>
@@ -231,11 +231,11 @@ export default function PdfEditModal({
                   className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100">Keine</button>
                 <div className="ml-auto flex gap-2">
                   <button onClick={keepSelected} disabled={busy || selected.size === 0 || selected.size === pageCount}
-                    className="rounded border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-40">
+                    className="btn btn-secondary btn-sm">
                     Nur ausgewählte behalten
                   </button>
                   <button onClick={removeSelected} disabled={busy || selected.size === 0}
-                    className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-40">
+                    className="btn btn-danger btn-sm">
                     Ausgewählte entfernen
                   </button>
                 </div>

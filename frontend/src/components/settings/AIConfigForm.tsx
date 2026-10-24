@@ -328,7 +328,7 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
         <button
           type="button"
           onClick={onCancel}
-          className="rounded border px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+          className="btn btn-secondary"
         >
           Abbrechen
         </button>

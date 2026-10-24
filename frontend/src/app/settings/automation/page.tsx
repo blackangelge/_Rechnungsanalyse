@@ -82,7 +82,7 @@ function PdfTrimSettings() {
         <p className={`mb-3 text-sm ${msg.ok ? "text-green-700" : "text-red-600"}`}>{msg.text}</p>
       )}
       <button type="button" onClick={save} disabled={saving}
-        className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+        className="btn btn-primary">
         {saving ? "Speichere…" : "Speichern"}
       </button>
     </div>
@@ -207,7 +207,7 @@ function ValidationBackfill() {
             <div className="h-2 rounded-full bg-blue-500 transition-all" style={{ width: `${percent}%` }} />
           </div>
           <button type="button" onClick={cancel}
-            className="mt-3 rounded border border-red-300 px-4 py-1.5 text-sm text-red-700 hover:bg-red-50">Abbrechen</button>
+            className="btn btn-danger-outline btn-sm mt-3">Abbrechen</button>
         </div>
       ) : (
         <div className="mb-4 flex gap-3">
@@ -506,7 +506,7 @@ export default function AutomationSettingsPage() {
         <button
           type="submit"
           disabled={saving || loading}
-          className="rounded bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="btn btn-primary"
         >
           {saving ? "Speichern..." : "Einstellungen speichern"}
         </button>

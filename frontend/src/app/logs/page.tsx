@@ -116,14 +116,14 @@ export default function LogsPage() {
           <button
             onClick={loadWorkerStats}
             disabled={workerStatsLoading}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            className="btn btn-secondary btn-sm"
           >
             {workerStatsLoading ? "Lade..." : "↻ Worker"}
           </button>
           <button
             onClick={loadKiStats}
             disabled={kiStatsLoading}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            className="btn btn-secondary btn-sm"
           >
             {kiStatsLoading ? "Lade..." : "↻ Statistiken"}
           </button>
@@ -140,7 +140,7 @@ export default function LogsPage() {
         </h2>
 
         {workerStatsError && (
-          <div className="mb-3 rounded bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+          <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
             {workerStatsError}
           </div>
         )}
@@ -251,7 +251,7 @@ export default function LogsPage() {
         <h2 className="mb-3 text-lg font-semibold text-gray-800">Analyse-Statistiken</h2>
 
         {kiStatsError && (
-          <div className="mb-3 rounded bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+          <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
             {kiStatsError}
           </div>
         )}

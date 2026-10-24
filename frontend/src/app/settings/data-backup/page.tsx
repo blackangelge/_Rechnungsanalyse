@@ -19,7 +19,7 @@ function Progress({ job, onCancel }: { job: BackupJobState; onCancel: () => void
     <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4" data-testid="job-progress">
       <div className="mb-1 flex items-center justify-between text-sm text-blue-900">
         <span className="font-medium">{job.kind === "backup" ? "Backup läuft" : job.dry_run ? "Vorschau läuft" : "Import läuft"} — {job.phase}</span>
-        <button onClick={onCancel} className="rounded border border-blue-300 bg-white px-2 py-0.5 text-xs text-blue-800 hover:bg-blue-100">Abbrechen</button>
+        <button onClick={onCancel} className="btn btn-secondary btn-sm">Abbrechen</button>
       </div>
       <div className="h-2 overflow-hidden rounded bg-blue-100"><div className="h-2 bg-blue-600 transition-all" style={{ width: `${pct}%` }} /></div>
       <div className="mt-1 text-xs text-blue-700">{(job.done ?? 0).toLocaleString("de-DE")} / {(job.total ?? 0).toLocaleString("de-DE")}{job.files_done ? ` · ${job.files_done.toLocaleString("de-DE")} PDFs` : ""}</div>
@@ -79,12 +79,12 @@ function RestoreDialog({ backup, onClose, onStarted }: { backup: BackupFile; onC
   const radio = "mt-0.5";
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-6">
-      <div className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl" data-testid="restore-dialog">
+      <div className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-pop" data-testid="restore-dialog">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900">Importieren aus {backup.name}</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-800">✕</button>
         </div>
-        {error && <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
+        {error && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
         <fieldset className="mb-4 space-y-2 text-sm text-gray-800">
           <legend className="mb-1 text-xs font-medium uppercase text-gray-500">Wie importieren?</legend>
           <label className="flex gap-2"><input type="radio" className={radio} checked={mode === "remap"} onChange={() => setMode("remap")} />
@@ -194,7 +194,7 @@ export default function DataBackupPage() {
         auf Wunsch Lieferanten und die PDF-Dateien. Das Backup liegt als ZIP-Datei im Ordner <code className="rounded bg-gray-100 px-1">{path || "…"}</code> auf dem NAS
         (Export-Ordner) — kopiere sie zusätzlich auf ein anderes Laufwerk. Einstellungen (KI, Prompts, Workflows) sichert „Backups / Wiederherstellung“.
       </p>
-      {error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {job.running && <Progress job={job} onCancel={() => dataBackupApi.cancel().then(() => undefined)} />}
       <ResultBox job={job} />
 

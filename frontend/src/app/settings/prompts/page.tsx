@@ -175,7 +175,7 @@ export default function SystemPromptsPage() {
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 space-y-2">
               <p>Die Anwendung versteht nur das verschachtelte Format (<code>lieferant</code>, <code>rechnungsdaten</code>, <code>positionen</code>, <code>zahlungsinformationen</code>).
                 Ohne Antwortformat im Workflow wird das Standardformat automatisch angehängt, sobald der Prompt <code>positionen</code>/<code>artikelbezeichnung</code> nicht selbst beschreibt.</p>
-              <button type="button" className="rounded border border-amber-400 bg-white px-3 py-1 font-medium text-amber-800 hover:bg-amber-100"
+              <button type="button" className="btn btn-secondary btn-sm"
                 onClick={async () => { try { setFormContent(await systemPromptsApi.defaultFormat()); } catch { setError("Standardformat konnte nicht geladen werden"); } }}>
                 Standard-Antwortformat als Vorlage einfügen
               </button>

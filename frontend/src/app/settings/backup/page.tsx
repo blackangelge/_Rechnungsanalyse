@@ -84,7 +84,7 @@ export default function BackupPage() {
         <button
           onClick={handleDownload}
           disabled={downloading}
-          className="rounded bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          className="btn btn-primary"
         >
           {downloading ? "Wird erstellt..." : "⬇ Backup herunterladen"}
         </button>

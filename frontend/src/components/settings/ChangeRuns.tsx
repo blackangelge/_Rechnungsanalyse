@@ -31,12 +31,12 @@ function Details({ run, onClose }: { run: ChangeRun; onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-6">
-      <div className="w-full max-w-5xl rounded-lg bg-white p-5 shadow-xl">
+      <div className="w-full max-w-5xl rounded-xl bg-white p-5 shadow-pop">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900">Vorgang #{run.id} — {KIND_LABEL[run.kind] ?? run.kind}</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-800">✕</button>
         </div>
-        {error && <div className="mb-2 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
+        {error && <div className="mb-2 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
         <div className="mb-2 flex items-center gap-3 text-xs text-gray-500">
           <span>{total.toLocaleString("de-DE")} Feldänderung(en)</span>
           <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - size))} className="rounded border px-2 py-0.5 disabled:opacity-40">‹</button>
@@ -102,7 +102,7 @@ export default function ChangeRuns({ kindPrefix }: { kindPrefix?: string }) {
   return (
     <div className="mt-6 border-t pt-4" data-testid="change-runs">
       <h3 className="mb-2 text-sm font-semibold text-gray-800">Änderungsprotokoll (zuletzt)</h3>
-      {error && <div className="mb-2 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
+      {error && <div className="mb-2 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
       {runs.length === 0 ? <p className="text-sm text-gray-400">Noch keine protokollierten Änderungen.</p> : (
         <table className="min-w-full text-xs">
           <thead className="text-gray-500"><tr>

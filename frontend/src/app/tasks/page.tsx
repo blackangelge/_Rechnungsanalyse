@@ -220,7 +220,7 @@ export default function TasksPage() {
           <button
             onClick={handleTogglePause}
             disabled={pauseToggling || !workerStatus?.worker_online}
-            className="rounded border border-orange-300 px-3 py-1.5 text-sm font-medium text-orange-700 hover:bg-orange-50 disabled:opacity-50 transition-colors"
+            className="btn btn-secondary btn-sm"
           >
             {workerStatus?.paused ? "▶ Fortsetzen" : "⏸ Pausieren"}
           </button>
@@ -229,7 +229,7 @@ export default function TasksPage() {
             onClick={handleRestartAll}
             disabled={bulkDeleting}
             data-testid="restart-completed"
-            className="rounded border border-blue-300 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50 transition-colors"
+            className="btn btn-secondary btn-sm"
             title="Alle abgeschlossenen Tasks der Liste erneut an die KI senden"
           >
             ↻ Abgeschlossene erneut senden{completedCount !== null ? ` (${completedCount.toLocaleString("de-DE")})` : ""}
@@ -252,7 +252,7 @@ export default function TasksPage() {
             onClick={handleClearAll}
             disabled={bulkDeleting}
             data-testid="clear-all"
-            className="rounded border border-red-400 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50 transition-colors"
+            className="btn btn-danger-outline btn-sm"
             title="Gesamte Task-Liste leeren (auch wartende und laufende)"
           >
             Liste leeren
@@ -269,14 +269,14 @@ export default function TasksPage() {
 
       {/* Status-Meldung */}
       {actionMsg && (
-        <div className="rounded bg-blue-50 border border-blue-200 px-4 py-2 text-sm text-blue-700">
+        <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-2 text-sm text-blue-700">
           {actionMsg}
         </div>
       )}
 
       {/* Fehler */}
       {error && (
-        <div className="rounded bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
           {error}
         </div>
       )}

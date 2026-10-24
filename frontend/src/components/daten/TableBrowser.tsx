@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import Pager from "@/components/common/Pager";
 import { DbColumn, DbRow, DbTable, dbApi, extractApiError } from "@/lib/api";
 
-const field = "rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
+const field = "input py-1.5";
 
 function cellText(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -118,14 +118,14 @@ function RowEditor({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-6" data-testid="row-editor">
-      <div className="w-full max-w-3xl rounded-lg bg-white p-5 shadow-xl">
+      <div className="w-full max-w-3xl rounded-xl bg-white p-5 shadow-pop">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900">
             {table.name} {isNew ? "– neue Zeile" : `#${String(pk)}`}
           </h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-800">✕</button>
         </div>
-        {error && <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
+        {error && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div>}
         {original === null ? <p className="text-sm text-gray-500">Lade…</p> : (
           <div className="space-y-2">
             {table.columns.map((c) => (
@@ -153,7 +153,7 @@ function RowEditor({
             </button>
           )}
           {writable && !isNew && (
-            <button onClick={remove} disabled={busy} className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50">Löschen</button>
+            <button onClick={remove} disabled={busy} className="btn btn-danger-outline btn-sm">Löschen</button>
           )}
           <button onClick={onClose} className="ml-auto btn btn-secondary btn-sm">Schließen</button>
         </div>
@@ -257,7 +257,7 @@ export default function TableBrowser() {
         <div className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-gray-400">Tabellen</div>
         {tablesLoading && tables.length === 0 && <p className="px-2 py-1 text-xs text-gray-400">Lade Tabellen…</p>}
         {tablesError && (
-          <div className="m-1 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700" data-testid="tables-error">
+          <div className="m-1 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700" data-testid="tables-error">
             {tablesError}
             <button onClick={loadTables} className="ml-2 font-medium underline">Erneut versuchen</button>
           </div>
@@ -304,11 +304,11 @@ export default function TableBrowser() {
           )}
         </div>
         {writable && (
-          <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
             Bearbeiten ist eingeschaltet: Änderungen wirken sofort auf die echten Daten (Backend-Log hält sie fest). Es laufen keine Plausibilitätsprüfungen — bei Positionen/Beträgen bitte selbst auf Konsistenz achten.
           </div>
         )}
-        {error && <div className="mb-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {error && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
         <Pager
           testId="db-pager" loading={loading} total={total} page={page} pageSize={pageSize} totalPages={totalPages}

@@ -161,7 +161,7 @@ export default function AskModal({
               Beleg mit der Antwort aktualisieren <span className="text-xs text-gray-400">(im Änderungsprotokoll, rückgängig machbar)</span>
             </label>
           )}
-          {error && <div className="rounded border border-red-200 bg-red-50 p-2 text-red-700">{error}</div>}
+          {error && <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-700">{error}</div>}
 
           {result && (
             <div className={`rounded border p-3 ${result.valid ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`} data-testid="ask-result">
@@ -173,7 +173,7 @@ export default function AskModal({
                   ✓ Beleg aktualisiert{result.field_key ? ` (${fieldLabel(result.field_key)})` : ""}
                   {result.old_value ? <> · vorher: <span className="font-mono">{result.old_value}</span></> : null}
                   {result.change_run_id && (
-                    <button className="ml-3 rounded border border-gray-300 bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50" onClick={() => undo(result.change_run_id!)}>Rückgängig</button>
+                    <button className="btn btn-secondary btn-sm ml-3" onClick={() => undo(result.change_run_id!)}>Rückgängig</button>
                   )}
                 </div>
               )}
@@ -191,7 +191,7 @@ export default function AskModal({
               <div className="mt-2 text-xs text-gray-700">
                 gefunden {job.found ?? 0} · nicht gefunden {job.not_found ?? 0} · am Beleg übernommen {job.applied ?? 0} · Fehler {job.errors ?? 0}
               </div>
-              {job.running && <button className="mt-2 rounded border border-red-300 px-3 py-1 text-xs text-red-700 hover:bg-red-50" onClick={() => aiQuestionsApi.cancel()}>Abbrechen</button>}
+              {job.running && <button className="btn btn-danger-outline btn-sm mt-2" onClick={() => aiQuestionsApi.cancel()}>Abbrechen</button>}
               {!job.running && (job.results?.length ?? 0) > 0 && (
                 <details className="mt-2 text-xs">
                   <summary className="cursor-pointer text-gray-600">Einzelergebnisse</summary>
@@ -225,7 +225,7 @@ export default function AskModal({
           )}
         </div>
         <div className="flex justify-end gap-2 border-t px-6 py-3">
-          <button onClick={close} className="rounded border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-50">Schließen</button>
+          <button onClick={close} className="btn btn-secondary">Schließen</button>
           <button onClick={send} disabled={busy || job?.running || question.trim().length < 3} data-testid="ask-send"
             className="rounded bg-violet-600 px-4 py-2 font-medium text-white hover:bg-violet-700 disabled:opacity-50">
             {busy ? "KI liest …" : "Frage stellen"}

@@ -54,7 +54,7 @@ export default function AccountPage() {
           <label htmlFor="rep" className="mb-1 block text-sm font-medium text-gray-700">Neues Passwort wiederholen</label>
           <input id="rep" type="password" autoComplete="new-password" required value={repeat} onChange={(e) => setRepeat(e.target.value)} className={input} />
         </div>
-        <button type="submit" disabled={busy} className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+        <button type="submit" disabled={busy} className="btn btn-primary">
           {busy ? "Speichere…" : "Passwort ändern"}
         </button>
       </form>

@@ -106,7 +106,7 @@ export default function WorkflowTraceView({ run }: { run: WorkflowTraceEntry[] }
                     </div>
                   )}
                   {changed > 0 && (
-                    <div className="overflow-x-auto rounded border border-amber-200 bg-amber-50 p-2">
+                    <div className="overflow-x-auto rounded-lg border border-amber-200 bg-amber-50 p-2">
                       <table className="min-w-full text-xs">
                         <thead><tr className="text-left text-gray-500"><th className="pr-3">Was</th><th className="pr-3">Vorher</th><th>Nachher</th></tr></thead>
                         <tbody>
