@@ -146,11 +146,12 @@ def merge_vendors(payload: VendorMergeRequest, db: Session = Depends(get_db)):
 @router.get("/export")
 def export_vendors_excel(
     ids: list[int] = Query(..., description="Lieferanten-IDs (mehrfach angeben)"),
+    include_hidden: bool = Query(False, description="Belege ausgeblendeter Imports einbeziehen"),
     db: Session = Depends(get_db),
 ):
     """
     Exportiert ALLE Belege (Sheet „Rechnungen") und Positionen (Sheet „Positionen") der gewählten Lieferanten in eine Excel-Datei
-    — über alle sichtbaren Imports hinweg (ausgeblendete Imports werden NICHT exportiert), nicht gelöschte Belege, gleiche Spalten wie der Import-Export.
+    — über alle sichtbaren Imports hinweg (ausgeblendete Imports nur mit include_hidden=true), nicht gelöschte Belege, gleiche Spalten wie der Import-Export.
     Die Zuordnung läuft über den extrahierten Lieferantennamen (Groß/Klein und Leerzeichen egal); liegen die Belege in mehreren
     Imports, kommt am Ende die Spalte „Import" dazu.
     """
@@ -171,7 +172,7 @@ def export_vendors_excel(
     base = (
         db.query(Document.id).join(InvoiceExtraction, InvoiceExtraction.document_id == Document.id)
         .join(ImportBatch, ImportBatch.id == Document.batch_id)
-        .filter(ImportBatch.hidden_at.is_(None))
+        .filter(True if include_hidden else ImportBatch.hidden_at.is_(None))
         .filter(InvoiceExtraction.vendor_id.in_(names), Document.soft_deleted == False)  # noqa: E712
     ) if names else None
     batch_ids = sorted({r[0] for r in db.query(Document.batch_id).filter(Document.id.in_(base.subquery().select()))}) if base is not None else []
@@ -185,7 +186,7 @@ def export_vendors_excel(
             chunk = (
                 db.query(Document).join(InvoiceExtraction, InvoiceExtraction.document_id == Document.id)
                 .join(ImportBatch, ImportBatch.id == Document.batch_id)
-                .filter(ImportBatch.hidden_at.is_(None))
+                .filter(True if include_hidden else ImportBatch.hidden_at.is_(None))
                 .options(joinedload(Document.extraction), joinedload(Document.order_positions))
                 .filter(InvoiceExtraction.vendor_id.in_(names), Document.soft_deleted == False, Document.id > last)  # noqa: E712
                 .order_by(Document.id).limit(300).all()
