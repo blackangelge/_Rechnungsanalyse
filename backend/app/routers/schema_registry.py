@@ -257,3 +257,24 @@ def delete_relation(relation_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(v)
     return _version(v)
+
+
+# ─── Ausgangsdaten einspielen (Button statt Kommandozeile) ────────────────────
+
+@router.post("/seed")
+def seed_defaults(db: Session = Depends(get_db)):
+    """Spielt Einheiten, Ausgangsschema und Export-Vorlagen ein — jeweils nur, wenn noch nichts vorhanden ist (idempotent)."""
+    from app.services.export_seed import seed_export_templates
+    from app.services.schema_seed import seed_initial_schema
+    from app.services.units_seed import seed_default_units
+
+    try:
+        units = seed_default_units(db)
+        version = seed_initial_schema(db)
+        templates = seed_export_templates(db)
+        db.commit()
+    except sd.SchemaError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    return {"units_created": units, "schema_created": version is not None,
+            "schema_version": version.version_number if version else None, "templates_created": templates}

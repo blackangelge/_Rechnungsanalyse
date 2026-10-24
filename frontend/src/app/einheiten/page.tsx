@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Card, EmptyState, Icon, Modal, PageHeader, Spinner, Tabs } from "@/components/ui";
-import { UnitGroupItem, UnitItem, UnitReviewGroup, extractApiError, unitsApi } from "@/lib/api";
+import { UnitGroupItem, UnitItem, UnitReviewGroup, extractApiError, schemaApi, unitsApi } from "@/lib/api";
 
 export default function UnitsPage() {
   const [tab, setTab] = useState<"groups" | "review">("groups");
@@ -12,6 +12,8 @@ export default function UnitsPage() {
   const [error, setError] = useState<string | null>(null);
   const [groupModal, setGroupModal] = useState(false);
   const [unitModal, setUnitModal] = useState<UnitGroupItem | null>(null);
+  const [seeding, setSeeding] = useState(false);
+  const [info, setInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -33,6 +35,24 @@ export default function UnitsPage() {
     try { await fn(); await load(); } catch (err) { setError(extractApiError(err, "Aktion fehlgeschlagen")); }
   }
 
+  async function seedDefaults() {
+    setSeeding(true);
+    setError(null);
+    try {
+      const r = await schemaApi.seed();
+      setInfo([
+        r.units_created ? "Standard-Einheiten angelegt" : null,
+        r.schema_created ? `Ausgangsschema (Version ${r.schema_version}) angelegt und aktiviert` : null,
+        r.templates_created ? "Export-Vorlagen angelegt" : null,
+      ].filter(Boolean).join(" · ") || "Es war schon alles vorhanden — nichts geändert.");
+      await load();
+    } catch (err) {
+      setError(extractApiError(err, "Einspielen fehlgeschlagen"));
+    } finally {
+      setSeeding(false);
+    }
+  }
+
   const allUnits = groups.flatMap((g) => g.units.map((u) => ({ ...u, group: g.name })));
 
   return (
@@ -41,12 +61,17 @@ export default function UnitsPage() {
         subtitle="Gruppen mit genau einer Basiseinheit (Faktor 1). Der Faktor sagt, wie viele dieser Einheit auf 1 Basiseinheit gehen (Basis Tonne: kg = 1000). Unbekannte Schreibweisen werden nie geraten, sondern landen auf der Prüfliste."
         actions={tab === "groups" ? <button className="btn btn-primary" onClick={() => setGroupModal(true)}><Icon name="plus" /> Gruppe</button> : undefined} />
       {error && <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>}
+      {info && <div className="mb-4"><Alert tone="success" onClose={() => setInfo(null)}>{info}</Alert></div>}
       <Tabs tabs={[{ id: "groups", label: "Gruppen & Einheiten" }, { id: "review", label: "Prüfliste", badge: review.length ? <span className="badge badge-amber">{review.length}</span> : null }]} value={tab} onChange={setTab} />
       {loading && groups.length === 0 && <Spinner />}
 
       {tab === "groups" && (
         <div className="space-y-4">
-          {!loading && groups.length === 0 && <EmptyState title="Keine Einheiten-Gruppen" text="Lege eine Gruppe an oder spiele das Seed-Skript ein (python -m app.scripts.seed_schema)." />}
+          {!loading && groups.length === 0 && (
+            <EmptyState title="Keine Einheiten-Gruppen"
+              text="Spiele die Standard-Einheiten ein (Masse, Volumen, Länge, Fläche, Anzahl, Verpackung). Dabei werden, falls noch nicht vorhanden, auch das Ausgangsschema und zwei Export-Vorlagen angelegt."
+              action={<button className="btn btn-primary" disabled={seeding} onClick={seedDefaults}>{seeding ? "Wird eingespielt …" : "Standard-Einheiten und Schema einspielen"}</button>} />
+          )}
           {groups.map((g) => (
             <Card key={g.id} title={g.name} pad={false}
               actions={<>

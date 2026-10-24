@@ -43,3 +43,11 @@ def test_draft_edit_activate(client):
     draft = client.post("/api/schema/versions/draft", json={}).json()
     assert draft["status"] == "draft" and draft["version_number"] == 2
     assert client.delete(f"/api/schema/versions/{draft['id']}").status_code == 204
+
+
+def test_seed_endpoint_is_idempotent(client):
+    first = client.post("/api/schema/seed").json()
+    assert first["units_created"] and first["schema_created"] and first["templates_created"]
+    second = client.post("/api/schema/seed").json()
+    assert not any([second["units_created"], second["schema_created"], second["templates_created"]])
+    assert client.get("/api/units").json()

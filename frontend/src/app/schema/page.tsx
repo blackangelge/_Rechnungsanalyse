@@ -101,8 +101,11 @@ export default function SchemaPage() {
       {error && <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>}
       {loading && !version && <Spinner />}
       {loaded && !version && !loading && (
-        <EmptyState title="Noch kein Schema" text="Lege einen Entwurf an und definiere Entitäten und Felder — oder spiele das bisherige Schema per „python -m app.scripts.seed_schema“ ein."
-          action={<button className="btn btn-primary" onClick={createDraft}>Entwurf anlegen</button>} />
+        <EmptyState title="Noch kein Schema" text="Spiele das Ausgangsschema (Beleg, Position, Lieferant) samt Einheiten und Export-Vorlagen mit einem Klick ein — oder lege einen leeren Entwurf an und definiere alles selbst."
+          action={<div className="flex flex-wrap justify-center gap-2">
+            <button className="btn btn-primary" onClick={async () => { const r = await run(() => schemaApi.seed()); if (r) await load(); }}>Ausgangsschema und Einheiten einspielen</button>
+            <button className="btn btn-secondary" onClick={createDraft}>Leeren Entwurf anlegen</button>
+          </div>} />
       )}
 
       {version && (
