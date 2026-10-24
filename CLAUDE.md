@@ -952,7 +952,7 @@ Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`
 
 ### Excel-Export nach Lieferanten (`routers/vendors.py`)
 
-`GET /api/vendors/export?ids=1&ids=2` — alle nicht gelöschten Belege/Positionen der gewählten Lieferanten (über alle Imports, auch ausgeblendete) in einer Datei,
+`GET /api/vendors/export?ids=1&ids=2` — alle nicht gelöschten Belege/Positionen der gewählten Lieferanten (über alle sichtbaren Imports; Belege **ausgeblendeter Imports werden nicht exportiert**) in einer Datei,
 gleiche Spalten wie der Import-Export (`_build_export_excel(..., title=...)`); Zuordnung über `name_key` des extrahierten Namens (Schreibvarianten zählen mit);
 ≥ 2 Imports → Spalte „Import“. 404 bei unbekannter ID oder ohne Belege. Frontend `/lieferanten`: Auswahl → „↓ Excel exportieren“. Route steht vor `/{vendor_id}`.
 Referenz zum erwarteten KI-JSON: `docs/KI-Antwortformat.md`.
