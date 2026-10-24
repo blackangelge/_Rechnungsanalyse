@@ -26,6 +26,12 @@ _BELEG = [
     ("zahlungsbedingungen", "Zahlungsbedingungen", "text", "Zahlungsbedingungen als Text", None),
     ("waehrung", "Währung", "text", "Währung (z. B. EUR)", None),
 ]
+# Beschreibung geht ins LLM-Prompt; auch vom „Preiseinheit ergänzen“-Knopf der Prüfregeln verwendet
+PRICE_UNIT_DESCRIPTION = (
+    "Einheit, auf die sich der Einzelpreis bezieht, genau wie gedruckt (z. B. t, kg, Stück, m, VPE, Karton) — z. B. „420 €/t“ → t. "
+    "Nur ausfüllen, wenn die Rechnung die Preiseinheit ausdrücklich nennt, sonst null. Keine Zahlen („je 100“ gehört in „Preis je (Einheiten)“)."
+)
+
 _POSITION = [
     ("position_nr", "Pos.", "integer", "Positionsnummer", "0"),
     ("artikelbezeichnung", "Artikelbezeichnung", "text", "Bezeichnung des Artikels", None),
@@ -36,6 +42,7 @@ _POSITION = [
     ("steuersatz", "Steuersatz (%)", "decimal", "Steuersatz der Position", "0.00"),
     ("preisnachlass_betrag", "Nachlass (€)", "decimal", "Nachlass auf die Position, Betrag", "#,##0.00"),
     ("preisnachlass_prozent", "Nachlass (%)", "decimal", "Nachlass auf die Position, Prozent", "0.00"),
+    ("preiseinheit", "Preiseinheit", "text", PRICE_UNIT_DESCRIPTION, None),
     ("preis_je_menge", "Preis je (Einheiten)", "decimal", "Der Einzelpreis gilt je N Einheiten (z. B. 100)", "#,##0.####"),
     ("verpackungsinhalt", "Inhalt je Verpackung", "quantity", "Inhalt einer Verpackung (VPE/VE) mit Einheit", "#,##0.####"),
 ]

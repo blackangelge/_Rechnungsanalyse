@@ -87,7 +87,8 @@ def meta(db: Session = Depends(get_db)):
                              if r.kind == "parent_child" and r.source_entity_id == e.id],
                 "has_parent": any(r.kind == "parent_child" and r.target_entity_id == e.id for r in version.relations),
             })
-    return {"entities": entities, "functions": rule_engine.FUNCTION_HELP, "comparators": list(rule_engine.COMPARATORS),
+    return {"price_unit_field": bool(version and rule_seed.has_price_unit_field(version)),
+            "entities": entities, "functions": rule_engine.FUNCTION_HELP, "comparators": list(rule_engine.COMPARATORS),
             "units": sorted({u.symbol for u in db.query(Unit).all()}),
             "schema_version": version.version_number if version else None}
 
@@ -136,6 +137,34 @@ def seed_defaults(db: Session = Depends(get_db)):
     n = rule_seed.seed_default_rules(db)
     db.commit()
     return {"created": n}
+
+
+@router.post("/enable-price-unit")
+def enable_price_unit(db: Session = Depends(get_db)):
+    """
+    Ergänzt das Schemafeld „Preiseinheit“ an der Position: neuer Entwurf aus dem aktiven Schema → Feld → aktivieren.
+    Neue Auslesungen fragen die KI dann nach der Preiseinheit; bestehende Datensätze bleiben unverändert (ältere Schema-Version).
+    Die unveränderte Standardregel „Positionspreis“ wird auf die strenge Fassung (ohne Varianten) umgestellt.
+    """
+    from app.services.schema_seed import PRICE_UNIT_DESCRIPTION
+    version = sd.get_active(db)
+    if version is None:
+        raise HTTPException(status_code=409, detail="Es gibt noch kein aktives Schema.")
+    if rule_seed.has_price_unit_field(version):
+        return {"changed": False, "schema_version": version.version_number, "rules_updated": 0}
+    if not any(e.name == "position" for e in version.entities):
+        raise HTTPException(status_code=409, detail="Das aktive Schema hat keine Entität „position“ — das Feld bitte im Schema selbst ergänzen.")
+    try:
+        draft = sd.create_draft_from(db, version, "Feld „Preiseinheit“ ergänzt (Prüfregeln)")
+        position = next(e for e in draft.entities if e.name == "position")
+        sd.add_field(db, position, "preiseinheit", "Preiseinheit", "text", description=PRICE_UNIT_DESCRIPTION)
+        sd.activate(db, draft)
+    except sd.SchemaError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    updated = rule_seed.sync_default_rules(db)
+    db.commit()
+    return {"changed": True, "schema_version": draft.version_number, "rules_updated": updated}
 
 
 class TestIn(RuleIn):

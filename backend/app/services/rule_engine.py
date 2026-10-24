@@ -9,6 +9,8 @@ oder je Beleg
 Ausdrücke werden mit einem eigenen kleinen Parser ausgewertet (kein eval): Zahlen, + − × ÷, Klammern, Feldnamen und Funktionen.
 
   feld                     Feld des Datensatzes (Mengenfelder: Wert wie gedruckt)
+  menge.@preiseinheit      Menge in der Einheit, die im Feld „preiseinheit" desselben Datensatzes steht (leer = Preis gilt je gedruckter Einheit;
+                           Verpackungseinheit (VPE/Karton …) = Menge ÷ verpackungsinhalt, ohne Inhalt 1)
   menge.t / menge.kg       Mengenfeld automatisch in die Einheit umgerechnet (über die Einheiten-Gruppen); `menge.basis` = Basiseinheit der Gruppe
   eltern.feld              Feld des übergeordneten Datensatzes (z. B. Beleg-Kopf aus einer Position)
   SUM(position.feld * …)   Summe über alle Unter-Datensätze der Entität „position“ (Feldnamen mit Entitätsnamen davor)
@@ -72,7 +74,7 @@ class EvalError(Exception):
 
 # ─── Parser ───────────────────────────────────────────────────────────────────
 
-_TOKEN = re.compile(r"\s*(?:(?P<num>\d+(?:\.\d+)?)|(?P<id>[A-Za-zÄÖÜäöüß_][\wÄÖÜäöüß]*(?:\.[A-Za-zÄÖÜäöüß_][\wÄÖÜäöüß]*)*)|(?P<op>[-+*/(),;×÷]))")
+_TOKEN = re.compile(r"\s*(?:(?P<num>\d+(?:\.\d+)?)|(?P<id>[A-Za-zÄÖÜäöüß_][\wÄÖÜäöüß]*(?:\.@?[A-Za-zÄÖÜäöüß_][\wÄÖÜäöüß]*)*)|(?P<op>[-+*/(),;×÷]))")
 
 
 def _tokenize(text: str) -> list[tuple[str, str]]:
@@ -263,6 +265,38 @@ def known_unit_keys(table: UnitTable) -> set[str]:
     return {k for grp in table.values() for k in grp}
 
 
+def _in_price_unit(data: dict, raw: dict, price_unit: str, units: "UnitTable | None") -> Decimal | None:
+    """
+    Menge in der Preiseinheit des Datensatzes (Feld `preiseinheit`):
+      · leer → der Preis gilt je gedruckter Einheit → Menge wie gedruckt;
+      · Einheit derselben Gruppe (kg → t) → über die Gruppe umgerechnet;
+      · Einheit einer anderen Gruppe (z. B. Verpackung/VPE bei Menge in Stück) → Menge ÷ `verpackungsinhalt` (ohne Angabe 1);
+      · unbekannte Einheit / nicht umrechenbar → None (= nicht prüfbar).
+    """
+    key = price_unit.strip().lower()
+    original = _num(raw.get("original_value"))
+    if not key:
+        return original
+    found = next(((gid, grp[key]) for gid, grp in (units or {}).items() if key in grp), None)
+    if found is None:
+        return None
+    group_id, factor = found
+    if group_id == raw.get("group_id"):
+        value = _num(raw.get("value"))
+        return None if value is None else value * factor
+    if original is None:
+        return None
+    pack = data.get("verpackungsinhalt")
+    if isinstance(pack, dict):
+        if pack.get("group_id") not in (None, raw.get("group_id")):
+            return None                                   # Inhalt in anderer Einheitengruppe als die Menge
+        content = _num(pack.get("original_value"))
+    else:
+        content = _num(pack)
+    content = Decimal(1) if content is None else content
+    return None if content == 0 else original / content
+
+
 def field_value(data: dict, name: str, units: UnitTable | None = None) -> Decimal | None:
     """
     Zahlenwert eines Feldes. Mengenfelder: `feld` = Wert wie gedruckt, `feld.basis` = in die Basiseinheit der Gruppe umgerechnet,
@@ -273,6 +307,8 @@ def field_value(data: dict, name: str, units: UnitTable | None = None) -> Decima
     if isinstance(raw, dict) and ("original_value" in raw or "value" in raw):
         if not mode:
             return _num(raw.get("original_value"))
+        if mode.startswith("@"):
+            return _in_price_unit(data, raw, str(data.get(mode[1:]) or ""), units)
         value = _num(raw.get("value"))                 # normiert (Basiseinheit); leer bei unbekannter Einheit
         if mode == "basis" or value is None:
             return value
@@ -467,6 +503,9 @@ def check_rule_spec(spec: RuleSpec, version: SchemaVersion | None, unit_keys: se
                 problems.append(f"Ausdruck {label}: „{n[1]}“ ist kein Zahlenfeld (Typ {fld.data_type})")
             elif mode and fld.data_type != "quantity":
                 problems.append(f"Ausdruck {label}: „.{mode}“ gibt es nur bei Mengenfeldern")
+            elif mode.startswith("@"):
+                if not any(f.name == mode[1:] and f.data_type == "text" for f in target.fields):
+                    problems.append(f"Ausdruck {label}: „{n[1]}“ braucht ein Textfeld „{mode[1:]}“ in „{target.name}“ (Schema → Feld ergänzen)")
             elif mode and mode != "basis" and unit_keys is not None and mode.lower() not in unit_keys:
                 problems.append(f"Ausdruck {label}: Einheit „{mode}“ ist in den Einheiten-Gruppen nicht angelegt")
     return problems

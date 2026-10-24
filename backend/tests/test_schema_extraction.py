@@ -30,13 +30,13 @@ SAMPLE = {
     "positionen": [
         {"position_nr": 1, "artikelbezeichnung": "Schrauben M8", "artikelnummer": "S-8", "menge": {"value": "4.400", "unit": "Stück"},
          "einzelpreis": "90,00", "gesamtpreis": "3.960,00", "steuersatz": 19, "preisnachlass_betrag": None, "preisnachlass_prozent": None,
-         "preis_je_menge": 100, "verpackungsinhalt": None, "mengeneinheit_typ": "stueck"},
+         "preiseinheit": None, "preis_je_menge": 100, "verpackungsinhalt": None, "mengeneinheit_typ": "stueck"},
         {"position_nr": 2, "artikelbezeichnung": "Splitt", "artikelnummer": None, "menge": {"value": "25.880,00", "unit": "kg"},
          "einzelpreis": "0,41", "gesamtpreis": None, "steuersatz": None, "preisnachlass_betrag": None, "preisnachlass_prozent": None,
-         "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": "gewicht"},
+         "preiseinheit": None, "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": "gewicht"},
         {"position_nr": 3, "artikelbezeichnung": "Fassware", "artikelnummer": None, "menge": {"value": 5, "unit": "Fass"},
          "einzelpreis": None, "gesamtpreis": None, "steuersatz": None, "preisnachlass_betrag": None, "preisnachlass_prozent": None,
-         "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": None},
+         "preiseinheit": None, "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": None},
     ],
 }
 

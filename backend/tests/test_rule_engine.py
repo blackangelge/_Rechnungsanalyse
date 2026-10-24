@@ -254,14 +254,28 @@ def test_variants_skipped_ones_do_not_block_and_all_missing_is_unchecked():
     assert r["status"] == "skipped" and set(r["missing"]) == {"a", "c"}
 
 
-def test_old_default_rule_is_upgraded_with_variants(world):
+def test_default_rule_is_upgraded_in_steps(world):
+    """v1 (nur Menge × Preis) → streng mit Preiseinheit, sobald das Schema das Feld hat; Varianten-Fassung bleibt für Schemas ohne das Feld."""
+    from app.services import rule_seed
     from app.services.rule_seed import DEFAULT_RULES, _OLD_POSITION_LEFT, seed_default_rules
+    assert rule_seed.has_price_unit_field(world.version)
     world.db.add(ValidationRule(name=DEFAULT_RULES[0]["name"], entity_name="position", left_expr=_OLD_POSITION_LEFT, right_expr="gesamtpreis"))
     world.db.commit()
     assert seed_default_rules(world.db) == 1
     rule = world.db.query(ValidationRule).one()
-    assert len(rule.alt_left_exprs) == 3 and rule.left_expr == DEFAULT_RULES[0]["left"]
+    assert rule.left_expr == rule_seed._STRICT_LEFT and rule.alt_left_exprs == []
     assert seed_default_rules(world.db) == 0
+    # vom Nutzer geänderte Regel bleibt unberührt
+    rule.left_expr = "menge * einzelpreis"
+    world.db.commit()
+    assert seed_default_rules(world.db) == 0 and world.db.query(ValidationRule).one().left_expr == "menge * einzelpreis"
+    # Schema ohne Feld → Varianten-Fassung
+    field = next(f for f in next(e for e in world.version.entities if e.name == "position").fields if f.name == "preiseinheit")
+    assert rule_seed.default_rules(world.version)[0]["alternatives"] == []
+    world.db.delete(field)
+    world.db.flush()
+    world.db.expire(world.version)
+    assert len(rule_seed.default_rules(world.version)[0]["alternatives"]) == 3
 
 
 def test_workflow_node_check_rules_and_branch_on_rule_status(world):
@@ -317,3 +331,58 @@ def test_excel_export_can_include_rule_results(world):
     plain = ExportTemplate(name="ohne", layout="flat", quantity_mode="original", config={"flat": {"root": "beleg", "child": "position"}})
     wb = load_workbook(io.BytesIO(schema_export.build_workbook(world.db, sd.get_active(world.db), plain, schema_export.Filters())))
     assert "Prüfregel-Status" not in [c.value for c in next(wb.active.iter_rows())]
+
+
+def test_price_unit_conversion_in_formula(world):
+    """menge.@preiseinheit: Menge in der gedruckten Preiseinheit (Tonne, VPE, leer = wie gedruckt)."""
+    from app.services import rule_seed
+    units = re_.load_unit_table(world.db)
+    rule = RuleSpec(None, "p", "position", rule_seed._STRICT_LEFT, "gesamtpreis", tolerance_abs=0.02)
+    base = {"preis_je_menge": None, "preisnachlass_prozent": None, "preisnachlass_betrag": None}
+
+    def ev(menge, unit, preis, gesamt, pe, pack=None):
+        data = {**base, "menge": _qty(world.db, *menge), "einzelpreis": preis, "gesamtpreis": gesamt, "preiseinheit": pe}
+        if pack:
+            data["verpackungsinhalt"] = _qty(world.db, *pack)
+        return re_.evaluate_rule(rule, re_.Node(1, "position", data), units)
+
+    # 1) 25.000 kg Schrott, 420 €/t → 25 t × 420 = 10.500; der Fehler „kg × Preis“ wird jetzt erkannt
+    assert ev((25000, "kg"), None, 420, 10500, "t")["status"] == "ok"
+    assert ev((25000, "kg"), None, 420, 10500000, "t")["status"] == "failed"
+    # 2) 4.230 Schrauben, 90 je VPE, 86 € je VPE → 47 × 86 = 4.042
+    assert ev((4230, "Stück"), None, 86, 4042, "VPE", pack=(90, "Stück"))["status"] == "ok"
+    assert ev((4230, "Stück"), None, 86, 363780, "VPE", pack=(90, "Stück"))["status"] == "failed"
+    assert ev((47, "Karton"), None, 86, 4042, "Karton")["status"] == "ok"                       # Menge schon in Verpackungen
+    assert ev((10, "Sack"), None, 86, 860, "VPE")["status"] == "ok"                              # gleiche Gruppe, Faktor 1
+    assert ev((4230, "Stück"), None, 86, 4042, "VPE")["status"] == "failed"                      # ohne Inhalt zählt 1 → 4230 × 86
+    # leere Preiseinheit → Preis je gedruckter Einheit
+    assert ev((10, "Stück"), None, 5, 50, None)["status"] == "ok"
+    assert ev((25000, "kg"), None, 0.41, 10250, "")["status"] == "ok"
+    # unbekannte oder unpassende Preiseinheit → nicht prüfbar statt geraten
+    r = ev((10, "Stück"), None, 5, 50, "Furlong")
+    assert r["status"] == "skipped" and "preiseinheit" in r["message"]
+    assert ev((25000, "kg"), None, 420, 10500, "VPE")["status"] == "failed"                      # kg ≠ Verpackung: Inhalt 1 → 25.000 × 420
+    # Definition: braucht das Textfeld im Schema
+    assert re_.check_rule_spec(rule, world.version, re_.known_unit_keys(units)) == []
+    assert any("Textfeld" in p for p in re_.check_rule_spec(RuleSpec(None, "x", "position", "menge.@nixda * einzelpreis", "gesamtpreis"), world.version))
+
+
+def test_enable_price_unit_on_existing_schema(client, world):
+    """Bestehendes Schema ohne Feld: Knopf legt Entwurf an, ergänzt das Feld, aktiviert und stellt die Standardregel um."""
+    from app.services import schema_models
+    from app.services.rule_seed import DEFAULT_RULES
+    pos = next(e for e in world.version.entities if e.name == "position")
+    world.db.delete(next(f for f in pos.fields if f.name == "preiseinheit"))
+    world.db.commit()
+    schema_models.clear_cache()
+    assert seed_default_rules(world.db) == 4
+    world.db.commit()
+    assert client.get("/api/validation-rules/meta").json()["price_unit_field"] is False
+    assert len(client.get("/api/validation-rules").json()[0]["alt_left_exprs"]) == 3
+
+    r = client.post("/api/validation-rules/enable-price-unit").json()
+    assert r["changed"] is True and r["rules_updated"] == 1 and r["schema_version"] == 2
+    assert client.get("/api/validation-rules/meta").json()["price_unit_field"] is True
+    first = client.get("/api/validation-rules").json()[0]
+    assert first["alt_left_exprs"] == [] and "@preiseinheit" in first["left_expr"] and first["problems"] == []
+    assert client.post("/api/validation-rules/enable-price-unit").json()["changed"] is False          # idempotent

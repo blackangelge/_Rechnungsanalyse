@@ -13,6 +13,10 @@ from pydantic import BaseModel
 
 from app.services import field_functions, normalizers
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/schema", tags=["schema"])
 
 
@@ -133,7 +137,15 @@ def validate(version_id: int, db: Session = Depends(get_db)):
 @router.post("/versions/{version_id}/activate")
 def activate(version_id: int, db: Session = Depends(get_db)):
     v = _ver(db, version_id)
-    return _run(db, lambda: _version(sd.activate(db, v)))
+    def go():
+        activated = sd.activate(db, v)
+        try:                                   # unveränderte Standard-Prüfregeln an das neue Schema angleichen (z. B. Feld „Preiseinheit“)
+            from app.services.rule_seed import sync_default_rules
+            sync_default_rules(db)
+        except Exception:
+            logger.warning("Standard-Prüfregeln konnten nach der Aktivierung nicht angeglichen werden", exc_info=True)
+        return _version(activated)
+    return _run(db, go)
 
 
 @router.delete("/versions/{version_id}", status_code=204)

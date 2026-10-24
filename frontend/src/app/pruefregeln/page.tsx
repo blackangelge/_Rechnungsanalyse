@@ -127,6 +127,12 @@ function RuleModal({ rule, meta, onClose, onSaved }: {
                   </button>
                 ));
               })}
+              {meta.price_unit_field && entity?.fields.some((f) => f.data_type === "quantity") && entity.fields.some((f) => f.name === "menge") && (
+                <button type="button" className="btn btn-ghost !py-0.5 !px-2 text-xs border border-dashed border-gray-300"
+                  title="Menge in der Einheit, auf die sich der Einzelpreis bezieht" onClick={() => insert("menge.@preiseinheit")}>
+                  menge.@preiseinheit
+                </button>
+              )}
               {parent?.fields.map((f) => (
                 <button key={"p" + f.name} type="button" className="btn btn-ghost !py-0.5 !px-2 text-xs border border-dashed border-gray-300" onClick={() => insert(`eltern.${f.name}`)}>
                   eltern.{f.name}
@@ -145,6 +151,7 @@ function RuleModal({ rule, meta, onClose, onSaved }: {
             <p className="hint mt-2">
               Mengenfelder zählen mit Wert und Einheit <b>wie gedruckt</b> (nichts wird umgestellt). Nur wenn du es hinschreibst, rechnet die Formel über die Einheiten-Gruppen um:
               {" "}<code>menge.t</code>, <code>menge.kg</code> (verfügbar: {meta.units.slice(0, 12).join(", ")}{meta.units.length > 12 ? " …" : ""}) oder <code>menge.basis</code>.
+              {meta.price_unit_field && <> Mit <code>menge.@preiseinheit</code> wird die Menge in die Einheit umgerechnet, auf die sich der Einzelpreis laut Rechnung bezieht (Verpackungseinheit: Menge ÷ Inhalt je Verpackung).</>}
               Dezimalzahlen mit Punkt, Argumente mit Semikolon. Fehlt ein Wert, wird die Regel als „nicht prüfbar“ gemeldet — mit <code>COALESCE(feld; 1)</code> kannst du einen Ersatzwert festlegen.
             </p>
           </div>
@@ -186,6 +193,7 @@ export default function RulesPage() {
   const [edit, setEdit] = useState<ValidationRule | "new" | null>(null);
   const [running, setRunning] = useState(false);
   const [docId, setDocId] = useState("");
+  const [priceUnitBusy, setPriceUnitBusy] = useState(false);
   const [docResults, setDocResults] = useState<{ status: string; results: RuleResult[] } | null>(null);
 
   const load = useCallback(async () => {
@@ -212,6 +220,16 @@ export default function RulesPage() {
     } catch (err) { setError(extractApiError(err, "Prüfung fehlgeschlagen")); } finally { setRunning(false); }
   }
 
+  async function enablePriceUnit() {
+    if (!confirm("Das aktive Schema bekommt ein neues Feld „Preiseinheit“ an der Position (neue Schema-Version wird aktiviert). Fortfahren?")) return;
+    setPriceUnitBusy(true); setError(null); setInfo(null);
+    try {
+      const r = await validationRulesApi.enablePriceUnit();
+      setInfo(r.changed ? `Feld „Preiseinheit“ ergänzt (Schema-Version ${r.schema_version})${r.rules_updated ? " — Standardregel „Positionspreis“ umgestellt" : ""}.` : "Das Feld gibt es schon.");
+      await load();
+    } catch (err) { setError(extractApiError(err, "Feld konnte nicht ergänzt werden")); } finally { setPriceUnitBusy(false); }
+  }
+
   async function showDoc() {
     setError(null); setDocResults(null);
     try {
@@ -231,6 +249,19 @@ export default function RulesPage() {
         </>} />
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
+      {meta && meta.entities.some((e) => e.name === "position") && !meta.price_unit_field && (
+        <Alert tone="info">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>
+              Im Schema fehlt das Feld <b>Preiseinheit</b> (worauf sich der Einzelpreis bezieht: t, kg, VPE …). Mit dem Feld kann die Positionsregel genau rechnen,
+              statt mehrere Varianten zu probieren. Neue Auslesungen fragen die KI dann danach; bestehende Belege bleiben unverändert.
+            </span>
+            <button className="btn btn-secondary" disabled={priceUnitBusy} onClick={enablePriceUnit}>
+              {priceUnitBusy ? "Ergänzt…" : "Feld im Schema ergänzen"}
+            </button>
+          </div>
+        </Alert>
+      )}
       {meta && !meta.entities.length && <Alert tone="warn">Es gibt noch kein aktives Schema — Regeln beziehen sich auf dessen Felder (Seite „Schema“).</Alert>}
 
       <Card>

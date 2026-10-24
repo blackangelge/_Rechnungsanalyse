@@ -1933,7 +1933,7 @@ export type ValidationRuleInput = Omit<ValidationRule, "id" | "problems">;
 export interface RuleMeta {
   entities: { name: string; display_name: string; fields: { name: string; display_name: string; data_type: string }[]; children: string[]; has_parent: boolean }[];
   functions: { name: string; example: string; text: string }[];
-  comparators: string[]; units: string[]; schema_version: number | null;
+  comparators: string[]; units: string[]; schema_version: number | null; price_unit_field: boolean;
 }
 export interface RuleResult {
   rule_id: number | null; name: string; severity: string; entity: string; record_id: number; position_index: number; formula: string;
@@ -1947,6 +1947,7 @@ export const validationRulesApi = {
   create: (d: ValidationRuleInput) => apiClient.post<ValidationRule>("/api/validation-rules", d).then((r) => r.data),
   update: (id: number, d: ValidationRuleInput) => apiClient.put<ValidationRule>(`/api/validation-rules/${id}`, d).then((r) => r.data),
   remove: (id: number) => apiClient.delete(`/api/validation-rules/${id}`),
+  enablePriceUnit: () => apiClient.post<{ changed: boolean; schema_version: number; rules_updated: number }>("/api/validation-rules/enable-price-unit").then((r) => r.data),
   seedDefaults: () => apiClient.post<{ created: number }>("/api/validation-rules/seed-defaults").then((r) => r.data),
   test: (d: ValidationRuleInput, documentId: number) =>
     apiClient.post<{ problems: string[]; results: RuleResult[] }>("/api/validation-rules/test", { ...d, document_id: documentId }).then((r) => r.data),
