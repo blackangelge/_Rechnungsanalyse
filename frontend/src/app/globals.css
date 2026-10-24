@@ -54,6 +54,11 @@
   --ra-sidebar-active: #4f46e5;
 }
 
+/* Tailwind 4 zeichnet Rahmen ohne Farbangabe schwarz (currentColor); die älteren Seiten verlassen sich auf den hellen Standard. */
+@layer base {
+  *, ::after, ::before, ::backdrop, ::file-selector-button { border-color: var(--color-gray-200); }
+}
+
 html { color-scheme: light; }
 body {
   background: var(--ra-bg);

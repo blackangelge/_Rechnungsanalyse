@@ -9,7 +9,6 @@
 
 "use client";
 
-import { downloadLinkHandler } from "@/lib/download";
 import Link from "next/link";
 import { useState } from "react";
 import { ImportBatch, importsApi } from "@/lib/api";
@@ -26,11 +25,11 @@ interface Props {
 }
 
 /** Status-Badge Styles */
-const STATUS_STYLES: Record<string, string> = {
-  pending: "bg-gray-100 text-gray-500",
-  running: "bg-blue-100 text-blue-700",
-  done: "bg-green-100 text-green-700",
-  error: "bg-red-100 text-red-700",
+const STATUS_BADGES: Record<string, { cls: string; label: string }> = {
+  pending: { cls: "badge-gray", label: "Ausstehend" },
+  running: { cls: "badge-blue", label: "Läuft" },
+  done: { cls: "badge-green", label: "Fertig" },
+  error: { cls: "badge-red", label: "Fehler" },
 };
 
 export default function BatchTable({
@@ -53,16 +52,17 @@ export default function BatchTable({
 
   if (batches.length === 0) {
     return (
-      <div className="rounded-lg border bg-white p-8 text-center text-sm text-gray-400 shadow-sm">
-        Keine Imports gefunden. Starte einen neuen Import.
+      <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center">
+        <p className="text-sm font-medium text-gray-800">Noch keine Imports</p>
+        <p className="mt-1 text-sm text-gray-500">Starte einen neuen Import über „Neuer Import“.</p>
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
-      <table className="w-full text-sm">
-        <thead className="border-b bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+    <div className="card overflow-x-auto">
+      <table className="table-ra">
+        <thead>
           <tr>
             <th className="w-10 px-3 py-3">
               <input
@@ -82,7 +82,7 @@ export default function BatchTable({
             <th className="px-4 py-3"></th>
           </tr>
         </thead>
-        <tbody className="divide-y">
+        <tbody>
           {batches.map((batch) => {
             // Fortschritt — nur statusbasiert (keine Dokumentenzähler im Batch-Objekt)
             const isDone    = batch.status === "done";
@@ -129,13 +129,8 @@ export default function BatchTable({
 
                 {/* Status */}
                 <td className="px-4 py-3">
-                  <span
-                    className={[
-                      "rounded-full px-2 py-0.5 text-xs font-medium",
-                      STATUS_STYLES[batch.status] ?? "bg-gray-100 text-gray-500",
-                    ].join(" ")}
-                  >
-                    {batch.status}
+                  <span className={`badge ${(STATUS_BADGES[batch.status] ?? STATUS_BADGES.pending).cls}`}>
+                    {(STATUS_BADGES[batch.status] ?? { label: batch.status }).label}
                   </span>
                 </td>
 
@@ -180,15 +175,13 @@ export default function BatchTable({
                     >
                       Details →
                     </Link>
-                    <a
-                      href={importsApi.exportUrl([batch.id])}
-                      onClick={downloadLinkHandler(importsApi.exportUrl([batch.id]))}
-                      download
-                      title="Als Excel-Datei herunterladen"
+                    <Link
+                      href={`/export-vorlagen?batch_ids=${batch.id}`}
+                      title="Mit einer Export-Vorlage als Excel exportieren"
                       className="rounded px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
                     >
-                      ↓ Excel
-                    </a>
+                      Export
+                    </Link>
                     <button
                       onClick={() => onSetHidden(batch.id, !batch.hidden_at)}
                       title={batch.hidden_at ? "Wieder einblenden" : "Ausblenden (nichts wird gelöscht)"}

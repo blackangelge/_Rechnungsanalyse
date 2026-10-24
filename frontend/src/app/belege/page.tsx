@@ -789,7 +789,7 @@ export default function BelegePage() {
     <>
       {/* ── Kopfbereich ─────────────────────────────────────────────────── */}
       <div>
-        <h1 className="mb-6 text-2xl font-bold text-gray-900">Belege</h1>
+        <h1 className="mb-6 text-2xl font-semibold tracking-tight text-gray-900">Belege</h1>
 
         {/* ── Meldungen ──────────────────────────────────────────────── */}
         {error && (
@@ -985,7 +985,7 @@ export default function BelegePage() {
       </div>{/* Ende Kopfbereich */}
 
       {/* ── Tabelle / Infos-Ansicht: volle Bildschirmbreite ─────────── */}
-      <div ref={tableContainerRef} className="relative left-1/2 w-screen -translate-x-1/2 px-6 mt-4">
+      <div ref={tableContainerRef} className="w-full mt-4">
 
         {viewMode === "infos" ? (
           /* ── Inline Infos-Ansicht ── */

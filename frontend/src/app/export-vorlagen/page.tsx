@@ -20,6 +20,12 @@ export default function ExportTemplatesPage() {
   const [edit, setEdit] = useState<ExportTemplate | "new" | null>(null);
   const [columns, setColumns] = useState<{ t: ExportTemplate; cols: ExportColumnsPreview[] } | null>(null);
   const [exportFor, setExportFor] = useState<ExportTemplate | null>(null);
+  // Vorauswahl aus der Adresszeile (?batch_ids=1,2 — z. B. vom Dashboard)
+  const [preselected, setPreselected] = useState<number[]>([]);
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get("batch_ids");
+    if (raw) setPreselected(raw.split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,6 +55,7 @@ export default function ExportTemplatesPage() {
         actions={<button className="btn btn-primary" disabled={!schema} onClick={() => setEdit("new")}><Icon name="plus" /> Neue Vorlage</button>} />
       {error && <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>}
       {!loading && !schema && <div className="mb-4"><Alert tone="warn">Es gibt noch kein aktives Schema. Aktiviere zuerst eine Version unter „Schema“.</Alert></div>}
+      {preselected.length > 0 && <div className="mb-4"><Alert tone="info">{preselected.length} Import{preselected.length > 1 ? "s" : ""} vorgewählt — wähle unten eine Vorlage und klicke „Exportieren“.</Alert></div>}
       {loading && templates.length === 0 && <Spinner />}
       {!loading && schema && templates.length === 0 && <EmptyState title="Noch keine Vorlage" text="Lege eine Vorlage an, um Belege als Excel zu exportieren." />}
 
@@ -84,7 +91,7 @@ export default function ExportTemplatesPage() {
         </Modal>
       )}
 
-      {exportFor && <ExportModal template={exportFor} batches={batches} onClose={() => setExportFor(null)} />}
+      {exportFor && <ExportModal template={exportFor} batches={batches} initial={preselected} onClose={() => setExportFor(null)} />}
     </div>
   );
 }
@@ -167,8 +174,8 @@ function TemplateModal({ schema, template, onClose, onSave }: {
   );
 }
 
-function ExportModal({ template, batches, onClose }: { template: ExportTemplate; batches: ImportBatch[]; onClose: () => void }) {
-  const [ids, setIds] = useState<Set<number>>(new Set());
+function ExportModal({ template, batches, initial, onClose }: { template: ExportTemplate; batches: ImportBatch[]; initial: number[]; onClose: () => void }) {
+  const [ids, setIds] = useState<Set<number>>(new Set(initial));
   const [hidden, setHidden] = useState(false);
   const visible = batches.filter((b) => hidden || !b.hidden_at);
   const url = exportTemplatesApi.exportUrl(template.id, { batch_ids: [...ids], include_hidden: hidden });

@@ -12,11 +12,11 @@
 
 "use client";
 
-import { downloadLinkHandler } from "@/lib/download";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ImportBatch, WorkerStats, importsApi, workerApi, extractApiError } from "@/lib/api";
 import BatchTable from "@/components/dashboard/BatchTable";
+import { Alert, Icon, PageHeader, Spinner } from "@/components/ui";
 
 export default function DashboardPage() {
   const [batches, setBatches]           = useState<ImportBatch[]>([]);
@@ -100,106 +100,69 @@ export default function DashboardPage() {
   const noAI         = workerStats?.no_ai_available ?? false;
   const queueLen     = workerStats?.queue_length ?? 0;
 
+  const kpis = [
+    { label: "Aktive Imports", value: runningCount, tone: runningCount > 0 ? "text-blue-700" : "text-gray-900" },
+    { label: "In der Warteschlange", value: queueLen, tone: "text-gray-900" },
+    { label: "In Bearbeitung", value: workerStats?.in_progress ?? 0, tone: "text-gray-900" },
+    { label: "Fehlgeschlagen", value: workerStats?.failed_tasks ?? 0, tone: (workerStats?.failed_tasks ?? 0) > 0 ? "text-red-600" : "text-gray-900" },
+    { label: "Von der KI verarbeitet", value: workerStats?.documents_processed_total ?? 0, tone: "text-gray-900" },
+  ];
+
   return (
-    <div className="space-y-4">
-      {/* Kopfzeile */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Import-Dashboard</h1>
-          {runningCount > 0 && (
-            <p className="text-sm text-blue-600">
-              {runningCount} Import{runningCount > 1 ? "s" : ""} aktiv — wird alle 10 s aktualisiert
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-4">
-          {workerStats && (
-            <span className="text-sm text-gray-500">
-              <span className="font-semibold text-gray-700">
-                {workerStats.documents_processed_total.toLocaleString("de-DE")}
-              </span>{" "}
-              Dokumente insgesamt von der KI verarbeitet
-            </span>
-          )}
+    <div className="space-y-5">
+      <PageHeader
+        title="Dashboard"
+        subtitle={runningCount > 0 ? `${runningCount} Import${runningCount > 1 ? "s" : ""} aktiv — wird alle 10 s aktualisiert` : "Alle Imports im Überblick"}
+        actions={<>
           {hiddenCount > 0 && (
             <label className="flex items-center gap-1.5 text-xs text-gray-600">
-              <input
-                type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600"
-              />
+              <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} className="rounded border-gray-300 text-blue-600" />
               Ausgeblendete anzeigen ({hiddenCount})
             </label>
           )}
-          <button onClick={load} className="text-xs text-blue-600 hover:underline">
-            Aktualisieren
-          </button>
-        </div>
-      </div>
+          <button onClick={load} className="btn btn-secondary btn-sm">Aktualisieren</button>
+          <Link href="/imports/new" className="btn btn-primary"><Icon name="plus" /> Neuer Import</Link>
+        </>}
+      />
 
-      {/* KI-Warnung: keine aktive KI */}
+      {workerStats && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          {kpis.map((k) => (
+            <div key={k.label} className="card px-4 py-3">
+              <p className="text-xs font-medium text-gray-500">{k.label}</p>
+              <p className={`mt-1 text-2xl font-semibold tabular-nums ${k.tone}`}>{k.value.toLocaleString("de-DE")}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
       {noAI && (
-        <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <span className="font-semibold">⚠ Keine KI verfügbar!</span>{" "}
-          Alle KI-Konfigurationen sind deaktiviert oder temporär gesperrt.
-          {queueLen > 0 && (
-            <span> {queueLen} Dokument{queueLen !== 1 ? "e" : ""} warten in der Warteschlange.</span>
-          )}
-          {" "}→{" "}
-          <a href="/settings/ai" className="underline font-medium">KI-Einstellungen</a>
-          {" "}oder{" "}
-          <a href="/logs" className="underline font-medium">KI-Statistiken</a>
-        </div>
+        <Alert tone="error">
+          <b>Keine KI verfügbar!</b> Alle KI-Konfigurationen sind deaktiviert oder temporär gesperrt.
+          {queueLen > 0 && <> {queueLen} Dokument{queueLen !== 1 ? "e" : ""} warten in der Warteschlange.</>}
+          {" "}→ <Link href="/settings/ai" className="font-medium underline">KI-Konfiguration</Link> oder <Link href="/logs" className="font-medium underline">KI-Statistiken</Link>
+        </Alert>
       )}
 
-      {actionMsg && (
-        <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700" data-testid="action-msg">
-          {actionMsg}
-        </div>
-      )}
+      {actionMsg && <div data-testid="action-msg"><Alert tone="success" onClose={() => setActionMsg(null)}>{actionMsg}</Alert></div>}
 
-      {/* Aktionsleiste bei Auswahl */}
       {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5" data-testid="selection-bar">
-          <span className="text-sm font-medium text-blue-800">
-            {selected.size} Import{selected.size !== 1 ? "s" : ""} ausgewählt
-          </span>
-          <a
-            href={importsApi.exportUrl(Array.from(selected))}
-            onClick={downloadLinkHandler(importsApi.exportUrl(Array.from(selected)))}
-            download
-            className="rounded border border-emerald-600 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
-          >
-            ↓ Excel exportieren{selected.size > 1 ? " (eine Datei)" : ""}
-          </a>
+        <div className="card flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50 px-4 py-2.5" data-testid="selection-bar">
+          <span className="text-sm font-medium text-blue-800">{selected.size} Import{selected.size !== 1 ? "s" : ""} ausgewählt</span>
+          <Link href={`/export-vorlagen?batch_ids=${Array.from(selected).join(",")}`} className="btn btn-secondary btn-sm">Exportieren …</Link>
           {selectedHidden < selected.size && (
-            <button
-              onClick={() => setHidden(selectedBatches.filter((b) => !b.hidden_at).map((b) => b.id), true)}
-              className="rounded border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              Ausblenden
-            </button>
+            <button onClick={() => setHidden(selectedBatches.filter((b) => !b.hidden_at).map((b) => b.id), true)} className="btn btn-secondary btn-sm">Ausblenden</button>
           )}
           {selectedHidden > 0 && (
-            <button
-              onClick={() => setHidden(selectedBatches.filter((b) => b.hidden_at).map((b) => b.id), false)}
-              className="rounded border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              Einblenden
-            </button>
+            <button onClick={() => setHidden(selectedBatches.filter((b) => b.hidden_at).map((b) => b.id), false)} className="btn btn-secondary btn-sm">Einblenden</button>
           )}
-          <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-blue-700 hover:underline">
-            Auswahl aufheben
-          </button>
+          <button onClick={() => setSelected(new Set())} className="btn btn-ghost btn-sm ml-auto">Auswahl aufheben</button>
         </div>
       )}
 
-      {/* Status */}
-      {loading && batches.length === 0 && (
-        <p className="text-sm text-gray-500">Lade...</p>
-      )}
-      {error && <p className="text-sm text-red-500">{error}</p>}
+      {loading && batches.length === 0 && <Spinner />}
+      {error && <Alert tone="error">{error}</Alert>}
 
-      {/* Batch-Tabelle */}
       <BatchTable
         batches={visibleBatches}
         onDeleted={(id) => setBatches((prev) => prev.filter((b) => b.id !== id))}
@@ -208,16 +171,6 @@ export default function DashboardPage() {
         onToggleSelectAll={toggleSelectAll}
         onSetHidden={(id, hidden) => setHidden([id], hidden)}
       />
-
-      {/* "+ Neuer Import"-Button unten rechts */}
-      <div className="flex justify-end pt-2">
-        <Link
-          href="/imports/new"
-          className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-blue-700 transition-colors"
-        >
-          + Neuer Import
-        </Link>
-      </div>
     </div>
   );
 }

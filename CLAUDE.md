@@ -1020,7 +1020,8 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - **Workflow-Pflicht in der Oberfläche:** kein „Standard“ mehr — Workflow-Liste ohne Standard-Funktionen, Lieferanten ohne Workflow-Spalte, Belege-Analyse (Dropdown „— Workflow wählen —“, Button erst mit Auswahl), Import-Formular (Pflichtauswahl bei „an KI senden“/Ordner-Sync), Import-Detail (Karte „Analyse-Workflow“; „erneut senden“ erst mit Workflow). Editor kennt die Knoten `schema_extract` und `classify_pages` sowie das Verzweigungsfeld `invoice_page_count`.
 - **Belege:** Badge „Nachbearbeiten · …“ bei `error_code`, Filter „Nur Nachbearbeitung nötig“ (`error_code=any`), Seitenzahl kommt vom Hintergrunddienst (bis dahin „–“).
 - Produktions-Build prüfen: `NEXT_PUBLIC_API_URL=http://localhost:8000 npx next build --webpack` (Turbopack-Build scheitert in Umgebungen mit Symlink-`node_modules`).
-- Noch **nicht** einzeln neu gestaltet (nur über die Tokens angepasst): Dashboard, Belege-Detailansichten, Artikel, Daten, Tasks, Logs, KI-/Automatisierungs-Einstellungen.
+- **Neu gestaltet:** Dashboard (Kennzahlen-Kacheln, Hinweise), Import-Detail, Batch-Tabelle; Excel-Export läuft überall über **Export-Vorlagen** (`/export-vorlagen?batch_ids=1,2` wählt Imports vor; der alte Export liest die leeren Alt-Tabellen und ist aus der Oberfläche entfernt). Seiten dürfen kein `w-screen`/`left-1/2` mehr verwenden (würde die Seitenleiste überdecken); Rahmen ohne Farbe sind global hellgrau (Tailwind 4 nimmt sonst schwarz).
+- Nur über die Tokens angepasst (nicht einzeln neu gestaltet): Belege-Tabelle/Infos-Ansicht, Artikel, Daten, Tasks, Logs, KI-/Automatisierungs-Einstellungen.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

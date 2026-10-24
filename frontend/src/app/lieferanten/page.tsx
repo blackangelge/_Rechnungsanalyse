@@ -185,7 +185,7 @@ export default function LieferantenPage() {
     <main className="mx-auto max-w-7xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Lieferanten</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Lieferanten</h1>
           <p className="mt-1 text-sm text-gray-500">{vendors.length} Lieferant(en)</p>
         </div>
         <div className="flex gap-2">

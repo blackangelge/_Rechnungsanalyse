@@ -11,7 +11,7 @@
 
 "use client";
 
-import { downloadLinkHandler } from "@/lib/download";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { BatchKiStats, BatchQueueStatus, ImportBatch, DocumentItem, WorkflowListItem, extractApiError, importsApi, workflowsApi } from "@/lib/api";
@@ -49,7 +49,6 @@ export default function ImportDetailPage() {
   // Datumsfilter für den Excel-Export (von/bis, optional) + welches Datum geprüft wird
   const [exportDateFrom, setExportDateFrom] = useState("");
   const [exportDateTo, setExportDateTo] = useState("");
-  const [exportDateField, setExportDateField] = useState<"invoice_date" | "import_date">("invoice_date");
 
   /** Nur Batch-Metadaten laden (schnell, kein JOIN über alle Dokumente) */
   const loadMeta = useCallback(async () => {
@@ -246,11 +245,6 @@ export default function ImportDetailPage() {
 
   const isActive = batch.status === "running" || batch.status === "pending";
 
-  const exportParams = new URLSearchParams();
-  if (exportDateFrom) exportParams.set("date_from", exportDateFrom);
-  if (exportDateTo) exportParams.set("date_to", exportDateTo);
-  if (exportDateFrom || exportDateTo) exportParams.set("date_field", exportDateField);
-  const exportHref = `/api/imports/${batchId}/export/${exportParams.toString() ? `?${exportParams.toString()}` : ""}`;
 
   return (
     <div className="space-y-6">
@@ -391,7 +385,7 @@ export default function ImportDetailPage() {
 
       {/* Dokumententabelle — nur nach Abschluss */}
       {!isActive && (
-        <div className="relative left-1/2 w-screen -translate-x-1/2 px-6">
+        <div className="w-full">
           <div className="mb-3 flex items-center gap-3">
             <h2 className="font-semibold text-gray-900">Dokumente</h2>
             <button
@@ -401,47 +395,12 @@ export default function ImportDetailPage() {
             >
               {docsLoading ? "Lade…" : "↻ Aktualisieren"}
             </button>
-            <div className="flex items-center gap-1 text-xs text-gray-500">
-              <select
-                value={exportDateField}
-                onChange={(e) => setExportDateField(e.target.value as "invoice_date" | "import_date")}
-                className="rounded border border-gray-300 px-2 py-1"
-              >
-                <option value="invoice_date">Rechnungsdatum</option>
-                <option value="import_date">Importdatum</option>
-              </select>
-              <input
-                id="export-date-from"
-                type="date"
-                value={exportDateFrom}
-                onChange={(e) => setExportDateFrom(e.target.value)}
-                className="rounded border border-gray-300 px-2 py-1"
-              />
-              <span>bis</span>
-              <input
-                type="date"
-                value={exportDateTo}
-                onChange={(e) => setExportDateTo(e.target.value)}
-                className="rounded border border-gray-300 px-2 py-1"
-              />
-            </div>
-            <a
-              href={exportHref}
-              onClick={downloadLinkHandler(exportHref)}
-              download
-              className="rounded border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+            <Link
+              href={`/export-vorlagen?batch_ids=${batchId}`}
+              className="btn btn-secondary btn-sm"
             >
-              ↓ Excel exportieren
-            </a>
-            <a
-              href={`/api/imports/${batchId}/export/new/`}
-              onClick={downloadLinkHandler(`/api/imports/${batchId}/export/new/`)}
-              download
-              title="Nur Belege, die seit dem letzten Abruf (manuell oder automatisch) fertig analysiert wurden"
-              className="rounded border border-purple-600 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100"
-            >
-              ↓ Neue Belege exportieren
-            </a>
+              Mit Export-Vorlage exportieren …
+            </Link>
           </div>
 
           {docsLoading && !documents && (

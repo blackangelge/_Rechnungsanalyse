@@ -119,7 +119,7 @@ export default function ImportForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 rounded-lg border bg-white p-6 shadow-sm">
+    <form onSubmit={handleSubmit} className="space-y-6 card p-6">
       <h2 className="text-base font-semibold">Neuer Import</h2>
 
       {error && (

@@ -33,8 +33,8 @@ export default function DatenPage() {
   );
 
   return (
-    <div className="relative left-1/2 w-screen -translate-x-1/2 px-6">
-      <h1 className="mb-1 text-2xl font-bold text-gray-900">Daten</h1>
+    <div className="w-full">
+      <h1 className="mb-1 text-2xl font-semibold tracking-tight text-gray-900">Daten</h1>
       <p className="mb-3 text-sm text-gray-500">
         Die Datenbank direkt ansehen und durchsuchen — oder die KI fragen. Bearbeiten ist ein bewusster Schalter; Zugangsdaten und API-Schlüssel sind ausgenommen.
       </p>

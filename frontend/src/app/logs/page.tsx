@@ -111,7 +111,7 @@ export default function LogsPage() {
 
       {/* ── Kopfzeile ─────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">KI-Statistiken</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-gray-900">KI-Statistiken</h1>
         <div className="flex gap-2">
           <button
             onClick={loadWorkerStats}

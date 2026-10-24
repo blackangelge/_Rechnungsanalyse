@@ -292,8 +292,8 @@ export default function ArtikelPage() {
   );
 
   return (
-    <div className="relative left-1/2 w-screen -translate-x-1/2 px-6">
-      <h1 className="mb-1 text-2xl font-bold text-gray-900">Artikel</h1>
+    <div className="w-full">
+      <h1 className="mb-1 text-2xl font-semibold tracking-tight text-gray-900">Artikel</h1>
       <p className="mb-4 text-sm text-gray-500">
         Alle Positionen aus allen Belegen durchsuchen — z.B. um Preise eines Artikels bei verschiedenen Lieferanten zu vergleichen.
       </p>

@@ -196,7 +196,7 @@ export default function TasksPage() {
 
       {/* Kopfzeile */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">Workflow-Tasks</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Workflow-Tasks</h1>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Worker-Status */}
           {workerStatus && (
