@@ -12,6 +12,7 @@ export default function UnitsPage() {
   const [error, setError] = useState<string | null>(null);
   const [groupModal, setGroupModal] = useState(false);
   const [unitModal, setUnitModal] = useState<UnitGroupItem | null>(null);
+  const [renameGroup, setRenameGroup] = useState<UnitGroupItem | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -76,13 +77,14 @@ export default function UnitsPage() {
             <Card key={g.id} title={g.name} pad={false}
               actions={<>
                 <button className="btn btn-secondary btn-sm" onClick={() => setUnitModal(g)}><Icon name="plus" /> Einheit</button>
+                <button className="btn btn-ghost btn-sm" aria-label={`Gruppe ${g.name} umbenennen`} title="Gruppe umbenennen" onClick={() => setRenameGroup(g)}><Icon name="edit" /></button>
                 <button className="btn btn-ghost btn-sm text-red-600" aria-label={`Gruppe ${g.name} löschen`} onClick={() => confirm(`Gruppe „${g.name}“ löschen?`) && run(() => unitsApi.deleteGroup(g.id))}><Icon name="trash" /></button>
               </>}>
               <div className="overflow-x-auto">
                 <table className="table-ra">
                   <thead><tr><th>Einheit</th><th>Symbol</th><th>Faktor</th><th>Schreibweisen (Aliasse)</th><th className="w-12" /></tr></thead>
                   <tbody>
-                    {g.units.map((u) => <UnitRow key={u.id} unit={u} onChange={run} />)}
+                    {g.units.map((u) => <UnitRow key={u.id} unit={u} deletable={!u.is_base || g.units.length === 1} onChange={run} />)}
                     {g.units.length === 0 && <tr><td colSpan={5} className="text-gray-400">Noch keine Einheit.</td></tr>}
                   </tbody>
                 </table>
@@ -94,6 +96,7 @@ export default function UnitsPage() {
 
       {tab === "review" && (
         <Card title="Unbekannte Einheiten" pad={false}>
+          <p className="hint px-5 pt-3">Wähle rechts die bestehende Einheit, zu der diese Schreibweise gehört, und klicke „Zuordnen“: Die Schreibweise wird als Alias an dieser Einheit gespeichert, alle offenen Belege werden sofort neu umgerechnet. „Ignorieren“ lässt die Schreibweise unberücksichtigt.</p>
           {review.length === 0 ? <div className="p-5"><p className="text-sm text-gray-500">Nichts zu prüfen — alle gelesenen Einheiten sind bekannt.</p></div> : (
             <table className="table-ra">
               <thead><tr><th>Schreibweise</th><th>Vorkommen</th><th>Belege</th><th>Zuordnen zu</th><th className="w-24" /></tr></thead>
@@ -106,12 +109,13 @@ export default function UnitsPage() {
       )}
 
       {groupModal && <NameModal title="Neue Gruppe" onClose={() => setGroupModal(false)} onSave={async (name) => { await unitsApi.createGroup(name); setGroupModal(false); await load(); }} />}
+      {renameGroup && <NameModal title="Gruppe umbenennen" initial={renameGroup.name} submitLabel="Speichern" onClose={() => setRenameGroup(null)} onSave={async (name) => { await unitsApi.patchGroup(renameGroup.id, { name }); setRenameGroup(null); await load(); }} />}
       {unitModal && <UnitModal group={unitModal} onClose={() => setUnitModal(null)} onSave={async (d) => { await unitsApi.createUnit(unitModal.id, d); setUnitModal(null); await load(); }} />}
     </div>
   );
 }
 
-function UnitRow({ unit, onChange }: { unit: UnitItem; onChange: (fn: () => Promise<unknown>) => Promise<void> }) {
+function UnitRow({ unit, deletable, onChange }: { unit: UnitItem; deletable: boolean; onChange: (fn: () => Promise<unknown>) => Promise<void> }) {
   const [alias, setAlias] = useState("");
   return (
     <tr>
@@ -131,7 +135,7 @@ function UnitRow({ unit, onChange }: { unit: UnitItem; onChange: (fn: () => Prom
         </div>
       </td>
       <td className="text-right">
-        {!unit.is_base && <button className="btn btn-ghost btn-sm text-red-600" aria-label={`${unit.name} löschen`} onClick={() => confirm(`Einheit „${unit.name}“ löschen?`) && onChange(() => unitsApi.deleteUnit(unit.id))}><Icon name="trash" /></button>}
+        {deletable ? <button className="btn btn-ghost btn-sm text-red-600" aria-label={`${unit.name} löschen`} onClick={() => confirm(`Einheit „${unit.name}“ löschen?`) && onChange(() => unitsApi.deleteUnit(unit.id))}><Icon name="trash" /></button> : <span className="text-xs text-gray-400" title="Die Basiseinheit lässt sich erst löschen, wenn alle anderen Einheiten der Gruppe entfernt sind">Basis</span>}
       </td>
     </tr>
   );
@@ -158,12 +162,12 @@ function ReviewRow({ item, units, onRun }: { item: UnitReviewGroup; units: (Unit
   );
 }
 
-function NameModal({ title, onClose, onSave }: { title: string; onClose: () => void; onSave: (name: string) => Promise<void> }) {
-  const [name, setName] = useState("");
+function NameModal({ title, onClose, onSave, initial = "", submitLabel = "Anlegen" }: { title: string; onClose: () => void; onSave: (name: string) => Promise<void>; initial?: string; submitLabel?: string }) {
+  const [name, setName] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   return (
     <Modal title={title} onClose={onClose} footer={<><button className="btn btn-secondary" onClick={onClose}>Abbrechen</button>
-      <button className="btn btn-primary" disabled={!name.trim()} onClick={async () => { try { await onSave(name.trim()); } catch (e) { setError(extractApiError(e, "Fehler")); } }}>Anlegen</button></>}>
+      <button className="btn btn-primary" disabled={!name.trim()} onClick={async () => { try { await onSave(name.trim()); } catch (e) { setError(extractApiError(e, "Fehler")); } }}>{submitLabel}</button></>}>
       {error && <div className="mb-3"><Alert tone="error">{error}</Alert></div>}
       <label className="label" htmlFor="n">Name</label><input id="n" className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
     </Modal>

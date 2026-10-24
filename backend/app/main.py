@@ -162,6 +162,23 @@ def _seed_users() -> None:
         logger.error("✗ Benutzer aus der .env konnten nicht angelegt werden: %s", exc, exc_info=True)
 
 
+def _seed_units() -> None:
+    """Legt die Standard-Einheiten an, wenn es noch keine Gruppe gibt (idempotent)."""
+    try:
+        from app.database import SessionLocal
+        from app.services.units_seed import seed_default_units
+
+        db = SessionLocal()
+        try:
+            if seed_default_units(db):
+                db.commit()
+                logger.info("✓ Standard-Einheiten angelegt")
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.error("✗ Standard-Einheiten konnten nicht angelegt werden: %s", exc, exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 60)
@@ -190,6 +207,7 @@ async def lifespan(app: FastAPI):
         logger.error("✗ Migration-Timeout nach 30 s — Backend startet trotzdem")
     logger.info("✓ Migration bereit")
     await asyncio.to_thread(_seed_users)
+    await asyncio.to_thread(_seed_units)
     logger.info("✓ Backend bereit")
     yield
     logger.info("=" * 60)

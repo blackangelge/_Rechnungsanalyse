@@ -51,3 +51,12 @@ def test_seed_endpoint_is_idempotent(client):
     second = client.post("/api/schema/seed").json()
     assert not any([second["units_created"], second["schema_created"], second["templates_created"]])
     assert client.get("/api/units").json()
+
+
+def test_group_rename(client):
+    from app.services.units_seed import seed_default_units  # noqa: F401
+    g = client.post("/api/units/groups", json={"name": "Alt"}).json()
+    r = client.patch(f"/api/units/groups/{g['id']}", json={"name": "Neu"})
+    assert r.status_code == 200 and r.json()["name"] == "Neu"
+    client.post("/api/units/groups", json={"name": "Zweite"})
+    assert client.patch(f"/api/units/groups/{g['id']}", json={"name": "Zweite"}).status_code == 409

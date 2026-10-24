@@ -30,6 +30,21 @@ def create_group(db: Session, name: str, description: str | None = None) -> Unit
     return g
 
 
+def update_group(db: Session, group: UnitGroup, name: str | None = None, description: str | None = None) -> UnitGroup:
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise UnitError("Gruppenname fehlt")
+        other = db.query(UnitGroup).filter(UnitGroup.name == name, UnitGroup.id != group.id).first()
+        if other:
+            raise UnitError(f"Gruppe „{name}“ existiert bereits")
+        group.name = name
+    if description is not None:
+        group.description = description or None
+    db.flush()
+    return group
+
+
 def create_unit(
     db: Session, group: UnitGroup, name: str, symbol: str, factor: Decimal | float | str = 1, *,
     is_base: bool = False, case_insensitive: bool = False, aliases: list[str] | None = None,

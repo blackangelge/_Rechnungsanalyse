@@ -133,7 +133,7 @@ export function Field({ label, hint, children, className = "" }: { label: string
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: T; label: string; badge?: ReactNode }[]; value: T; onChange: (v: T) => void }) {
   return (
-    <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto border-b border-gray-200">
+    <div role="tablist" className="mb-5 flex flex-wrap gap-x-1 border-b border-gray-200">
       {tabs.map((t) => (
         <button key={t.id} role="tab" aria-selected={value === t.id} type="button" onClick={() => onChange(t.id)}
           className={`-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${

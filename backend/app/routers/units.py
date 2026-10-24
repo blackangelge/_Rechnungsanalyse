@@ -3,6 +3,7 @@ Router: Mengeneinheiten und Prüfliste.
 
   GET    /api/units                       — Gruppen mit Einheiten und Aliassen
   POST   /api/units/groups                — Gruppe anlegen
+  PATCH  /api/units/groups/{id}           — Gruppe umbenennen
   DELETE /api/units/groups/{id}
   POST   /api/units/groups/{id}/units     — Einheit anlegen (Basis: is_base + Faktor 1)
   PATCH  /api/units/{unit_id}             — Name/Symbol/Faktor/Groß-Klein ändern
@@ -60,6 +61,25 @@ def create_group(body: GroupIn, db: Session = Depends(get_db)):
         db.rollback()
         _fail(exc)
     return {"id": g.id, "name": g.name}
+
+
+class GroupPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+@router.patch("/groups/{group_id}")
+def patch_group(group_id: int, body: GroupPatch, db: Session = Depends(get_db)):
+    g = db.get(UnitGroup, group_id)
+    if g is None:
+        raise HTTPException(404, "Gruppe nicht gefunden")
+    try:
+        cu.update_group(db, g, body.name, body.description)
+        db.commit()
+    except cu.UnitError as exc:
+        db.rollback()
+        _fail(exc)
+    return {"id": g.id, "name": g.name, "description": g.description}
 
 
 @router.delete("/groups/{group_id}", status_code=204)

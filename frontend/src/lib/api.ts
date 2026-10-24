@@ -1735,6 +1735,7 @@ export interface UnitReviewGroup {
 export const unitsApi = {
   list: () => apiClient.get<UnitGroupItem[]>("/api/units").then((r) => r.data),
   createGroup: (name: string, description?: string) => apiClient.post("/api/units/groups", { name, description: description ?? null }).then((r) => r.data),
+  patchGroup: (id: number, data: { name?: string; description?: string }) => apiClient.patch(`/api/units/groups/${id}`, data).then((r) => r.data),
   deleteGroup: (id: number) => apiClient.delete(`/api/units/groups/${id}`),
   createUnit: (groupId: number, data: { name: string; symbol: string; factor: number; is_base?: boolean; case_insensitive?: boolean; aliases?: string[] }) =>
     apiClient.post<UnitItem>(`/api/units/groups/${groupId}/units`, data).then((r) => r.data),
