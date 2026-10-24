@@ -47,6 +47,7 @@ class DetectConfig(BaseModel):
 class ExtractConfig(BaseModel):
     system_prompt_id: int | None = None      # None = in der Analyse gewählter / Standard-Prompt
     ai_config_id: int | None = None          # None = in der Analyse gewählte / Standard-KI
+    format_prompt_id: int | None = None      # Prompt vom Typ „Antwortformat“ (None = Standardformat, falls der Prompt keins beschreibt)
 
 
 class ValidateConfig(BaseModel):
@@ -64,6 +65,7 @@ class RefineConfig(BaseModel):
     system_prompt_id: int | None = None      # Prompt für die Nachbearbeitung (nötig)
     ai_config_id: int | None = None          # None = bisherige/Standard-KI
     include_images: bool = True              # PDF-Seiten mitsenden (sonst nur die bisherigen Daten)
+    format_prompt_id: int | None = None      # Prompt vom Typ „Antwortformat“ (None = Standardformat)
 
 
 BranchField = Literal["document_type", "supplier_name", "page_count", "validation_status"]

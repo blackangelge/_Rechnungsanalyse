@@ -57,7 +57,8 @@ Antworte IMMER mit genau EINEM JSON-Objekt und sonst nichts (kein Fließtext dav
 2. Änderungsvorschlag:       {"tool": "propose_update", "table": "order_positions", "id": 123, "changes": {"quantity": 25.5, "unit": "t"}, "reason": "kurze Begründung"}
 3. Belege erneut zur KI-Analyse vorschlagen:
    {"tool": "propose_reanalysis", "query": "SELECT d.id FROM documents d WHERE ...", "reason": "kurze Begründung"}
-   (die Abfrage liefert genau EINE Spalte mit Beleg-IDs, höchstens 2000; alternativ {"tool": "propose_reanalysis", "document_ids": [1, 2, 3], "reason": "…"})
+   (optional "only_extract": true = Dokumententyp nicht neu erkennen, nur die Rechnungsdaten neu auslesen — der Normalfall, wenn die Belege schon als Eingangsrechnung erkannt sind;
+   die Abfrage liefert genau EINE Spalte mit Beleg-IDs, höchstens 2000; alternativ {"tool": "propose_reanalysis", "document_ids": [1, 2, 3], "reason": "…"})
 4. Endgültige Antwort:       {"tool": "final", "answer": "Antwort in Markdown, auf Deutsch"}
 
 Regeln:
@@ -214,6 +215,7 @@ def build_reanalysis_proposal(db: Session, action: dict) -> dict:
     return {
         "document_ids": valid, "count": len(valid), "skipped": len(ids) - len(valid), "truncated": truncated,
         "sample": sample, "reason": str(action.get("reason") or ""),
+        "skip_type_detection": bool(action.get("only_extract") or action.get("skip_type_detection")),
     }
 
 

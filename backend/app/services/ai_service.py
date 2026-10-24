@@ -350,6 +350,56 @@ def _price_basis(pos: dict) -> float | None:
     return n if n is not None and n > 0 and n != 1 else None
 
 
+# Standard-Antwortformat für Extraktionsprompts in Workflows (Prompt-Typ 3 „Antwortformat“ kann es ersetzen).
+# Genau diese Struktur liest `extract_invoice_data` (`_map_new_format`) — fehlt sie im Prompt, kann die Antwort nicht verarbeitet werden.
+DEFAULT_RESPONSE_FORMAT = """\
+ANTWORTFORMAT (zwingend): Antworte AUSSCHLIESSLICH mit einem gültigen JSON-Objekt — kein Text davor oder danach, keine Markdown-Zeichen.
+Unbekannte Werte: null. Zahlen als Zahl mit Punkt als Dezimaltrenner (1234.56), Datumsangaben als YYYY-MM-DD. `positionen` ist immer eine Liste (leer, wenn es keine gibt).
+{
+  "lieferant": {
+    "name": "...",
+    "anschrift": { "strasse": "...", "plz": "...", "ort": "...", "land": "..." },
+    "hrb_nummer": "...", "steuernummer": "...", "ust_id_nr": "...",
+    "bankverbindung": { "bank_name": "...", "iban": "...", "bic": "..." }
+  },
+  "rechnungsdaten": { "rechnungsnummer": "...", "rechnungsdatum": "YYYY-MM-DD", "faelligkeit": "YYYY-MM-DD", "kundennummer": "..." },
+  "positionen": [
+    {
+      "position_nr": 1, "artikelbezeichnung": "...", "artikelnummer_lieferant": "...",
+      "menge": 1, "mengeneinheit": "Stück", "einzelpreis": 0.0, "gesamtpreis": 0.0, "waehrung": "EUR", "steuersatz": 19.0,
+      "preiseinheit": null, "preis_je_menge": null, "verpackungsinhalt": null, "verpackungsinhalt_einheit": null, "mengeneinheit_typ": "stueck",
+      "preisnachlass": { "betrag": null, "prozent": null, "bezeichnung": null }
+    }
+  ],
+  "zahlungsinformationen": {
+    "gesamtbetrag_netto": 0.0,
+    "umsatzsteuer_zusammenfassung": [{ "steuersatz": 19.0, "nettobetrag": 0.0, "steuerbetrag": 0.0 }],
+    "gesamtbetrag_brutto": 0.0, "waehrung": "EUR",
+    "skonto": { "prozent": null, "betrag": null, "frist_tage": null }, "zahlungsbedingungen": "..."
+  }
+}
+"""
+
+
+def has_response_format(prompt: str | None) -> bool:
+    """Beschreibt der Prompt die erwartete JSON-Struktur schon? (Erkennung an den Schlüsselnamen der Positionen)"""
+    low = (prompt or "").lower()
+    return "artikelbezeichnung" in low and "positionen" in low
+
+
+def with_response_format(prompt: str | None, format_text: str | None = None) -> str:
+    """
+    Hängt das Antwortformat an einen Extraktionsprompt:
+      • `format_text` (ein Prompt vom Typ „Antwortformat“) wird angehängt, wenn angegeben;
+      • sonst das Standardformat — aber nur, wenn der Prompt die Struktur nicht schon selbst beschreibt.
+    """
+    base = (prompt or "").rstrip()
+    if format_text and format_text.strip():
+        return f"{base}\n\n{format_text.strip()}"
+    return base if has_response_format(base) else f"{base}\n\n{DEFAULT_RESPONSE_FORMAT}"
+
+
+
 def with_unit_rules(prompt: str | None) -> str:
     """Hängt die Zusatzregeln (Einheiten, Preisbasis, Verpackung, Nebenkosten) einmalig an den Extraktionsprompt — nicht, wenn der Prompt `preis_je_menge` schon behandelt."""
     base = prompt or ""

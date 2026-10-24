@@ -252,6 +252,8 @@ class AnalyzeRequest(BaseModel):
     system_prompt_id: Optional[int] = None
     # Optional: Workflow für diese Analyse (sonst automatisch: Lieferant → Standard → klassisch)
     workflow_id: Optional[int] = None
+    # True = Dokumententyp NICHT neu erkennen, nur die Rechnungsdaten neu auslesen (nutzt den gespeicherten Typ)
+    skip_type_detection: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -267,6 +269,8 @@ class EnqueueRequest(BaseModel):
     document_ids: list[int]  # Liste der Dokument-IDs, die in die Warteschlange eingereiht werden sollen
     # Optional: Workflow, der für diese Analyse gelten soll (sonst automatisch: Lieferant → Standard → klassisch)
     workflow_id: int | None = None
+    # True = Dokumententyp NICHT neu erkennen, nur die Rechnungsdaten neu auslesen (Belege ohne gespeicherten Typ werden normal erkannt)
+    skip_type_detection: bool = False
 
 
 class EnqueueResponse(BaseModel):
@@ -360,6 +364,8 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
         task_payload: dict = {"kind": "process_document", "document_id": doc_id}
         if payload.workflow_id:
             task_payload["workflow_id"] = payload.workflow_id
+        if payload.skip_type_detection:
+            task_payload["skip_type_detection"] = True
         task = WorkflowTask(
             workflow_id=str(uuid.uuid4()),
             payload=task_payload,
@@ -556,6 +562,7 @@ async def analyze_documents(
         ai_config_id=ai_config_id,
         system_prompt_id=payload.system_prompt_id,
         workflow_id=payload.workflow_id,
+        skip_type_detection=payload.skip_type_detection,
     ))
 
     return AnalyzeResponse(
@@ -1054,6 +1061,7 @@ async def _run_analysis(
     ai_config_id: int,
     system_prompt_id: int | None,
     workflow_id: int | None = None,
+    skip_type_detection: bool = False,
 ) -> None:
     """
     Analysiert eine Liste von Dokumenten SEQUENZIELL (eines nach dem anderen).
@@ -1085,7 +1093,7 @@ async def _run_analysis(
     for doc_id in document_ids:
         try:
             # Ein Dokument vollständig analysieren bevor das nächste startet
-            await _analyze_single(doc_id, ai_config_id, system_prompt_id, workflow_id)
+            await _analyze_single(doc_id, ai_config_id, system_prompt_id, workflow_id, skip_type_detection)
         except Exception as exc:
             # Unerwarteter Fehler außerhalb der normalen Fehlerbehandlung
             # (sollte nicht vorkommen, aber sicherheitshalber abgefangen)
@@ -1381,6 +1389,7 @@ async def _analyze_single(
     ai_config_id: int,
     system_prompt_id: int | None,
     workflow_id: int | None = None,
+    skip_type_detection: bool = False,
 ) -> str:
     """
     Schutzschicht um _analyze_single_inner: verhindert parallele Doppelverarbeitung.
@@ -1415,7 +1424,7 @@ async def _analyze_single(
     _analyzing_docs.add(doc_id)
     try:
         # Eigentliche Analyse ausführen
-        return await _analyze_single_inner(doc_id, ai_config_id, system_prompt_id, workflow_id)
+        return await _analyze_single_inner(doc_id, ai_config_id, system_prompt_id, workflow_id, skip_type_detection)
     finally:
         # Auch bei Exceptions: Dokument aus dem Schutz-Set entfernen,
         # damit es später erneut analysiert werden kann
@@ -1427,6 +1436,7 @@ async def _analyze_single_inner(
     ai_config_id: int,
     system_prompt_id: int | None,
     workflow_id: int | None = None,
+    skip_type_detection: bool = False,
 ) -> str:
     """
     Eigentliche KI-Analyse-Logik für ein einzelnes Dokument (nach dem Duplikat-Check).
@@ -1449,6 +1459,7 @@ async def _analyze_single_inner(
                            Wird erst in _db_analyze_read() in Text aufgelöst,
                            nicht schon vom Aufrufer — siehe dortige Begründung.
         workflow_id:      Optional explizit gewählter Workflow (sonst: Lieferant → Standard → klassisch).
+        skip_type_detection: True = bei bereits bekanntem Dokumententyp keine Typ-Erkennung (nur neu auslesen).
 
     Returns:
         "ok"             — Analyse abgeschlossen (Dokument ist jetzt done oder error)
@@ -1461,7 +1472,7 @@ async def _analyze_single_inner(
     if workflow is not None:
         from app.services import workflow_runner
         return await workflow_runner.analyze_with_workflow(
-            doc_id, ai_config_id, system_prompt_id, workflow
+            doc_id, ai_config_id, system_prompt_id, workflow, skip_type_detection
         )
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1568,8 +1579,14 @@ async def _analyze_single_inner(
     #   Pfad C: Kein Typ-Prompt konfiguriert → direkt Rechnungsdaten extrahieren
     #           (einstufiger Legacy-Modus, keine Typklassifizierung möglich/nötig)
 
+    # „Nur neu auslesen“: Hat der Beleg schon einen Dokumententyp, wird er nicht erneut erkannt (Pfad C: direkte Extraktion,
+    # der gespeicherte Typ bleibt unverändert). Ohne gespeicherten Typ läuft die Erkennung wie üblich.
+    skip_detection = bool(skip_type_detection and existing_document_type)
+    if skip_detection:
+        logger.info("Dokument #%d: Typ-Erkennung übersprungen (nur neu auslesen, Typ %s)", doc_id, existing_document_type)
+
     # ─── PFAD B: Typ-Erkennungs-Prompt vorhanden → IMMER (erneut) klassifizieren ──
-    if doc_type_prompt_text and document_types:
+    if doc_type_prompt_text and document_types and not skip_detection:
         # ── KI-Aufruf 1: Dokumententyp erkennen ─────────────────────────────
         # detect_document_type ist SYNCHRON → läuft in asyncio.to_thread
         logger.info(

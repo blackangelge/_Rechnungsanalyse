@@ -20,12 +20,14 @@ const TYPE_LABEL: Record<number, string> = {
   0: "Dokumententyp-Erkennung",
   1: "Standard-Extraktion (Eingangsrechnung)",
   2: "Workflow-Baustein",
+  3: "Antwortformat",
 };
 
 const TYPE_COLOR: Record<number, string> = {
   0: "bg-violet-100 text-violet-700",
   1: "bg-blue-100 text-blue-700",
   2: "bg-teal-100 text-teal-700",
+  3: "bg-amber-100 text-amber-800",
 };
 
 export default function SystemPromptsPage() {
@@ -158,13 +160,27 @@ export default function SystemPromptsPage() {
               <option value={0}>0 — Dokumententyp-Erkennung</option>
               <option value={1}>1 — Standard-Extraktion (Eingangsrechnung)</option>
               <option value={2}>2 — Workflow-Baustein</option>
+              <option value={3}>3 — Antwortformat (JSON-Struktur der Antwort)</option>
             </select>
             <p className="mt-1 text-xs text-gray-500">
-              {formType === 2
+              {formType === 3
+                ? "Beschreibt, in welcher JSON-Struktur die KI antworten soll. Wird im Workflow-Knoten „Daten extrahieren“ / „KI-Nachbearbeitung“ unter „Antwortformat“ gewählt und an den Prompt gehängt. Beliebig viele möglich."
+                : formType === 2
                 ? "Wird nie automatisch gewählt — nur dort, wo du ihn ausdrücklich auswählst (z. B. in einem Workflow-Knoten). Beliebig viele möglich."
                 : "Typ 0 und 1 gibt es nur einmal: wird ein weiterer so gespeichert, wird der bisherige zum Workflow-Baustein."}
             </p>
           </div>
+
+          {formType === 3 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 space-y-2">
+              <p>Die Anwendung versteht nur das verschachtelte Format (<code>lieferant</code>, <code>rechnungsdaten</code>, <code>positionen</code>, <code>zahlungsinformationen</code>).
+                Ohne Antwortformat im Workflow wird das Standardformat automatisch angehängt, sobald der Prompt <code>positionen</code>/<code>artikelbezeichnung</code> nicht selbst beschreibt.</p>
+              <button type="button" className="rounded border border-amber-400 bg-white px-3 py-1 font-medium text-amber-800 hover:bg-amber-100"
+                onClick={async () => { try { setFormContent(await systemPromptsApi.defaultFormat()); } catch { setError("Standardformat konnte nicht geladen werden"); } }}>
+                Standard-Antwortformat als Vorlage einfügen
+              </button>
+            </div>
+          )}
 
           {formType === 0 && (
             <div className="rounded-lg border border-violet-200 bg-violet-50 p-4 space-y-3 text-xs">

@@ -317,6 +317,7 @@ export default function BelegePage() {
   // Analyse-Workflow (leer = automatisch: Lieferant → Standard → klassisch)
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
+  const [onlyReextract, setOnlyReextract] = useState(false);   // nur neu auslesen, Dokumententyp nicht erneut erkennen
 
   // PDF-Bearbeitung (Modal „Seiten") + Sammel-Kürzen
   const [editDoc, setEditDoc] = useState<{ id: number; filename: string } | null>(null);
@@ -606,6 +607,7 @@ export default function BelegePage() {
       const result = await documentsApi.enqueue(
         Array.from(selectedIds),
         selectedWorkflowId ? parseInt(selectedWorkflowId, 10) : undefined,
+        onlyReextract,
       );
       setSuccessMsg(result.message);
       setSelectedIds(new Set());
@@ -921,6 +923,10 @@ export default function BelegePage() {
                   <option key={w.id} value={w.id}>{w.name}{w.is_default ? " (Standard)" : ""}</option>
                 ))}
               </select>
+              <label className="flex items-center gap-1 text-xs text-gray-700" title="Bereits erkannte Dokumententypen werden übernommen; es werden nur die Rechnungsdaten neu ausgelesen (spart eine KI-Anfrage je Beleg)">
+                <input type="checkbox" checked={onlyReextract} onChange={(e) => setOnlyReextract(e.target.checked)} data-testid="only-reextract" />
+                nur neu auslesen
+              </label>
             </div>
             <button onClick={startAnalysis} disabled={analyzing || selectedIds.size === 0}
               className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">

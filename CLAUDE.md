@@ -762,15 +762,17 @@ Workers; ein Knoten kann eine andere KI-Konfiguration erzwingen (`ai_config_id`)
 | `trim_pages` | `max_pages` | neue PDF-Version mit den ersten N Seiten (`pdf_edit_service.auto_trim`) |
 | `detect_type` | `system_prompt_id?` | Dokumententyp erkennen (leer = Dokumententyp-Prompt aus den Einstellungen; **ohne beides Fehler** — es gibt keinen Code-Fallback) |
 | `branch` | `field`, `op`, `value` | Ja/Nein-Weiche (`true`/`false`); Felder `document_type`, `supplier_name`, `page_count`, `validation_status` |
-| `extract` | `system_prompt_id?`, `ai_config_id?` | Rechnungsdaten extrahieren (leer = gewählter/Standard-Prompt bzw. -KI) |
+| `extract` | `system_prompt_id?`, `ai_config_id?`, `format_prompt_id?` | Rechnungsdaten extrahieren (leer = gewählter/Standard-Prompt bzw. -KI) |
 | `validate` | `auto_correct`, `ai_recheck` | Plausibilitätsprüfung (`_plausibility_pass`), Stufen einzeln abschaltbar |
 | `normalize_units` | `target` (`t`\|`kg`) | Gewichte (kg/g/t) in Menge, Einheit und Einzelpreis (€ je Einheit) auf eine Einheit umrechnen (`plausibility_service._normalize_mass_to_tonnes`); wirkt nur nach einer Extraktion |
-| `ai_refine` | `system_prompt_id` (Pflicht), `ai_config_id?`, `include_images` | KI-Nachbearbeitung: eigener Prompt + bisheriges Ergebnis (JSON) → ersetzt Felder/Positionen (Prüfstatus wird zurückgesetzt, danach erneut „Plausibilität prüfen“); liefert die KI nichts Verwertbares, bleiben die Daten unverändert |
+| `ai_refine` | `system_prompt_id` (Pflicht), `ai_config_id?`, `include_images`, `format_prompt_id?` | KI-Nachbearbeitung: eigener Prompt + bisheriges Ergebnis (JSON) → ersetzt Felder/Positionen (Prüfstatus wird zurückgesetzt, danach erneut „Plausibilität prüfen“); liefert die KI nichts Verwertbares, bleiben die Daten unverändert |
 | `end` | – | Ende |
 
 Regeln (`validate_graph`, beim Speichern erzwungen → HTTP 422): genau ein Start ohne Eingang; jeder Ausgang höchstens **eine** Kante (sequenzieller Ablauf);
 keine Zyklen; Verzweigung nur mit `true`/`false`; Operatoren passend zum Feld. Nur Warnungen: nicht erreichbare Knoten, offene Verzweigungsausgänge, keine
 Extraktion, Prüfung vor Extraktion, fehlende Prompt-/KI-IDs. Fehlt eine Kante, endet der Ablauf dort.
+
+**„Nur neu auslesen“ (`skip_type_detection`):** `EnqueueRequest`/`AnalyzeRequest` → Task-Payload → `_analyze_single(..., skip_type_detection)`. Hat der Beleg schon einen Dokumententyp, wird er übernommen (keine Typ-Erkennung, eine KI-Anfrage weniger; klassischer Ablauf = direkte Extraktion, Workflow-Knoten `detect_type` setzt den gespeicherten Typ ohne KI). Ohne gespeicherten Typ läuft die Erkennung normal. Belege-Seite: Checkbox „nur neu auslesen“ in der Analyse-Leiste; KI-Assistent: `"only_extract": true` im Vorschlag.
 
 **Datenfluss je Knoten** (`workflow_trace`, Ansicht `components/belege/WorkflowTraceView.tsx` im KI-Modal der Belege): Jeder Ablaufeintrag enthält zusätzlich `config`, `input`/`output` (Datenstand vor/nach dem Knoten:
 Felder, Positionen — max. 100 —, Prüfstatus/-meldungen), `changes` (`diff_snapshots`: Pfad/vorher/nachher — leer = Knoten hat nichts verändert) und `io` (`prompt`, `response`, `model`, `notes`; Prompt/Antwort auf 20.000 Zeichen gekürzt).
@@ -949,7 +951,9 @@ Vorhandene Felder werden nur überschrieben, wenn der neue Wert besser (nicht le
 
 ### Systemprompts (`models/system_prompt.py`, `crud/system_prompt.py`)
 
-**Prompt-Typen:** `0` Dokumententyp-Erkennung · `1` Standard-Extraktion · `2` **Workflow-Baustein** (wird nie automatisch gewählt; beliebig viele, nur ausdrücklich z.B. im Workflow-Knoten).
+**Prompt-Typen:** `0` Dokumententyp-Erkennung · `1` Standard-Extraktion · `2` **Workflow-Baustein** (wird nie automatisch gewählt; beliebig viele, nur ausdrücklich z.B. im Workflow-Knoten) · `3` **Antwortformat** (beschreibt die JSON-Struktur der Antwort; beliebig viele; im Workflow-Knoten „Daten extrahieren“/„KI-Nachbearbeitung“ unter `format_prompt_id` wählbar).
+Ohne gewählten Format-Prompt hängt `ai_service.with_response_format` das eingebaute `DEFAULT_RESPONSE_FORMAT` an, sobald der Prompt die Struktur (`artikelbezeichnung` + `positionen`) nicht selbst beschreibt — Workflow-Prompts ohne Struktur lieferten sonst Antworten, die nicht verarbeitet werden konnten. Gespeichert (`used_system_prompt`) wird der Prompt wie angelegt, gesendet und für die Nachprüfung verwendet der Prompt mit Format; die Vorlage liefert `GET /api/settings/system-prompts/default-format` (Button „Standard-Antwortformat als Vorlage einfügen“).
+
 Typ 0 und 1 gibt es höchstens einmal: Anlegen, Typ-Wechsel und „Als Standard setzen“ stufen andere Prompts desselben Typs zu Typ 2 herab; `get_default()`/`get_doc_type_prompt()` sind
 deterministisch (kleinste ID), falls ein älterer Stand mehrere Typ-1-Prompts enthält (Prompts-Seite zeigt dann eine Warnung). Kopien sind immer Typ 2.
 

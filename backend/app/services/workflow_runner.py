@@ -61,6 +61,9 @@ class RunContext:
     doc_type_prompt_text: str | None      # Dokumententyp-Prompt aus den Einstellungen
     document_types: list[dict]
     known_supplier_name: str | None = None
+    # „Nur neu auslesen“: bereits gespeicherter Dokumententyp wird übernommen statt erneut erkannt
+    skip_type_detection: bool = False
+    existing_type_id: int | None = None
 
     # Laufzeitzustand
     images: list | None = None
@@ -288,6 +291,12 @@ async def _h_trim(cfg, ctx: RunContext):
 
 
 async def _h_detect(cfg, ctx: RunContext):
+    if ctx.skip_type_detection and ctx.existing_type_id:
+        name = next((t.get("name") for t in ctx.document_types if t.get("id") == ctx.existing_type_id), None)
+        ctx.type_detected = True
+        ctx.document_type_id, ctx.document_type_name = ctx.existing_type_id, name
+        ctx.node_io = {"notes": ["Nur neu auslesen: gespeicherten Dokumententyp übernommen, keine KI-Anfrage"]}
+        return NodeResult(detail=f"Typ übernommen: {name or ctx.existing_type_id} (keine Erkennung)")
     if not ctx.document_types:
         raise RuntimeError("Es sind keine Dokumententypen vorhanden")
     if cfg.system_prompt_id:
@@ -332,11 +341,19 @@ async def _h_branch(cfg, ctx: RunContext):
     return NodeResult("true" if result else "false", f"{cfg.field} = {shown!r} → {'Ja' if result else 'Nein'}")
 
 
+async def _formatted(prompt: str | None, format_prompt_id: int | None) -> str:
+    """Hängt das Antwortformat an (gewählter Format-Prompt, sonst Standardformat falls der Prompt keins beschreibt)."""
+    fmt = await asyncio.to_thread(_db_prompt_text, format_prompt_id) if format_prompt_id else None
+    return ai_service.with_response_format(prompt, fmt)
+
+
 async def _h_extract(cfg, ctx: RunContext):
     prompt = (
         await asyncio.to_thread(_db_prompt_text, cfg.system_prompt_id)
         if cfg.system_prompt_id else ctx.default_prompt_text
     )
+    base_prompt = prompt                                   # gespeichert wird der Prompt wie angelegt (Nachvollziehbarkeit)
+    prompt = await _formatted(prompt, cfg.format_prompt_id)   # gesendet (und für die Nachprüfung genutzt) wird er mit Antwortformat
     proxy = (
         await asyncio.to_thread(_db_ai_proxy, cfg.ai_config_id) if cfg.ai_config_id else ctx.ai_proxy
     )
@@ -353,7 +370,7 @@ async def _h_extract(cfg, ctx: RunContext):
     ctx.used_extract_prompt = prompt
     ctx.validation = None
     ctx.add_stats(stats)
-    await asyncio.to_thread(_db_save_prompts, ctx.doc_id, ctx.used_extract_prompt, None)
+    await asyncio.to_thread(_db_save_prompts, ctx.doc_id, base_prompt, None)
     return NodeResult(detail=f"{len(positions)} Position(en), Modell {getattr(proxy, 'model_name', '?')}")
 
 
@@ -394,6 +411,7 @@ async def _h_refine(cfg, ctx: RunContext):
     if not cfg.system_prompt_id:
         raise RuntimeError("Kein Systemprompt gewählt — bitte im Knoten „KI-Nachbearbeitung“ einen Prompt auswählen")
     prompt = await asyncio.to_thread(_db_prompt_text, cfg.system_prompt_id)
+    prompt = await _formatted(prompt, cfg.format_prompt_id)
     proxy = await asyncio.to_thread(_db_ai_proxy, cfg.ai_config_id) if cfg.ai_config_id else (ctx.extract_proxy or ctx.ai_proxy)
     if ctx.extracted and ctx.raw:
         prompt = (
@@ -426,6 +444,7 @@ HANDLERS = {
 
 async def analyze_with_workflow(
     doc_id: int, ai_config_id: int, system_prompt_id: int | None, workflow: dict,
+    skip_type_detection: bool = False,
 ) -> str:
     """
     Analysiert ein Dokument gemäß `workflow` ({id, name, graph, source}).
@@ -456,6 +475,7 @@ async def analyze_with_workflow(
         default_prompt_text=system_prompt_text, doc_type_prompt_text=data["doc_type_prompt_text"],
         document_types=data["document_types"],
         known_supplier_name=await asyncio.to_thread(_db_known_supplier, doc_id),
+        skip_type_detection=skip_type_detection, existing_type_id=data.get("existing_document_type") or None,
     )
     try:
         ctx.page_count = await asyncio.to_thread(pdf_service.get_page_count, ctx.pdf_path)
