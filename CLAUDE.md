@@ -777,6 +777,7 @@ Workers; ein Knoten kann eine andere KI-Konfiguration erzwingen (`ai_config_id`)
 | `validate` | `auto_correct`, `ai_recheck` | Plausibilitätsprüfung (`_plausibility_pass`), Stufen einzeln abschaltbar |
 | `normalize_units` | `target` (`t`\|`kg`) | Gewichte (kg/g/t) in Menge, Einheit und Einzelpreis (€ je Einheit) auf eine Einheit umrechnen (`plausibility_service._normalize_mass_to_tonnes`); wirkt nur nach einer Extraktion |
 | `ai_refine` | `system_prompt_id` (Pflicht), `ai_config_id?`, `include_images`, `format_prompt_id?` | KI-Nachbearbeitung: eigener Prompt + bisheriges Ergebnis (JSON) → ersetzt Felder/Positionen (Prüfstatus wird zurückgesetzt, danach erneut „Plausibilität prüfen“); liefert die KI nichts Verwertbares, bleiben die Daten unverändert |
+| `discard` | `only_if`, `reason` | Beleg in den Papierkorb legen (siehe „Nicht-Eingangsrechnungen“); kein Ausgang |
 | `end` | – | Ende |
 
 Regeln (`validate_graph`, beim Speichern erzwungen → HTTP 422): genau ein Start ohne Eingang; jeder Ausgang höchstens **eine** Kante (sequenzieller Ablauf);
@@ -1059,6 +1060,28 @@ die alten Endpunkte `/api/db-assistant/*` und `db_assistant_service` bleiben (de
   der Button „Standard-Einheiten und Schema einspielen“ bleibt für leere Systeme. Wer bewusst alle Gruppen löscht, bekommt sie beim nächsten Start wieder.
 - **Prüfliste → bestehende Einheit:** Schreibweise in der Zeile wählen, Einheit im Dropdown auswählen, „Zuordnen“ — legt den Alias an der Einheit an und rechnet alle offenen Belege neu (Erklärtext steht über der Tabelle).
 - `Tabs` (`components/ui`) umbrechen statt zu scrollen (kein Scrollbalken mehr).
+
+### Seitenerkennung: Sicherheitsnetz und Rechnungen trennen (`services/page_classifier.py`, Knoten `classify_pages`)
+
+- **Aktion `split_invoices`** (neben `classify_only` und `keep_invoice_pages`): jeder zusammenhängende Rechnungsabschnitt ist eine Rechnung (`invoice_groups`; Abschnitte mit **gleicher Rechnungsnummer** werden zu einer zusammengefasst). Die erste bleibt im Beleg
+  (neue PDF-Version nur mit ihren Seiten), **jede weitere wird ein eigener Beleg** (`pdf_edit_service.create_child_document`: eigene `{id}.pdf` im selben Import, Name `…_Rechnung2.pdf`) und mit demselben Workflow in die Worker-Queue gestellt
+  (`workflow_runner._db_split_children`). Die Kinder laufen den vollen Workflow, finden aber nur noch eine Rechnung → kein weiteres Aufteilen. Vorlage `pages_schema` nutzt `split_invoices`.
+- **Sicherheitsnetz** (`page_classifier.uncertainty`): bei `keep_invoice_pages`/`split_invoices` wird die PDF **nur bei eindeutiger Erkennung** verändert. Unsicher = Hinweis der KI an einer Seite, nicht klassifizierte Seiten/unbrauchbarer Block, erste Rechnungsseite nur als Folgeseite erkannt, mehrere Rechnungen ohne
+  Nummer und Absender. Dann wirft der Knoten `NeedsRework("pages_unsure")`: **nichts wird beschnitten oder abgespalten**, Beleg `error` mit `error_code = pages_unsure` („Nachbearbeiten · Seitenerkennung unsicher“), die Gründe stehen in der Meldung; `document_pages` ist gespeichert.
+- **Prüf-Skript vor dem Produktiveinsatz:** `python -m app.scripts.bench_pages --pdf-dir … --api-url … --model … [--expected erwartet.csv]` — klassifiziert echte PDFs wie der Workflow, zeigt je Seite Typ/Rechnungsnummer/Hinweise, erkannte Rechnungen, „unsicher“-Quote, Dauer und (mit CSV `datei;seite;typ`) Treffer je Seitentyp. Speichert nichts.
+- Tests: `tests/test_invoice_split.py`. Nicht umgesetzt: gestuftes Klassifizieren nur ausgewählter Seiten (Kostenersparnis) — die Seiten gehen bereits klein (80 dpi) und mit festem Prompt-Anfang (Prefix-Caching) zur KI.
+
+### Nicht-Eingangsrechnungen: Papierkorb und endgültiges Löschen (Migration `0024_document_trash`)
+
+Für dieses Projekt zählen nur Eingangsrechnungen. Alles andere wird **geprüft und gelöscht — zweistufig, damit nichts versehentlich verloren geht**:
+
+1. **Aussortieren** (umkehrbar): `documents.soft_deleted` + `deleted_reason`/`deleted_at` (Papierkorb; alle Listen, Artikelsuche, Exporte blenden ihn aus). Wege: (a) **Belege-Seite**: Filter „Nur Nicht-Eingangsrechnungen“ (`not_invoice=true`: Status `done` und Typ ∉ {0 nicht erkannt, 1 Eingangsrechnung, 15 Mischbeleg} —
+   Mischbelege enthalten eine Rechnung und sind nie dabei) → „Alle Treffer auswählen“ → „Auswahl in den Papierkorb“ (`POST /api/documents/bulk-delete {ids, reason}`; Belege in Verarbeitung werden übersprungen); (b) **Workflow-Knoten „Beleg verwerfen“** (`discard`, kein Ausgang): legt den Beleg im Ablauf in den Papierkorb. Konfiguration `only_if`
+   (Standard `not_invoice`: eine extrahierte/als Rechnung oder Mischbeleg erkannte Analyse wird **nie** verworfen; ohne Typ-Erkennung im Ablauf wird nichts verworfen) und `reason`. Die Vorlagen „Standard“, „Erst kürzen“ und „Seiten erkennen + Schema-Extraktion“ verwerfen Nicht-Rechnungen auf dem „Nein“-Zweig.
+   Typ, Seitenzahl und KI-Statistik bleiben am verworfenen Beleg erhalten (Prüfung im Papierkorb).
+2. **Prüfen und endgültig löschen:** Seite **/papierkorb** (Menü „Arbeiten“): Liste mit Grund, Typ, Datum, PDF ansehen; „Zurückholen“ (`POST /bulk-restore`) und „Endgültig löschen“ (`POST /api/documents/purge`). `purge` wirkt **nur auf Belege im Papierkorb** (andere werden übersprungen) und entfernt Belegzeile samt
+   Extraktion/Positionen/Datensätzen/Historie (Cascade), wartende Worker-Tasks, `{id}.pdf` und `versions/{id}/` — nicht umkehrbar. Logik in `services/document_trash.py`; `GET /api/documents/non-invoices/summary` liefert die Zähler (Kennzahl in der Belege-Filterzeile). Filter `only_deleted=true` für Liste/IDs.
+- Tests: `tests/test_trash.py`.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

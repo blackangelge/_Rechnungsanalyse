@@ -309,6 +309,9 @@ export interface DocumentItem {
    *  ausreichend große KI-Konfiguration verfügbar ist (siehe worker.py) */
   status: "pending" | "processing" | "done" | "error" | "waiting_capacity";
   soft_deleted: boolean;
+  /** Papierkorb: warum und wann der Beleg dort gelandet ist */
+  deleted_reason?: string | null;
+  deleted_at?: string | null;
   /** PDF-Version (aktuelle) und Version, auf der die letzte KI-Analyse lief */
   pdf_version?: number;
   analyzed_pdf_version?: number | null;
@@ -523,7 +526,14 @@ export interface DocumentFilter {
   validation_status?: ValidationStatus[];
   /** "any" = alle Belege, die nachbearbeitet werden müssen, oder konkrete Codes */
   error_code?: string[];
+  /** Nur erkannte Nicht-Eingangsrechnungen (Lieferschein, Angebot, …) */
+  not_invoice?: boolean;
+  /** Nur Belege im Papierkorb */
+  only_deleted?: boolean;
 }
+
+export interface TrashResult { requested: number; changed: number; skipped: number; files_removed: number; errors: string[] }
+export interface NonInvoiceSummary { total: number; by_type: { type_id: number; name: string; count: number }[]; trash: number }
 
 export interface AnalyzeRequest {
   document_ids: number[];
@@ -534,6 +544,12 @@ export interface AnalyzeRequest {
 }
 
 export const documentsApi = {
+  nonInvoiceSummary: () => apiClient.get<NonInvoiceSummary>("/api/documents/non-invoices/summary").then((r) => r.data),
+  /** In den Papierkorb legen (umkehrbar) */
+  bulkDelete: (ids: number[], reason?: string) => apiClient.post<TrashResult>("/api/documents/bulk-delete", { ids, reason: reason ?? null }, { timeout: 0 }).then((r) => r.data),
+  bulkRestore: (ids: number[]) => apiClient.post<TrashResult>("/api/documents/bulk-restore", { ids }, { timeout: 0 }).then((r) => r.data),
+  /** ENDGÜLTIG löschen (nur Belege im Papierkorb; Dateien werden mitgelöscht) */
+  purge: (ids: number[]) => apiClient.post<TrashResult>("/api/documents/purge", { ids }, { timeout: 0 }).then((r) => r.data),
   list: (filters?: DocumentFilter) =>
     apiClient.get<DocumentItem[]>("/api/documents/", { params: filters }).then((r) => r.data),
   /**
@@ -831,7 +847,7 @@ export const logsApi = {
 // ─── Typen: Workflows ─────────────────────────────────────────────────────────
 
 export type WorkflowNodeType =
-  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "end";
+  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "discard" | "end";
 
 export interface WorkflowNodeConfig {
   // trim_pages
@@ -852,6 +868,9 @@ export interface WorkflowNodeConfig {
   dpi?: number;
   chunk_size?: number;
   action?: "classify_only" | "keep_invoice_pages" | "split_invoices";
+  // discard
+  only_if?: "not_invoice" | "always";
+  reason?: string;
   // validate
   auto_correct?: boolean;
   ai_recheck?: boolean;

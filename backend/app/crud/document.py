@@ -99,12 +99,14 @@ def update_status(
     return obj
 
 
-def soft_delete(db: Session, doc_id: int) -> Document | None:
-    """Markiert das Dokument als gelöscht (soft_deleted=True). Keine Daten werden entfernt."""
+def soft_delete(db: Session, doc_id: int, reason: str | None = None) -> Document | None:
+    """Markiert das Dokument als gelöscht (soft_deleted=True, Papierkorb). Keine Daten werden entfernt."""
     obj = db.get(Document, doc_id)
     if obj is None:
         return None
     obj.soft_deleted = True
+    obj.deleted_reason = (reason or None) and reason[:300]
+    obj.deleted_at = func.now()
     db.commit()
     db.refresh(obj)
     return obj
@@ -116,6 +118,8 @@ def restore(db: Session, doc_id: int) -> Document | None:
     if obj is None:
         return None
     obj.soft_deleted = False
+    obj.deleted_reason = None
+    obj.deleted_at = None
     db.commit()
     db.refresh(obj)
     return obj
@@ -167,8 +171,11 @@ def get_by_id_with_details(db: Session, doc_id: int) -> Document | None:
 _FILTER_KEYS = (
     "company", "year", "status", "total_min", "total_max", "page_min", "page_max", "batch_ids",
     "include_deleted", "has_extraction", "supplier_name_filter", "doc_id", "document_type_ids",
-    "validation_statuses", "include_hidden", "error_codes",
+    "validation_statuses", "include_hidden", "error_codes", "not_invoice", "only_deleted",
 )
+
+# Dokumententypen, die KEINE Eingangsrechnung sind. 0 = noch nicht erkannt, 1 = Eingangsrechnung, 15 = Mischbeleg (enthält eine Rechnung)
+NOT_INVOICE_EXCLUDED_TYPES = (0, 1, 15)
 
 
 def _filtered_query(db: Session, **f):
@@ -185,8 +192,13 @@ def _filtered_query(db: Session, **f):
     g = f.get
     query = db.query(Document)
 
-    if not g("include_deleted"):
+    if g("only_deleted"):
+        query = query.filter(Document.soft_deleted == True)  # noqa: E712
+    elif not g("include_deleted"):
         query = query.filter(Document.soft_deleted == False)  # noqa: E712
+    if g("not_invoice"):
+        # erkannt und keine Eingangsrechnung (noch nicht erkannte Belege, Mischbelege und Rechnungen sind nicht dabei)
+        query = query.filter(Document.status == "done", ~Document.document_type.in_(NOT_INVOICE_EXCLUDED_TYPES))
 
     if g("batch_ids"):
         query = query.filter(Document.batch_id.in_(g("batch_ids")))

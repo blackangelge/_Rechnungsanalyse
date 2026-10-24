@@ -71,6 +71,12 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
     head: "bg-fuchsia-600 text-white", border: "border-fuchsia-400",
     defaultConfig: { system_prompt_id: null, ai_config_id: null, include_images: true },
   },
+  discard: {
+    label: "Beleg verwerfen",
+    description: "Legt den Beleg in den Papierkorb (umkehrbar; endgültig löschen geht erst dort nach Prüfung). Standard: nur, wenn es keine Eingangsrechnung ist.",
+    head: "bg-red-700 text-white", border: "border-red-400",
+    defaultConfig: { only_if: "not_invoice", reason: "Keine Eingangsrechnung" },
+  },
   end: {
     label: "Ende",
     description: "Hier endet der Ablauf; das Ergebnis wird gespeichert.",
@@ -80,7 +86,7 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
 };
 
 export const NODE_ORDER: WorkflowNodeType[] = [
-  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "end",
+  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "discard", "end",
 ];
 
 export const BRANCH_FIELDS: Record<string, string> = {

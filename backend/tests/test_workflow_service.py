@@ -170,7 +170,7 @@ def _handlers(branch_to="true", fail_on=None):
 
 def test_run_graph_follows_branch_true_and_false():
     for branch_to, expected in (("true", ["start", "detect_type", "branch", "extract", "validate", "end"]),
-                                ("false", ["start", "detect_type", "branch", "end"])):
+                                ("false", ["start", "detect_type", "branch", "discard"])):
         ctx = Ctx()
         trace = asyncio.run(ws.run_graph(_tpl("standard"), _handlers(branch_to), ctx))
         assert ctx.log == expected

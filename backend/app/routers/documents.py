@@ -111,14 +111,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import crud
 from app.database import SessionLocal, get_db
 from app.schemas.document import DocumentCommentUpdate, DocumentDetail, DocumentListRead
-from app.services import ai_service, pdf_edit_service, pdf_service, plausibility_service
-from app.services.query_guard import TTLCache
+from app.services import ai_service, document_trash, pdf_edit_service, pdf_service, plausibility_service
+from app.services.query_guard import TTLCache, clear_all_caches
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +404,8 @@ def _document_filters(
     document_type_ids: Optional[list[int]] = Query(default=None),
     validation_status: Optional[list[str]] = Query(default=None),
     error_code: Optional[list[str]] = Query(default=None, description="Nachbearbeitung nötig: too_many_pages|encrypted|unreadable oder 'any'"),
+    not_invoice: bool = Query(default=False, description="Nur erkannte Nicht-Eingangsrechnungen (Lieferschein, Angebot, …)"),
+    only_deleted: bool = Query(default=False, description="Nur Belege im Papierkorb"),
 ) -> dict:
     """Gemeinsame Filter-Parameter für Liste, Anzahl und ID-Liste."""
     return dict(
@@ -411,6 +413,7 @@ def _document_filters(
         page_min=page_min, page_max=page_max, batch_ids=batch_ids, include_deleted=include_deleted, include_hidden=include_hidden,
         has_extraction=has_extraction, supplier_name_filter=supplier_name, doc_id=doc_id,
         document_type_ids=document_type_ids, validation_statuses=validation_status, error_codes=error_code,
+        not_invoice=not_invoice, only_deleted=only_deleted,
     )
 
 
@@ -448,6 +451,54 @@ def list_documents(
 def list_document_ids(filters: dict = Depends(_document_filters), db: Session = Depends(get_db)):
     """Alle Treffer-IDs zu denselben Filtern (für „Alle N Treffer auswählen" über alle Seiten)."""
     return crud.document.get_ids_filtered(db, **filters)
+
+
+class BulkIds(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=100000)
+    reason: Optional[str] = Field(default=None, max_length=300)
+
+
+class TrashResultRead(BaseModel):
+    requested: int
+    changed: int
+    skipped: int
+    files_removed: int = 0
+    errors: list[str] = []
+
+
+@router.get("/non-invoices/summary")
+def non_invoice_summary(db: Session = Depends(get_db)):
+    """Wie viele erkannte Nicht-Eingangsrechnungen es gibt (je Dokumententyp) und wie viele Belege im Papierkorb liegen."""
+    return document_trash.non_invoice_summary(db)
+
+
+@router.post("/bulk-delete", response_model=TrashResultRead)
+def bulk_delete(body: BulkIds, db: Session = Depends(get_db)):
+    """Belege sammelweise in den Papierkorb legen (umkehrbar). Belege in Verarbeitung werden übersprungen."""
+    res = document_trash.trash(db, body.ids, body.reason)
+    logger.warning("Papierkorb: %d Beleg(e) abgelegt (%d übersprungen)%s", res.changed, res.skipped, f' — {body.reason}' if body.reason else "")
+    clear_all_caches()
+    return TrashResultRead(**vars(res))
+
+
+@router.post("/bulk-restore", response_model=TrashResultRead)
+def bulk_restore(body: BulkIds, db: Session = Depends(get_db)):
+    """Belege aus dem Papierkorb zurückholen."""
+    res = document_trash.restore(db, body.ids)
+    clear_all_caches()
+    return TrashResultRead(**vars(res))
+
+
+@router.post("/purge", response_model=TrashResultRead)
+def purge_documents(body: BulkIds, db: Session = Depends(get_db)):
+    """
+    ENDGÜLTIG löschen (nicht umkehrbar): Belegdaten, Positionen, Datensätze und PDF-Dateien. Nur Belege, die bereits
+    im Papierkorb liegen — alle anderen werden übersprungen.
+    """
+    res = document_trash.purge(db, body.ids)
+    logger.warning("Papierkorb: %d Beleg(e) endgültig gelöscht (%d Datei(en)), %d übersprungen", res.changed, res.files_removed, res.skipped)
+    clear_all_caches()
+    return TrashResultRead(**vars(res))
 
 
 _filter_options_cache = TTLCache(ttl_seconds=120)

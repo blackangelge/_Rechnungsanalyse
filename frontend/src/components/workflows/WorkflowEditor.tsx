@@ -108,6 +108,8 @@ function summary(type: WorkflowNodeType, cfg: WorkflowNodeConfig, lookups: Looku
         .filter(Boolean).join(" · ") || "nur prüfen";
     case "normalize_units":
       return `Gewichte → ${cfg.target ?? "t"}${(cfg.target ?? "t") === "t" && (cfg.mode ?? "tonne_prices") === "tonne_prices" ? " (nur Preis je t)" : ""}`;
+    case "discard":
+      return `${cfg.only_if === "always" ? "immer" : "nur Nicht-Rechnungen"} → Papierkorb`;
     case "ai_refine":
       return `${promptName(cfg.system_prompt_id, "Prompt fehlt!")}${cfg.include_images === false ? " · ohne Bilder" : ""}`;
     case "branch":
@@ -149,7 +151,7 @@ function WorkflowNodeCard({ type, data, selected }: NodeProps<FlowNode>) {
           <span className="pointer-events-none absolute right-4 text-[10px] font-bold text-red-700" style={{ top: "67%" }}>Nein</span>
         </>
       ) : (
-        t !== "end" && (
+        t !== "end" && t !== "discard" && (
           <Handle type="source" position={Position.Right} className="!h-3 !w-3 !border-2 !border-white !bg-slate-500" />
         )
       )}
@@ -323,6 +325,21 @@ function Inspector({
             <option value="all">Alle Gewichtspositionen</option>
           </select>
         </Field>
+      )}
+
+      {t === "discard" && (
+        <>
+          <Field label="Wann verwerfen?" hint="„Nur wenn keine Eingangsrechnung“ ist die sichere Einstellung: eine erkannte (Teil-)Rechnung wird nie verworfen.">
+            <select className={inputCls} value={cfg.only_if ?? "not_invoice"}
+              onChange={(e) => onChange({ config: { only_if: e.target.value as "not_invoice" | "always" } })}>
+              <option value="not_invoice">Nur wenn keine Eingangsrechnung</option>
+              <option value="always">Immer</option>
+            </select>
+          </Field>
+          <Field label="Grund (steht im Papierkorb)">
+            <input className={inputCls} value={cfg.reason ?? ""} maxLength={300} onChange={(e) => onChange({ config: { reason: e.target.value } })} />
+          </Field>
+        </>
       )}
 
       {t === "ai_refine" && (

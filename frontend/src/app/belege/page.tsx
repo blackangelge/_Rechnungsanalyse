@@ -292,6 +292,9 @@ export default function BelegePage() {
   const [filterDocId, setFilterDocId] = useState("");
   const [filterValidation, setFilterValidation] = useState("");
   const [filterRework, setFilterRework] = useState(false);
+  const [filterNotInvoice, setFilterNotInvoice] = useState(false);
+  const [nonInvoices, setNonInvoices] = useState<{ total: number; trash: number } | null>(null);
+  const [trashing, setTrashing] = useState(false);
   const [activeFilters, setActiveFilters] = useState<DocumentFilter>({});
 
   // Daten
@@ -486,6 +489,7 @@ export default function BelegePage() {
     if (filterSupplierName.trim()) f.supplier_name = filterSupplierName.trim();
     if (filterDocId.trim()) f.doc_id = parseInt(filterDocId.trim(), 10);
     if (filterRework) f.error_code = ["any"];
+    if (filterNotInvoice) f.not_invoice = true;
     if (filterValidation && VALIDATION_FILTERS[filterValidation]) {
       f.validation_status = VALIDATION_FILTERS[filterValidation].statuses;
     }
@@ -518,7 +522,7 @@ export default function BelegePage() {
     setFilterYear(""); setFilterStatus("");
     setFilterTotalMin(""); setFilterTotalMax(""); setFilterPageMin(""); setFilterPageMax("");
     setSelectedBatchIds(new Set()); setSelectedDocTypeIds(new Set()); setIncludeDeleted(false); setIncludeHidden(false);
-    setFilterKi(""); setFilterSupplierName(""); setFilterDocId(""); setFilterValidation(""); setFilterRework(false);
+    setFilterKi(""); setFilterSupplierName(""); setFilterDocId(""); setFilterValidation(""); setFilterRework(false); setFilterNotInvoice(false);
     const f: DocumentFilter = {};
     syncUrl(f);
     setActiveFilters(f);
@@ -614,6 +618,31 @@ export default function BelegePage() {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  }
+
+  // ─── Papierkorb ───────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    documentsApi.nonInvoiceSummary().then((s) => setNonInvoices({ total: s.total, trash: s.trash })).catch(() => undefined);
+  }, [documents]);
+
+  /** Ausgewählte Belege in den Papierkorb legen (umkehrbar; endgültig löschen geht dort nach Prüfung) */
+  async function trashSelected() {
+    if (selectedIds.size === 0) return;
+    const reason = filterNotInvoice ? "Keine Eingangsrechnung" : "Manuell aussortiert";
+    if (!confirm(`${selectedIds.size} Beleg(e) in den Papierkorb legen?\n\nSie verschwinden aus allen Listen, lassen sich aber im Papierkorb zurückholen. Endgültig gelöscht wird erst dort.`)) return;
+    setTrashing(true);
+    setError(null);
+    try {
+      const r = await documentsApi.bulkDelete(Array.from(selectedIds), reason);
+      setSuccessMsg(`${r.changed} Beleg(e) in den Papierkorb gelegt${r.skipped ? ` (${r.skipped} übersprungen, z. B. in Verarbeitung)` : ""}. Zum Prüfen und endgültigen Löschen: Papierkorb.`);
+      setSelectedIds(new Set());
+      await loadDocuments(activeFilters);
+    } catch (err: unknown) {
+      setError(extractApiError(err, "Papierkorb: Aktion fehlgeschlagen"));
+    } finally {
+      setTrashing(false);
+    }
   }
 
   // ─── KI-Analyse ───────────────────────────────────────────────────────────
@@ -862,6 +891,10 @@ export default function BelegePage() {
               <input type="checkbox" checked={filterRework} onChange={(e) => setFilterRework(e.target.checked)} data-testid="filter-rework" />
               Nur „Nachbearbeitung nötig“
             </label>
+            <label className="flex items-end gap-1.5 pb-2 text-xs font-medium text-gray-700" title="Lieferscheine, Angebote, Mahnungen … — alles, was nicht als Eingangsrechnung erkannt wurde">
+              <input type="checkbox" checked={filterNotInvoice} onChange={(e) => setFilterNotInvoice(e.target.checked)} data-testid="filter-not-invoice" />
+              Nur Nicht-Eingangsrechnungen{nonInvoices && nonInvoices.total > 0 ? ` (${nonInvoices.total.toLocaleString("de-DE")})` : ""}
+            </label>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Plausibilität</label>
               <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
@@ -971,6 +1004,19 @@ export default function BelegePage() {
               {trimming ? "Kürze..." : "Auswahl kürzen"}
             </button>
             <span className="text-xs text-gray-400">Original bleibt als Version 1 erhalten. Automatisch vor jeder Analyse: Einstellungen → Automatisierung.</span>
+          </div>
+
+          {/* Papierkorb (für die Auswahl) */}
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-gray-200 pt-3">
+            <span className={`text-sm font-medium ${selectedIds.size > 0 ? "text-blue-800" : "text-gray-500"}`}>Aussortieren:</span>
+            <button onClick={trashSelected} disabled={trashing || selectedIds.size === 0} data-testid="trash-selection"
+              className="btn btn-danger-outline btn-sm">
+              {trashing ? "Lege ab…" : "Auswahl in den Papierkorb"}
+            </button>
+            <span className="text-xs text-gray-400">
+              Tipp: Filter „Nur Nicht-Eingangsrechnungen“ → „Alle Treffer auswählen“ → in den Papierkorb → dort prüfen und endgültig löschen.
+              {nonInvoices && nonInvoices.trash > 0 ? ` Im Papierkorb liegen ${nonInvoices.trash.toLocaleString("de-DE")} Beleg(e).` : ""}
+            </span>
           </div>
 
           {/* KI-Frage (für die Auswahl) */}

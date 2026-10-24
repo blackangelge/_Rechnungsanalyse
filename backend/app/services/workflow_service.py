@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 # ─── Knotentypen und ihre Konfiguration ───────────────────────────────────────
 
-NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "end")
+NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "discard", "end")
 # Knoten, die Extraktionsdaten bearbeiten (ohne vorherige Extraktion wirkungslos bzw. nur eingeschränkt)
 DATA_NODES = ("validate", "normalize_units")
 MAX_STEPS = 100   # Schutz gegen Endlosschleifen (Zyklen werden zusätzlich beim Speichern verboten)
@@ -70,6 +70,16 @@ class ClassifyPagesConfig(BaseModel):
     system_prompt_id: int | None = None      # optionaler Baustein: Zusatzanweisung (z. B. Besonderheiten Ihrer Lieferanten)
 
 
+class DiscardConfig(BaseModel):
+    """
+    Beleg verwerfen: legt den Beleg in den Papierkorb (umkehrbar; endgültig löschen geht erst dort).
+    Ablauf endet hier (kein Ausgang). Standard „nur wenn keine Eingangsrechnung“ — eine erkannte Eingangsrechnung wird nie verworfen.
+    """
+
+    only_if: Literal["not_invoice", "always"] = "not_invoice"
+    reason: str = Field("Keine Eingangsrechnung", max_length=300)
+
+
 class ValidateConfig(BaseModel):
     auto_correct: bool = True                # Einheitenfehler automatisch korrigieren
     ai_recheck: bool = True                  # bei Auffälligkeit zweite KI-Abfrage
@@ -111,12 +121,12 @@ CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "start": EmptyConfig, "end": EmptyConfig, "trim_pages": TrimConfig,
     "detect_type": DetectConfig, "extract": ExtractConfig, "schema_extract": SchemaExtractConfig, "classify_pages": ClassifyPagesConfig,
     "validate": ValidateConfig, "branch": BranchConfig,
-    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig,
+    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig, "discard": DiscardConfig,
 }
 
 # Ausgänge je Knotentyp
 def output_handles(node_type: str) -> tuple[str, ...]:
-    if node_type == "end":
+    if node_type in ("end", "discard"):
         return ()
     return ("true", "false") if node_type == "branch" else ("out",)
 
@@ -264,8 +274,9 @@ def validate_graph(graph: Any) -> GraphReport:
             continue
         stype = by_id[src].get("type")
         handle = edge.get("sourceHandle") or "out"
-        if stype == "end":
-            rep.errors.append("Vom Ende-Knoten darf keine Verbindung ausgehen")
+        if stype in ("end", "discard"):
+            rep.errors.append("Vom Ende-Knoten darf keine Verbindung ausgehen" if stype == "end"
+                              else f"Vom Knoten '{_label(by_id[src])}' (Beleg verwerfen) darf keine Verbindung ausgehen")
             continue
         if handle not in output_handles(stype):
             rep.errors.append(f"Verbindung von '{_label(by_id[src])}': ungültiger Ausgang '{handle}'")
@@ -491,7 +502,7 @@ def templates() -> list[dict]:
             _node("extract", "extract", "Rechnungsdaten extrahieren", 740, 60),
             _node("validate", "validate", "Plausibilität prüfen", 1000, 60),
             _node("end", "end", "Fertig", 1240, 60),
-            _node("end-other", "end", "Keine Rechnung — fertig", 740, 260),
+            _node("end-other", "discard", "Keine Eingangsrechnung — verwerfen", 740, 260),
         ],
         "edges": [
             _edge("start", "detect"), _edge("detect", "branch"),
@@ -518,7 +529,7 @@ def templates() -> list[dict]:
             _node("extract", "extract", "Rechnungsdaten extrahieren", 1000, 60),
             _node("validate", "validate", "Plausibilität prüfen", 1260, 60),
             _node("end", "end", "Fertig", 1500, 60),
-            _node("end-other", "end", "Keine Rechnung — fertig", 1000, 260),
+            _node("end-other", "discard", "Keine Eingangsrechnung — verwerfen", 1000, 260),
         ],
         "edges": [
             _edge("start", "trim"), _edge("trim", "detect"), _edge("detect", "branch"),
@@ -562,7 +573,7 @@ def templates() -> list[dict]:
                   {"field": "invoice_page_count", "op": "gt", "value": "0"}),
             _node("extract", "schema_extract", "Schema-Extraktion", 740, 60),
             _node("end", "end", "Fertig", 1000, 60),
-            _node("end-other", "end", "Keine Rechnung — fertig", 740, 260),
+            _node("end-other", "discard", "Keine Eingangsrechnung — verwerfen", 740, 260),
         ],
         "edges": [
             _edge("start", "pages"), _edge("pages", "branch"),

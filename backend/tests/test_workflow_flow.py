@@ -148,9 +148,11 @@ def test_standard_workflow_other_type_skips_extraction(env, monkeypatch):
     ai = FakeAI(monkeypatch, type_id=3)
     env.add_workflow(_tpl("standard"), default=True)
     doc = env.analyze(env.make_doc())
+    # Die Vorlage verwirft Nicht-Eingangsrechnungen: Beleg liegt im Papierkorb, Typ und Seitenzahl bleiben zur Prüfung erhalten
     assert doc.status == "done" and doc.document_type == 3 and doc.extraction is None
+    assert doc.soft_deleted is True and doc.deleted_reason == "Keine Eingangsrechnung"
     assert ai.names() == ["detect"]
-    assert [t["type"] for t in doc.workflow_run if t["type"] != "saved"] == ["start", "detect_type", "branch", "end"]
+    assert [t["type"] for t in doc.workflow_run if t["type"] != "saved"] == ["start", "detect_type", "branch", "discard"]
     assert doc.workflow_run[2]["branch"] == "false"
     assert doc.ki_input_tokens == 10
 

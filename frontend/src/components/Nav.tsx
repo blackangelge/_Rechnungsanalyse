@@ -25,6 +25,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/artikel", label: "Artikel", icon: "box" },
       { href: "/lieferanten", label: "Lieferanten", icon: "truck" },
       { href: "/imports/new", label: "Neuer Import", icon: "upload" },
+      { href: "/papierkorb", label: "Papierkorb", icon: "trash" },
     ],
   },
   {

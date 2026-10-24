@@ -76,6 +76,7 @@ class RunContext:
     system_prompt_id: int | None = None
 
     # Laufzeitzustand
+    discard_reason: str | None = None       # gesetzt vom Knoten „Beleg verwerfen“ → Beleg kommt in den Papierkorb
     invoice_page_count: int | None = None   # Ergebnis der Seitenerkennung (Seiten, die zur Rechnung gehören)
     page_summary: dict = field(default_factory=dict)
     max_pages: int | None = None            # Kapazität der gewählten KI in Seiten (None = unbeschränkt)
@@ -324,6 +325,25 @@ async def _h_end(cfg, ctx: RunContext):
     return None
 
 
+def _looks_like_invoice(ctx: RunContext) -> bool:
+    """Der Beleg ist (auch teilweise) eine Eingangsrechnung: extrahiert, Schema gefüllt, Typ Rechnung/Mischbeleg oder Rechnungsseiten erkannt."""
+    return bool(ctx.extracted or ctx.schema_done or ctx.document_type_id in (1, 15) or (ctx.invoice_page_count or 0) > 0)
+
+
+async def _h_discard(cfg, ctx: RunContext):
+    if cfg.only_if == "not_invoice":
+        if _looks_like_invoice(ctx):
+            ctx.node_io = {"notes": ["Der Beleg ist eine (teilweise) Eingangsrechnung — er wird NICHT verworfen."]}
+            return NodeResult(detail="Eingangsrechnung — nicht verworfen")
+        if not ctx.type_detected:
+            ctx.node_io = {"notes": ["Der Dokumententyp wurde in diesem Ablauf nicht erkannt — aus Sicherheit wird nichts verworfen."]}
+            return NodeResult(detail="Typ unbekannt — nicht verworfen")
+    ctx.discard_reason = cfg.reason.strip() or "Verworfen durch Workflow"
+    label = f"{ctx.document_type_name} — " if ctx.document_type_name else ""
+    ctx.node_io = {"notes": [f"Beleg kommt in den Papierkorb: {label}{ctx.discard_reason}", "Endgültig gelöscht wird erst nach Prüfung im Papierkorb."]}
+    return NodeResult(detail=f"In den Papierkorb gelegt ({ctx.discard_reason})")
+
+
 async def _h_trim(cfg, ctx: RunContext):
     desc, pages = await asyncio.to_thread(_db_trim, ctx.doc_id, cfg.max_pages)
     if desc:
@@ -435,6 +455,22 @@ def _db_save_pages(doc_id: int, pages) -> int:
         return version
     finally:
         db.close()
+
+
+def _db_discard(doc_id: int, ctx: RunContext, trace: list[dict]) -> None:
+    """Beleg in den Papierkorb legen; Seitenzahl/Typ/KI-Statistik bleiben erhalten (Status done, damit nichts „hängt“)."""
+    docs = _docs()
+    if ctx.type_detected:
+        docs._db_type_only_finish(doc_id, ctx.document_type_id, ctx.document_type_name, ctx.page_count, ctx.batch_id,
+                                  ctx.original_filename, ctx.ki_stats)
+    else:
+        _db_finish_empty(doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename)
+    db = SessionLocal()
+    try:
+        crud.document.soft_delete(db, doc_id, ctx.discard_reason)
+    finally:
+        db.close()
+    logger.info("Beleg #%d verworfen (Papierkorb): %s", doc_id, ctx.discard_reason)
 
 
 def _db_split_children(doc_id: int, groups, workflow_id: int | None, system_prompt_id: int | None) -> list[int]:
@@ -636,7 +672,7 @@ async def _h_refine(cfg, ctx: RunContext):
 
 
 HANDLERS = {
-    "start": _h_start, "end": _h_end, "trim_pages": _h_trim, "detect_type": _h_detect,
+    "start": _h_start, "end": _h_end, "discard": _h_discard, "trim_pages": _h_trim, "detect_type": _h_detect,
     "branch": _h_branch, "extract": _h_extract, "schema_extract": _h_schema_extract, "classify_pages": _h_classify_pages, "validate": _h_validate,
     "normalize_units": _h_normalize, "ai_refine": _h_refine,
 }
@@ -717,6 +753,11 @@ async def analyze_with_workflow(
     if ctx.images:
         ctx.page_count = len(ctx.images)
     ctx.images = None
+
+    if ctx.discard_reason:
+        await asyncio.to_thread(_db_discard, doc_id, ctx, trace)
+        await asyncio.to_thread(_db_save_run, doc_id, workflow, trace)
+        return "ok"
 
     if ctx.schema_done:
         await asyncio.to_thread(_db_finish_schema, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename, ctx.ki_stats,

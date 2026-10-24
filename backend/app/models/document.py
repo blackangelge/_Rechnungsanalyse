@@ -76,6 +76,8 @@ class Document(Base):
     used_workflow_graph: Mapped[str | None] = mapped_column(Text, nullable=True)
     workflow_trace: Mapped[str | None] = mapped_column(Text, nullable=True)
     soft_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    deleted_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)           # warum im Papierkorb (z. B. „Keine Eingangsrechnung“)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
