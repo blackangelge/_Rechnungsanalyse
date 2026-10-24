@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { downloadLinkHandler } from "@/lib/download";
 import MergeModal from "@/components/suppliers/MergeModal";
 import CompareModal from "@/components/suppliers/CompareModal";
 import OrphanModal from "@/components/suppliers/OrphanModal";
@@ -389,6 +390,15 @@ export default function LieferantenPage() {
           >
             Zusammenführen…
           </button>
+          <a
+            href={vendorsApi.exportUrl([...selected])}
+            download
+            onClick={downloadLinkHandler(vendorsApi.exportUrl([...selected]), "Export_Lieferanten.xlsx")}
+            data-testid="export-selected"
+            className="rounded bg-green-600 px-3 py-1 text-sm font-medium text-white hover:bg-green-700"
+          >
+            ↓ Excel exportieren
+          </a>
           {selected.size < 2 && <span className="text-xs text-blue-700">Wähle mindestens zwei aus.</span>}
           <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-blue-700 hover:underline">Auswahl aufheben</button>
         </div>
