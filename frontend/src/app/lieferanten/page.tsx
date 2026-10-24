@@ -50,7 +50,7 @@ function VendorEditModal({
       <div>
         <label className="mb-1 block text-xs font-medium text-gray-600">{label}</label>
         <input
-          className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+          className="w-full input py-1.5"
           value={(form[key] as string) ?? ""}
           onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
         />
@@ -182,7 +182,7 @@ export default function LieferantenPage() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-8">
+    <div>
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Lieferanten</h1>
@@ -192,7 +192,7 @@ export default function LieferantenPage() {
           <button
             onClick={() => setShowDupeOptions((v) => !v)}
             data-testid="dupe-options-toggle"
-            className="rounded border border-amber-400 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50"
+            className="btn btn-secondary"
           >
             ⚙ Suchoptionen
           </button>
@@ -206,7 +206,7 @@ export default function LieferantenPage() {
           <button
             onClick={handleFindDuplicates}
             disabled={dupeLoading || dupeOpts.criteria.length === 0}
-            className="rounded bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+            className="btn btn-primary"
           >
             {dupeLoading ? "Suche..." : "🔍 Dubletten suchen"}
           </button>
@@ -516,6 +516,6 @@ export default function LieferantenPage() {
           onCancel={() => setEditVendor(null)}
         />
       )}
-    </main>
+    </div>
   );
 }

@@ -198,7 +198,7 @@ export default function PdfEditModal({
                     <input value={specInput} onChange={(e) => setSpecInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && applySpec()}
                       placeholder="2-100"
-                      className="w-36 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none" />
+                      className="w-36 input py-1.5" />
                     <button onClick={applySpec} className="btn btn-secondary btn-sm">
                       Auswählen
                     </button>
@@ -208,7 +208,7 @@ export default function PdfEditModal({
                   <label className="text-xs font-medium text-gray-600">Schnell: nur die ersten N behalten</label>
                   <div className="flex gap-1">
                     <input type="number" min={1} value={keepFirst} onChange={(e) => setKeepFirst(e.target.value)}
-                      className="w-20 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none" />
+                      className="w-20 input py-1.5" />
                     <button onClick={keepFirstN} disabled={busy || pageCount < 2}
                       className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                       Kürzen
@@ -219,7 +219,7 @@ export default function PdfEditModal({
                   <label className="text-xs font-medium text-gray-600">Notiz zur Version (optional)</label>
                   <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
                     placeholder="z.B. nur Rechnungsseite"
-                    className="rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none" />
+                    className="input py-1.5" />
                 </div>
               </div>
 

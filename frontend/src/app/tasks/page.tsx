@@ -192,7 +192,7 @@ export default function TasksPage() {
   const hasNext = offset + PAGE_SIZE < total;
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
+    <div className="space-y-6">
 
       {/* Kopfzeile */}
       <div className="flex items-center justify-between flex-wrap gap-3">

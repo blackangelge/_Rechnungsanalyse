@@ -175,7 +175,7 @@ function Field({ label, children, hint }: { label: string; children: React.React
   );
 }
 
-const inputCls = "w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none";
+const inputCls = "w-full input py-1.5";
 
 function Inspector({
   node, onChange, docTypes,
@@ -557,7 +557,7 @@ function Editor({ workflow, prompts, aiConfigs, docTypes, onSaved }: WorkflowEdi
           <label className="text-xs font-medium text-gray-600">Beschreibung (optional)</label>
           <input value={description} onChange={(e) => { setDescription(e.target.value); markDirty(); }}
             placeholder="z.B. Für Lieferant XY: erst kürzen, spezieller Prompt"
-            className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none" />
+            className="w-full input py-1.5" />
         </div>
         <button onClick={save} disabled={saving || !dirty}
           className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40">

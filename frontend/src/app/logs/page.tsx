@@ -107,7 +107,7 @@ export default function LogsPage() {
   const hasQueue  = (workerStats?.queue_length ?? 0) > 0;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8 space-y-10">
+    <div className="space-y-10">
 
       {/* ── Kopfzeile ─────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">

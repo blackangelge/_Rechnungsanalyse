@@ -844,7 +844,7 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Jahr</label>
               <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28">
+                className="input py-1.5 w-28">
                 <option value="">Alle Jahre</option>
                 {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
               </select>
@@ -852,7 +852,7 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Status</label>
               <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-40">
+                className="input py-1.5 w-40">
                 <option value="">Alle Status</option>
                 <option value="pending">Ausstehend</option>
                 <option value="processing">Wird verarbeitet</option>
@@ -864,7 +864,7 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">KI</label>
               <select value={filterKi} onChange={(e) => setFilterKi(e.target.value as "" | "ja" | "nein")}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28">
+                className="input py-1.5 w-28">
                 <option value="">Alle</option>
                 <option value="ja">Ja</option>
                 <option value="nein">Nein</option>
@@ -873,7 +873,7 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Lieferant</label>
               <select value={filterSupplierName} onChange={(e) => setFilterSupplierName(e.target.value)}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-48">
+                className="input py-1.5 w-48">
                 <option value="">Alle Lieferanten</option>
                 {availableSuppliers.map((s) => (
                   <option key={s} value={s}>{s}</option>
@@ -885,7 +885,7 @@ export default function BelegePage() {
               <input type="number" value={filterDocId} onChange={(e) => setFilterDocId(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="z.B. 42" min="1"
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
+                className="input py-1.5 w-28" />
             </div>
             <label className="flex items-end gap-1.5 pb-2 text-xs font-medium text-gray-700" title="Zu große, verschlüsselte oder nicht lesbare PDFs">
               <input type="checkbox" checked={filterRework} onChange={(e) => setFilterRework(e.target.checked)} data-testid="filter-rework" />
@@ -898,7 +898,7 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Plausibilität</label>
               <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-44">
+                className="input py-1.5 w-44">
                 <option value="">Alle</option>
                 {Object.entries(VALIDATION_FILTERS).map(([key, v]) => (
                   <option key={key} value={key}>{v.label}</option>
@@ -910,28 +910,28 @@ export default function BelegePage() {
               <input type="number" value={filterTotalMin} onChange={(e) => setFilterTotalMin(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="0" min="0" step="0.01"
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
+                className="input py-1.5 w-28" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Betrag bis (€)</label>
               <input type="number" value={filterTotalMax} onChange={(e) => setFilterTotalMax(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="∞" min="0" step="0.01"
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
+                className="input py-1.5 w-28" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Seiten von</label>
               <input type="number" value={filterPageMin} onChange={(e) => setFilterPageMin(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="1" min="1"
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-24" />
+                className="input py-1.5 w-24" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Seiten bis</label>
               <input type="number" value={filterPageMax} onChange={(e) => setFilterPageMax(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="∞" min="1"
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-24" />
+                className="input py-1.5 w-24" />
             </div>
             <label className="flex cursor-pointer items-center gap-2 mt-auto pb-1.5">
               <input type="checkbox" checked={includeDeleted} onChange={(e) => setIncludeDeleted(e.target.checked)}
