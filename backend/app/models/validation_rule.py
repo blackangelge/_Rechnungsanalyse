@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +18,7 @@ class ValidationRule(Base):
     entity_name: Mapped[str] = mapped_column(String(60), nullable=False)               # Entität, an deren Datensätzen geprüft wird
     left_expr: Mapped[str] = mapped_column(Text, nullable=False)
     right_expr: Mapped[str] = mapped_column(Text, nullable=False)
+    alt_left_exprs: Mapped[list | None] = mapped_column(JSONB, nullable=True)           # weitere Varianten der linken Seite (ODER)
     comparator: Mapped[str] = mapped_column(String(2), default="=", server_default="=", nullable=False)   # = | <= | >=
     tolerance_abs: Mapped[float] = mapped_column(Float, default=0.0, server_default="0", nullable=False)
     tolerance_pct: Mapped[float] = mapped_column(Float, default=0.0, server_default="0", nullable=False)

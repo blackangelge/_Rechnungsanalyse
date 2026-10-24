@@ -171,7 +171,7 @@ def test_evaluation_never_changes_stored_quantities(world):
 
 def test_rules_api_crud_test_and_run(client, world):
     doc = world.add_doc()
-    assert client.post("/api/validation-rules/seed-defaults").json()["created"] == 4
+    assert client.post("/api/validation-rules/seed-defaults").json()["created"] == 4          # inkl. Varianten der Positionsregel
     assert client.post("/api/validation-rules/seed-defaults").json()["created"] == 0                      # nur wenn leer
     meta = client.get("/api/validation-rules/meta").json()
     pos = next(e for e in meta["entities"] if e["name"] == "position")
@@ -207,3 +207,80 @@ def test_document_list_shows_rule_status_and_filters(client, world):
     ids = client.get("/api/documents/ids", params={"validation_status": ["needs_review"]}).json()
     assert ids == [flagged.id]
     assert client.get("/api/documents/ids", params={"validation_status": ["ok"]}).json() == [good.id]
+
+
+def _default_position_rule():
+    from app.services.rule_seed import DEFAULT_RULES
+    d = DEFAULT_RULES[0]
+    return RuleSpec(None, d["name"], "position", d["left"], d["right"], tolerance_abs=d["tolerance_abs"], alternatives=d["alternatives"])
+
+
+def _qty(db, value, unit):
+    from app.services.units import UnitResolver, normalize_quantity
+    return normalize_quantity(UnitResolver(db), {"value": value, "unit": unit})[0]
+
+
+def test_default_position_rule_handles_price_per_tonne_and_per_vpe(world):
+    """25.000 kg Schrott zu 420 € je Tonne; 4.230 Schrauben, 90 je VPE, 86 € je VPE."""
+    units = re_.load_unit_table(world.db)
+    rule = _default_position_rule()
+    base = {"preis_je_menge": None, "preisnachlass_prozent": None, "preisnachlass_betrag": None}
+    schrott = {**base, "menge": _qty(world.db, 25000, "kg"), "einzelpreis": 420, "gesamtpreis": 10500}
+    r = re_.evaluate_rule(rule, re_.Node(1, "position", schrott), units)
+    assert r["status"] == "ok" and r["variant"] == 2                                  # Variante „Basiseinheit“ (Tonne)
+    wrong = {**schrott, "gesamtpreis": 25000 * 420}
+    assert re_.evaluate_rule(rule, re_.Node(1, "position", wrong), units)["status"] == "ok" \
+        and re_.evaluate_rule(rule, re_.Node(1, "position", wrong), units)["variant"] == 1      # Menge × Preis (je kg) wäre ebenfalls schlüssig
+    assert re_.evaluate_rule(rule, re_.Node(1, "position", {**schrott, "gesamtpreis": 9999}), units)["status"] == "failed"
+
+    schrauben = {**base, "menge": _qty(world.db, 4230, "Stück"), "verpackungsinhalt": _qty(world.db, 90, "Stück"),
+                 "einzelpreis": 86, "gesamtpreis": 4042}
+    r = re_.evaluate_rule(rule, re_.Node(1, "position", schrauben), units)
+    assert r["status"] == "ok" and r["variant"] == 4                                  # Menge ÷ Inhalt je VPE × Preis
+    # kein Verpackungsinhalt gelesen → 1: dann gilt Menge × Preis
+    plain = {**base, "menge": _qty(world.db, 10, "Stück"), "einzelpreis": 5, "gesamtpreis": 50}
+    r = re_.evaluate_rule(rule, re_.Node(1, "position", plain), units)
+    assert r["status"] == "ok" and r["variant"] == 1
+    bad = re_.evaluate_rule(rule, re_.Node(1, "position", {**schrauben, "gesamtpreis": 1000}), units)
+    assert bad["status"] == "failed" and "Varianten" in bad["message"]
+
+
+def test_variants_skipped_ones_do_not_block_and_all_missing_is_unchecked():
+    spec = RuleSpec(None, "v", "beleg", "a * 2", "b", alternatives=["c * 2"])
+    assert re_.evaluate_rule(spec, re_.Node(1, "beleg", {"a": 1, "b": 4, "c": 2}))["variant"] == 2     # Variante 1 falsch (2≠4), Variante 2 passt
+    assert re_.evaluate_rule(spec, re_.Node(1, "beleg", {"a": 2, "b": 4}))["status"] == "ok"           # Variante 2 nicht auswertbar → egal
+    r = re_.evaluate_rule(spec, re_.Node(1, "beleg", {"b": 4}))
+    assert r["status"] == "skipped" and set(r["missing"]) == {"a", "c"}
+
+
+def test_old_default_rule_is_upgraded_with_variants(world):
+    from app.services.rule_seed import DEFAULT_RULES, _OLD_POSITION_LEFT, seed_default_rules
+    world.db.add(ValidationRule(name=DEFAULT_RULES[0]["name"], entity_name="position", left_expr=_OLD_POSITION_LEFT, right_expr="gesamtpreis"))
+    world.db.commit()
+    assert seed_default_rules(world.db) == 1
+    rule = world.db.query(ValidationRule).one()
+    assert len(rule.alt_left_exprs) == 3 and rule.left_expr == DEFAULT_RULES[0]["left"]
+    assert seed_default_rules(world.db) == 0
+
+
+def test_workflow_node_check_rules_and_branch_on_rule_status(world):
+    """Knoten „Regeln prüfen“ setzt den Prüfregel-Status; die Weiche kann darauf verzweigen."""
+    import asyncio
+    from app.services import workflow_runner as wr, workflow_service as ws
+    seed_default_rules(world.db)
+    world.db.commit()
+    bad = deepcopy(SAMPLE)
+    bad["gesamtbetrag_brutto"] = "5.000,00"
+    doc = world.add_doc(bad)
+    from types import SimpleNamespace
+    ctx = SimpleNamespace(doc_id=doc.id, schema_done=True, rule_status=None, node_io=None, document_type_id=1, document_type_name="Eingangsrechnung",
+                          fields={}, known_supplier_name=None, page_count=1, invoice_page_count=1, validation=None)
+    res = asyncio.run(wr._h_check_rules(ws.CONFIG_MODELS["check_rules"](), ctx))
+    assert ctx.rule_status == "needs_review" and "weichen ab" in res.detail
+    cfg = ws.CONFIG_MODELS["branch"](field="rule_status", op="equals", value="needs_review")
+    assert asyncio.run(wr._h_branch(cfg, ctx)).handle == "true"
+    ok_graph = {"nodes": [{"id": "s", "type": "start", "position": {"x": 0, "y": 0}, "data": {"label": "Start", "config": {}}},
+                          {"id": "c", "type": "check_rules", "position": {"x": 0, "y": 0}, "data": {"label": "Regeln prüfen", "config": {}}},
+                          {"id": "e", "type": "end", "position": {"x": 0, "y": 0}, "data": {"label": "Ende", "config": {}}}],
+                 "edges": [{"id": "1", "source": "s", "target": "c", "sourceHandle": "out"}, {"id": "2", "source": "c", "target": "e", "sourceHandle": "out"}]}
+    assert not ws.validate_graph(ok_graph).errors

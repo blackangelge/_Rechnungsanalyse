@@ -1005,7 +1005,7 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - Tests: `tests/test_schema_definition.py`.
 
 
-### Prüfregeln (`services/rule_engine.py`, `routers/validation_rules.py`, `models/validation_rule.py`, Migration `0026_validation_rules`, Seite `/pruefregeln`)
+### Prüfregeln (`services/rule_engine.py`, `routers/validation_rules.py`, `models/validation_rule.py`, Migrationen `0026_validation_rules`/`0027_rule_variants`, Seite `/pruefregeln`)
 
 Frei definierbare Rechenregeln, mit denen die **schemagesteuert** extrahierten Datensätze gegengeprüft werden (ohne KI). Eine Regel = Entität („geprüft wird je Position/Beleg“),
 linker und rechter Rechenausdruck, Vergleich (`=`, `≤`, `≥`), Toleranz (absolut und/oder %), Schweregrad (`error` → Beleg „Prüfen!“, `warn` → Hinweis), aktiv/inaktiv.
@@ -1026,7 +1026,12 @@ Regeln hängen an **Entitäts-/Feldnamen**, nicht an einer Schema-Version (gelte
 - **Oberfläche:** Menü „Schema & Auswertung → Prüfregeln“: Regelliste (aktiv-Haken, bearbeiten, löschen, Definitionsprobleme), Dialog mit Entitätswahl, Feld-/Funktions-Buttons, die in die zuletzt angeklickte Formelseite einfügen,
   Toleranz/Schweregrad und „Ausprobieren an einem Beleg“; Kasten „Beleg prüfen“. **Belegliste:** Spalte „Prüfung“ zeigt bei Belegen ohne alte Plausibilitätsprüfung das Regel-Ergebnis (`RuleBadge` in `components/belege/RuleChecks.tsx`: Regeln OK · Hinweis · Prüfen! (n), Klick öffnet die Einzelergebnisse = frische Auswertung über `GET /document/{id}`);
   `DocumentListRead` trägt `rule_status/rule_failed/rule_skipped` (eine feste Zusatzabfrage je Seite, nur `data._validation` des Wurzel-Datensatzes — `crud.document._attach_rule_status`). Der Filter `validation_status` (Plausibilität) trifft **auch** den Regel-Status (`ok|warn|needs_review`, ODER-Verknüpfung mit `invoice_extractions.validation_status`; Voreinstellung „Mit Hinweis (Prüfregeln)“).
-  Noch nicht umgesetzt: Anzeige in der Infos-Ansicht der Belege und ein Workflow-Knoten.
+- **Varianten** (`validation_rules.alt_left_exprs`, `RuleSpec.alternatives`): eine Regel hat eine rechte Seite und mehrere Varianten der linken; sie gilt als **erfüllt, sobald eine passt** (`result.variant` = 1-basierte Nummer; bei Misserfolg zeigt die Meldung die nächstliegende Variante). Nicht auswertbare Varianten (fehlende Werte) zählen nicht gegen die Regel;
+  sind alle nicht auswertbar → „nicht prüfbar“. Zweck: der Einzelpreis kann sich auf Einheit wie gedruckt, Tonne/Basiseinheit, kg oder Verpackung (VPE) beziehen. **Standardregel „Positionspreis“** (`rule_seed`): `menge * einzelpreis`, `menge.basis * einzelpreis`, `menge.kg * einzelpreis`,
+  `menge / COALESCE(verpackungsinhalt; 1) * einzelpreis` (jeweils mit „Preis je N“ und Nachlass); **ohne Verpackungsinhalt zählt 1**. Die erste Fassung der Standardregel (ohne Varianten) wird beim Start automatisch ergänzt, sofern unverändert (`_upgrade_old_position_rule`).
+  Nachteil der Varianten: ein falsch gelesener Positionspreis, der zufällig zu einer anderen Variante passt (z. B. 25.000 kg × 420 € statt je Tonne), wird akzeptiert — sauberer wäre ein Schemafeld „Preiseinheit“.
+- **Workflow-Knoten „Regeln prüfen“** (`check_rules`, ohne Konfiguration): wendet die Regeln auf die Schema-Datensätze an und setzt `ctx.rule_status`; die Weiche kennt dafür das Feld `rule_status` (`ok|warn|needs_review|unchecked`). Nur nach einer Schema-Extraktion sinnvoll (sonst „übersprungen“); die Regeln laufen ohnehin automatisch am Ende jeder Schema-Extraktion, der Knoten dient der Verzweigung/erneuten Prüfung (z. B. nach `ai_refine`).
+- **Infos-Ansicht** der Belege: `RuleChecksPanel` (Gesamtergebnis, Auffälliges, „Alle Ergebnisse“) über dem alten Prüfpanel; erscheint nur bei Belegen mit Regel-Ergebnissen.
 - Tests: `tests/test_rule_engine.py`.
 
 ### Seitenanzahl im Hintergrund, Nachbearbeitung, Seitenklassifizierung (Migration `0022_pdf_state_pages`)

@@ -82,6 +82,7 @@ class RunContext:
     max_pages: int | None = None            # Kapazität der gewählten KI in Seiten (None = unbeschränkt)
     schema_done: bool = False             # Schema-Extraktion hat Datensätze gespeichert
     schema_summary: dict = field(default_factory=dict)
+    rule_status: str | None = None        # Ergebnis der Prüfregeln (Knoten „Regeln prüfen“): ok|warn|needs_review|unchecked
     images: list | None = None
     page_count: int = 0
     type_detected: bool = False
@@ -396,12 +397,14 @@ async def _h_branch(cfg, ctx: RunContext):
         "page_count": ctx.page_count or None,
         "invoice_page_count": ctx.invoice_page_count,
         "validation_status": (ctx.validation or {}).get("status"),
+        "rule_status": ctx.rule_status,
     }
     ctx.node_io = {"notes": [f"{k} = {v!r}" for k, v in facts.items()]}
     result = workflow_service.evaluate_condition(cfg, facts)
     shown = facts.get(
         {"document_type": "document_type_name", "supplier_name": "supplier_name",
-         "page_count": "page_count", "invoice_page_count": "invoice_page_count", "validation_status": "validation_status"}[cfg.field]
+         "page_count": "page_count", "invoice_page_count": "invoice_page_count", "validation_status": "validation_status",
+         "rule_status": "rule_status"}[cfg.field]
     )
     return NodeResult("true" if result else "false", f"{cfg.field} = {shown!r} → {'Ja' if result else 'Nein'}")
 
@@ -612,6 +615,30 @@ async def _h_schema_extract(cfg, ctx: RunContext):
     return NodeResult(detail=f"{saved.record_count} Datensatz/-sätze, {saved.issue_count} Hinweis(e), Schema v{prepared.version_number}")
 
 
+def _db_check_rules(doc_id: int) -> dict:
+    from app.services import rule_engine
+    db = SessionLocal()
+    try:
+        result = rule_engine.evaluate_document(db, doc_id)
+        db.commit()
+        return result
+    finally:
+        db.close()
+
+
+async def _h_check_rules(cfg, ctx: RunContext):
+    if not ctx.schema_done:
+        ctx.node_io = {"notes": ["Es gibt keine Schema-Datensätze — die Prüfregeln gelten für die Schema-Extraktion."]}
+        return NodeResult(detail="übersprungen — keine Schema-Extraktion")
+    result = await asyncio.to_thread(_db_check_rules, ctx.doc_id)
+    summary = result["summary"]
+    ctx.rule_status = summary["status"]
+    bad = [r for r in result["results"] if r["status"] != "ok"]
+    ctx.node_io = {"notes": [f"{r['name']} ({r['entity']} {r['position_index'] + 1}): {r.get('message', '')}" for r in bad[:15]]
+                   or ["Alle Prüfregeln stimmen."]}
+    return NodeResult(detail=f"{summary['status']}: {summary['ok']} stimmen, {summary['failed']} weichen ab, {summary['skipped']} nicht prüfbar")
+
+
 async def _h_validate(cfg, ctx: RunContext):
     if not ctx.extracted:
         return NodeResult(detail="übersprungen — keine Extraktion vorhanden")
@@ -674,7 +701,7 @@ async def _h_refine(cfg, ctx: RunContext):
 HANDLERS = {
     "start": _h_start, "end": _h_end, "discard": _h_discard, "trim_pages": _h_trim, "detect_type": _h_detect,
     "branch": _h_branch, "extract": _h_extract, "schema_extract": _h_schema_extract, "classify_pages": _h_classify_pages, "validate": _h_validate,
-    "normalize_units": _h_normalize, "ai_refine": _h_refine,
+    "normalize_units": _h_normalize, "ai_refine": _h_refine, "check_rules": _h_check_rules,
 }
 
 

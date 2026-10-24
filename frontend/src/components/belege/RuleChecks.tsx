@@ -32,6 +32,7 @@ export function ResultTable({ results }: { results: RuleResult[] }) {
               <td>
                 <Badge tone={RESULT_BADGE[r.status].tone}>{RESULT_BADGE[r.status].label}</Badge>
                 {r.message && r.status !== "ok" && <div className="hint mt-1">{r.message}</div>}
+                {r.status === "ok" && r.variant && r.variant > 1 && <div className="hint mt-1">über Variante {r.variant}</div>}
               </td>
             </tr>
           ))}
@@ -76,5 +77,39 @@ export function RuleChecksModal({ docId, onClose }: { docId: number; onClose: ()
       {!data && !error && <Spinner />}
       {data && <ResultTable results={data.results} />}
     </Modal>
+  );
+}
+
+/** Infos-Ansicht eines Belegs: Gesamtergebnis der Prüfregeln + Einzelergebnisse (nur bei Belegen mit Regel-Ergebnissen). */
+export function RuleChecksPanel({ docId }: { docId: number }) {
+  const [data, setData] = useState<{ summary: RuleCheckSummary; results: RuleResult[] } | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setData(null);
+    validationRulesApi.document(docId).then((r) => { if (alive) setData(r); }).catch(() => { if (alive) setData(null); });
+    return () => { alive = false; };
+  }, [docId]);
+  if (!data || !data.results.length) return null;
+  const s = RULE_STATUS[data.summary.status] ?? RULE_STATUS.unchecked;
+  const bad = data.results.filter((r) => r.status !== "ok");
+  const box = data.summary.status === "needs_review" ? "border-red-200 bg-red-50"
+    : data.summary.status === "warn" ? "border-amber-200 bg-amber-50"
+    : data.summary.status === "ok" ? "border-green-200 bg-green-50" : "border-gray-200 bg-gray-50";
+  return (
+    <div className={`mb-6 rounded-lg border p-4 ${box}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-700">Prüfregeln</h3>
+        <Badge tone={s.tone}>{s.label}</Badge>
+        <span className="text-xs text-gray-500">
+          {data.summary.ok} stimmen · {data.summary.failed} weichen ab · {data.summary.skipped} nicht prüfbar
+        </span>
+        <button type="button" className="btn btn-ghost ml-auto !py-0.5 text-xs" onClick={() => setOpen((o) => !o)}>
+          {open ? "Nur Auffälliges" : "Alle Ergebnisse"}
+        </button>
+      </div>
+      <div className="mt-3"><ResultTable results={open ? data.results : bad} /></div>
+      {!open && !bad.length && <p className="hint">Alle Regeln stimmen.</p>}
+    </div>
   );
 }

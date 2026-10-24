@@ -33,6 +33,7 @@ class RuleIn(BaseModel):
     description: str | None = None
     entity_name: str
     left_expr: str
+    alt_left_exprs: list[str] = Field(default_factory=list)
     right_expr: str
     comparator: str = "="
     tolerance_abs: float = 0.0
@@ -47,12 +48,13 @@ def _unit_keys(db: Session) -> set[str]:
 
 def _spec(body: RuleIn, rule_id: int | None = None) -> RuleSpec:
     return RuleSpec(rule_id, body.name, body.entity_name, body.left_expr, body.right_expr, body.comparator,
-                    body.tolerance_abs, body.tolerance_pct, body.severity)
+                    body.tolerance_abs, body.tolerance_pct, body.severity,
+                    [a for a in body.alt_left_exprs if a.strip()])
 
 
 def _read(r: ValidationRule, problems: list[str] | None = None) -> dict:
     return {"id": r.id, "name": r.name, "description": r.description, "entity_name": r.entity_name, "left_expr": r.left_expr,
-            "right_expr": r.right_expr, "comparator": r.comparator, "tolerance_abs": r.tolerance_abs, "tolerance_pct": r.tolerance_pct,
+            "right_expr": r.right_expr, "alt_left_exprs": list(r.alt_left_exprs or []), "comparator": r.comparator, "tolerance_abs": r.tolerance_abs, "tolerance_pct": r.tolerance_pct,
             "severity": r.severity, "enabled": r.enabled, "position": r.position, "problems": problems or []}
 
 
@@ -62,7 +64,8 @@ def list_rules(db: Session = Depends(get_db)):
     keys = _unit_keys(db)
     out = []
     for r in db.query(ValidationRule).order_by(ValidationRule.position, ValidationRule.id):
-        spec = RuleSpec(r.id, r.name, r.entity_name, r.left_expr, r.right_expr, r.comparator, r.tolerance_abs, r.tolerance_pct, r.severity)
+        spec = RuleSpec(r.id, r.name, r.entity_name, r.left_expr, r.right_expr, r.comparator, r.tolerance_abs, r.tolerance_pct, r.severity,
+                        list(r.alt_left_exprs or []))
         out.append(_read(r, rule_engine.check_rule_spec(spec, version)))
     return out
 
@@ -99,7 +102,9 @@ def _validated(db: Session, body: RuleIn, rule_id: int | None = None) -> None:
 def create_rule(body: RuleIn, db: Session = Depends(get_db)):
     _validated(db, body)
     pos = (db.query(ValidationRule).count())
-    r = ValidationRule(**body.model_dump(), position=pos)
+    data = body.model_dump()
+    data["alt_left_exprs"] = [a.strip() for a in body.alt_left_exprs if a.strip()]
+    r = ValidationRule(**data, position=pos)
     db.add(r)
     db.commit()
     return _read(r)
@@ -112,7 +117,7 @@ def update_rule(rule_id: int, body: RuleIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Regel nicht gefunden")
     _validated(db, body, rule_id)
     for k, v in body.model_dump().items():
-        setattr(r, k, v)
+        setattr(r, k, [a.strip() for a in v if a.strip()] if k == "alt_left_exprs" else v)
     db.commit()
     return _read(r)
 

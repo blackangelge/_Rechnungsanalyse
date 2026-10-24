@@ -8,7 +8,7 @@ import {
 } from "@/lib/api";
 
 const EMPTY: ValidationRuleInput = {
-  name: "", description: "", entity_name: "", left_expr: "", right_expr: "", comparator: "=",
+  name: "", description: "", entity_name: "", left_expr: "", alt_left_exprs: [], right_expr: "", comparator: "=",
   tolerance_abs: 0.02, tolerance_pct: 0, severity: "error", enabled: true,
 };
 
@@ -16,24 +16,27 @@ function RuleModal({ rule, meta, onClose, onSaved }: {
   rule: ValidationRule | null; meta: RuleMeta; onClose: () => void; onSaved: () => void;
 }) {
   const [form, setForm] = useState<ValidationRuleInput>(rule ? { ...rule } : { ...EMPTY, entity_name: meta.entities.find((e) => e.has_parent)?.name ?? meta.entities[0]?.name ?? "" });
-  const [target, setTarget] = useState<"left_expr" | "right_expr">("left_expr");
+  const [target, setTarget] = useState<"left_expr" | "right_expr" | number>("left_expr");      // Zahl = Variante (0-basiert)
   const [docId, setDocId] = useState("");
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<RuleResult[] | null>(null);
   const refs = { left_expr: useRef<HTMLInputElement>(null), right_expr: useRef<HTMLInputElement>(null) };
+  const altRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const entity = meta.entities.find((e) => e.name === form.entity_name);
   const parent = meta.entities.find((e) => e.children.includes(form.entity_name));
   const set = <K extends keyof ValidationRuleInput>(k: K, v: ValidationRuleInput[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   function insert(text: string) {
-    const el = refs[target].current;
-    const cur = form[target];
+    const el = typeof target === "number" ? altRefs.current[target] : refs[target].current;
+    const cur = typeof target === "number" ? form.alt_left_exprs[target] ?? "" : form[target];
     const start = el?.selectionStart ?? cur.length;
     const end = el?.selectionEnd ?? cur.length;
-    set(target, cur.slice(0, start) + text + cur.slice(end));
+    const next = cur.slice(0, start) + text + cur.slice(end);
+    if (typeof target === "number") set("alt_left_exprs", form.alt_left_exprs.map((a, i) => (i === target ? next : a)));
+    else set(target, next);
     requestAnimationFrame(() => { el?.focus(); const pos = start + text.length; el?.setSelectionRange(pos, pos); });
   }
 
@@ -90,6 +93,22 @@ function RuleModal({ rule, meta, onClose, onSaved }: {
               {meta.comparators.map((c) => <option key={c} value={c}>{c === "<=" ? "≤" : c === ">=" ? "≥" : "="}</option>)}
             </select>
             {exprInput("right_expr", "Rechte Seite")}
+          </div>
+
+          <div>
+            <p className="label">Varianten der linken Seite (optional — die Regel gilt als erfüllt, sobald eine Variante passt)</p>
+            {form.alt_left_exprs.map((a, i) => (
+              <div key={i} className="mb-1.5 flex gap-2">
+                <span className="w-20 shrink-0 pt-2 text-xs text-gray-500">Variante {i + 2}</span>
+                <input ref={(el) => { altRefs.current[i] = el; }} className="input font-mono" value={a} spellCheck={false}
+                  onFocus={() => setTarget(i)} onChange={(e) => set("alt_left_exprs", form.alt_left_exprs.map((x, j) => (j === i ? e.target.value : x)))} />
+                <button type="button" className="btn btn-ghost" aria-label="Variante entfernen" onClick={() => set("alt_left_exprs", form.alt_left_exprs.filter((_, j) => j !== i))}><Icon name="trash" /></button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-secondary !py-0.5 !px-2 text-xs" onClick={() => set("alt_left_exprs", [...form.alt_left_exprs, ""])}>
+              <Icon name="plus" /> Variante hinzufügen
+            </button>
+            <p className="hint mt-1">Beispiel: Einzelpreis je Einheit wie gedruckt, je Tonne (<code>menge.t</code>) oder je Verpackung (<code>menge / COALESCE(verpackungsinhalt; 1)</code>).</p>
           </div>
 
           <div>
@@ -233,7 +252,7 @@ export default function RulesPage() {
                       {r.problems.map((p) => <div key={p} className="text-xs text-red-600">⚠ {p}</div>)}
                     </td>
                     <td>{entityLabel[r.entity_name] ?? r.entity_name}</td>
-                    <td className="font-mono text-xs"><div>{r.left_expr}</div><div className="text-gray-500">{r.comparator === "<=" ? "≤" : r.comparator === ">=" ? "≥" : "="} {r.right_expr}</div></td>
+                    <td className="font-mono text-xs"><div>{r.left_expr}</div>{r.alt_left_exprs.map((a, i) => <div key={i} className="text-gray-600">oder {a}</div>)}<div className="text-gray-500">{r.comparator === "<=" ? "≤" : r.comparator === ">=" ? "≥" : "="} {r.right_expr}</div></td>
                     <td className="whitespace-nowrap">{r.tolerance_abs ? `${r.tolerance_abs} abs.` : ""}{r.tolerance_abs && r.tolerance_pct ? " / " : ""}{r.tolerance_pct ? `${r.tolerance_pct} %` : ""}{!r.tolerance_abs && !r.tolerance_pct ? "exakt" : ""}</td>
                     <td><Badge tone={r.severity === "error" ? "red" : "amber"}>{r.severity === "error" ? "Prüfen!" : "Hinweis"}</Badge></td>
                     <td className="whitespace-nowrap text-right">

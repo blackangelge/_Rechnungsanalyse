@@ -26,9 +26,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 # ─── Knotentypen und ihre Konfiguration ───────────────────────────────────────
 
-NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "discard", "end")
+NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "check_rules", "discard", "end")
 # Knoten, die Extraktionsdaten bearbeiten (ohne vorherige Extraktion wirkungslos bzw. nur eingeschränkt)
-DATA_NODES = ("validate", "normalize_units")
+DATA_NODES = ("validate", "normalize_units", "check_rules")
 MAX_STEPS = 100   # Schutz gegen Endlosschleifen (Zyklen werden zusätzlich beim Speichern verboten)
 
 
@@ -85,6 +85,10 @@ class ValidateConfig(BaseModel):
     ai_recheck: bool = True                  # bei Auffälligkeit zweite KI-Abfrage
 
 
+class CheckRulesConfig(BaseModel):
+    """Prüfregeln (Menü „Prüfregeln“) auf die Schema-Datensätze anwenden; das Ergebnis steht danach im Weichenfeld „Prüfregel-Status“."""
+
+
 class NormalizeConfig(BaseModel):
     target: Literal["t", "kg"] = "t"         # Zieleinheit für Gewichte (Menge, Einheit und Einzelpreis werden umgerechnet)
     # nur für Ziel t: "tonne_prices" = nur Positionen mit Preis je Tonne, "all" = alle Gewichtspositionen
@@ -98,7 +102,7 @@ class RefineConfig(BaseModel):
     format_prompt_id: int | None = None      # Prompt vom Typ „Antwortformat“ (None = Standardformat)
 
 
-BranchField = Literal["document_type", "supplier_name", "page_count", "invoice_page_count", "validation_status"]
+BranchField = Literal["document_type", "supplier_name", "page_count", "invoice_page_count", "validation_status", "rule_status"]
 BranchOp = Literal["equals", "not_equals", "contains", "gt", "lt", "in"]
 
 # Welche Operatoren je Feld sinnvoll sind
@@ -108,6 +112,7 @@ ALLOWED_OPS: dict[str, tuple[str, ...]] = {
     "page_count": ("equals", "not_equals", "gt", "lt", "in"),
     "invoice_page_count": ("equals", "not_equals", "gt", "lt", "in"),
     "validation_status": ("equals", "not_equals", "in"),
+    "rule_status": ("equals", "not_equals", "in"),
 }
 
 
@@ -121,7 +126,7 @@ CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "start": EmptyConfig, "end": EmptyConfig, "trim_pages": TrimConfig,
     "detect_type": DetectConfig, "extract": ExtractConfig, "schema_extract": SchemaExtractConfig, "classify_pages": ClassifyPagesConfig,
     "validate": ValidateConfig, "branch": BranchConfig,
-    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig, "discard": DiscardConfig,
+    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig, "check_rules": CheckRulesConfig, "discard": DiscardConfig,
 }
 
 # Ausgänge je Knotentyp
@@ -145,7 +150,7 @@ def evaluate_condition(cfg: BranchConfig, facts: dict[str, Any]) -> bool:
     """
     Wertet eine Verzweigungs-Bedingung aus.
 
-    facts: document_type_id, document_type_name, supplier_name, page_count, validation_status.
+    facts: document_type_id, document_type_name, supplier_name, page_count, validation_status, rule_status.
     Fehlt der Wert (None): equals/contains/gt/lt/in → False, not_equals → True.
     """
     op, value = cfg.op, cfg.value
@@ -169,7 +174,7 @@ def evaluate_condition(cfg: BranchConfig, facts: dict[str, Any]) -> bool:
         except ValueError:
             return False
 
-    fact = facts.get("supplier_name" if cfg.field == "supplier_name" else "validation_status")
+    fact = facts.get({"supplier_name": "supplier_name", "rule_status": "rule_status"}.get(cfg.field, "validation_status"))
     return _text_op(op, [_norm(fact)] if fact is not None and str(fact).strip() else [], value)
 
 

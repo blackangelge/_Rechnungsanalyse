@@ -22,7 +22,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { RuleBadge } from "@/components/belege/RuleChecks";
+import { RuleBadge, RuleChecksPanel } from "@/components/belege/RuleChecks";
 import { createPortal } from "react-dom";
 import Pager from "@/components/common/Pager";
 import { Alert, PageHeader } from "@/components/ui";
@@ -1619,6 +1619,7 @@ function InfosView({
           aktuell: Version {doc.pdf_version}). Bitte neu analysieren, damit die Daten zur aktuellen PDF passen.
         </div>
       )}
+      <RuleChecksPanel docId={doc.id} />
       <ValidationPanel doc={doc} onChange={onDocChange} />
       <AnalysisHistoryPanel doc={doc} onChange={onDocChange} />
 

@@ -71,6 +71,12 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
     head: "bg-fuchsia-600 text-white", border: "border-fuchsia-400",
     defaultConfig: { system_prompt_id: null, ai_config_id: null, include_images: true },
   },
+  check_rules: {
+    label: "Regeln prüfen",
+    description: "Wendet die Prüfregeln (Menü „Prüfregeln“) auf die Schema-Datensätze an. Danach lässt sich über das Weichenfeld „Prüfregel-Status“ verzweigen.",
+    head: "bg-orange-600 text-white", border: "border-orange-400",
+    defaultConfig: {},
+  },
   discard: {
     label: "Beleg verwerfen",
     description: "Legt den Beleg in den Papierkorb (umkehrbar; endgültig löschen geht erst dort nach Prüfung). Standard: nur, wenn es keine Eingangsrechnung ist.",
@@ -86,7 +92,7 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
 };
 
 export const NODE_ORDER: WorkflowNodeType[] = [
-  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "discard", "end",
+  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "check_rules", "discard", "end",
 ];
 
 export const BRANCH_FIELDS: Record<string, string> = {
@@ -95,6 +101,7 @@ export const BRANCH_FIELDS: Record<string, string> = {
   page_count: "Seitenzahl",
   invoice_page_count: "Rechnungsseiten (nach Seitenerkennung)",
   validation_status: "Prüfstatus",
+  rule_status: "Prüfregel-Status (Knoten „Regeln prüfen“)",
 };
 
 export const BRANCH_OPS: Record<string, string> = {
@@ -113,6 +120,7 @@ export const ALLOWED_OPS: Record<string, string[]> = {
   page_count: ["equals", "not_equals", "gt", "lt", "in"],
   invoice_page_count: ["equals", "not_equals", "gt", "lt", "in"],
   validation_status: ["equals", "not_equals", "in"],
+  rule_status: ["equals", "not_equals", "in"],
 };
 
 export const VALUE_HINTS: Record<string, string> = {
@@ -121,4 +129,5 @@ export const VALUE_HINTS: Record<string, string> = {
   page_count: "Zahl, z.B. 3",
   invoice_page_count: "Zahl, z.B. 0 (keine Rechnungsseite gefunden)",
   validation_status: "ok, corrected, ai_corrected, needs_review, manual_ok",
+  rule_status: "ok, warn, needs_review, unchecked",
 };

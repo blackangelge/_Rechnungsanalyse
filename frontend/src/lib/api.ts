@@ -851,7 +851,7 @@ export const logsApi = {
 // ─── Typen: Workflows ─────────────────────────────────────────────────────────
 
 export type WorkflowNodeType =
-  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "discard" | "end";
+  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "check_rules" | "discard" | "end";
 
 export interface WorkflowNodeConfig {
   // trim_pages
@@ -879,7 +879,7 @@ export interface WorkflowNodeConfig {
   auto_correct?: boolean;
   ai_recheck?: boolean;
   // branch
-  field?: "document_type" | "supplier_name" | "page_count" | "invoice_page_count" | "validation_status";
+  field?: "document_type" | "supplier_name" | "page_count" | "invoice_page_count" | "validation_status" | "rule_status";
   op?: "equals" | "not_equals" | "contains" | "gt" | "lt" | "in";
   value?: string;
 }
@@ -1925,7 +1925,7 @@ export const exportTemplatesApi = {
 
 // ─── Prüfregeln ───────────────────────────────────────────────────────────────
 export interface ValidationRule {
-  id: number; name: string; description: string | null; entity_name: string; left_expr: string; right_expr: string;
+  id: number; name: string; description: string | null; entity_name: string; left_expr: string; alt_left_exprs: string[]; right_expr: string;
   comparator: string; tolerance_abs: number; tolerance_pct: number; severity: "warn" | "error"; enabled: boolean; problems: string[];
 }
 export type ValidationRuleInput = Omit<ValidationRule, "id" | "problems">;
@@ -1936,7 +1936,7 @@ export interface RuleMeta {
 }
 export interface RuleResult {
   rule_id: number | null; name: string; severity: string; entity: string; record_id: number; position_index: number; formula: string;
-  status: "ok" | "failed" | "skipped"; left?: number; right?: number; diff?: number; tolerance?: number; message?: string;
+  status: "ok" | "failed" | "skipped"; variant?: number; left?: number; right?: number; diff?: number; tolerance?: number; message?: string;
 }
 export interface RuleCheckSummary { status: "ok" | "warn" | "needs_review" | "unchecked"; ok: number; failed: number; skipped: number }
 

@@ -410,6 +410,7 @@ class RuleSpec:
     tolerance_abs: float = 0.0
     tolerance_pct: float = 0.0
     severity: str = "error"
+    alternatives: list[str] = field(default_factory=list)      # weitere Varianten der linken Seite: die Regel gilt als erfüllt, sobald eine passt
 
 
 def check_rule_spec(spec: RuleSpec, version: SchemaVersion | None, unit_keys: set[str] | None = None) -> list[str]:
@@ -422,7 +423,7 @@ def check_rule_spec(spec: RuleSpec, version: SchemaVersion | None, unit_keys: se
     if spec.tolerance_abs < 0 or spec.tolerance_pct < 0:
         problems.append("Toleranz darf nicht negativ sein")
     trees = {}
-    for label, text in (("links", spec.left), ("rechts", spec.right)):
+    for label, text in (("links", spec.left), ("rechts", spec.right), *((f"Variante {i}", t) for i, t in enumerate(spec.alternatives, 2))):
         try:
             trees[label] = parse(text)
         except RuleError as exc:
@@ -486,26 +487,50 @@ def evaluate_rule(spec: RuleSpec, node: Node, units: UnitTable | None = None) ->
         "record_id": node.record_id, "position_index": node.position_index,
         "formula": f"{spec.left} {spec.comparator} {spec.right}",
     }
+    variants = [spec.left, *spec.alternatives]
     try:
-        tree_l, tree_r = parse(spec.left), parse(spec.right)
-        ev = Evaluator(node, units)
-        left, right = ev.eval(tree_l), ev.eval(tree_r)
+        right = Evaluator(node, units).eval(parse(spec.right))
     except MissingValue as exc:
         names = list(dict.fromkeys(exc.names))
         return {**out, "status": "skipped", "message": "nicht prüfbar — Wert fehlt: " + ", ".join(names), "missing": names}
     except (EvalError, RuleError, DivisionByZero, InvalidOperation) as exc:
         return {**out, "status": "skipped", "message": f"nicht prüfbar — {exc}"}
     tol = _tolerance(spec, right)
+    best: tuple[Decimal, Decimal, int] | None = None          # (|Abweichung|, links, Variante) — die am nächsten liegende
+    first_skip: str | None = None
+    missing: list[str] = []
+    for idx, text in enumerate(variants):
+        try:
+            left = Evaluator(node, units).eval(parse(text))
+        except MissingValue as exc:
+            missing += exc.names
+            first_skip = first_skip or "Wert fehlt: " + ", ".join(dict.fromkeys(exc.names))
+            continue
+        except (EvalError, RuleError, DivisionByZero, InvalidOperation) as exc:
+            first_skip = first_skip or str(exc)
+            continue
+        diff = left - right
+        ok = abs(diff) <= tol if spec.comparator == "=" else diff <= tol if spec.comparator == "<=" else diff >= -tol
+        if ok:
+            out.update(status="ok", left=_fmt(left), right=_fmt(right), diff=_fmt(diff), tolerance=_fmt(tol))
+            if len(variants) > 1:
+                out["variant"] = idx + 1
+                out["formula"] = f"{text} {spec.comparator} {spec.right}"
+            return out
+        if best is None or abs(diff) < best[0]:
+            best = (abs(diff), left, idx)
+    if best is None:
+        res = {**out, "status": "skipped", "message": "nicht prüfbar — " + (first_skip or "keine Variante auswertbar")}
+        if missing:
+            res["missing"] = list(dict.fromkeys(missing))
+        return res
+    _, left, idx = best
     diff = left - right
-    if spec.comparator == "=":
-        ok = abs(diff) <= tol
-    elif spec.comparator == "<=":
-        ok = diff <= tol
-    else:
-        ok = diff >= -tol
-    out.update(status="ok" if ok else "failed", left=_fmt(left), right=_fmt(right), diff=_fmt(diff), tolerance=_fmt(tol))
-    if not ok:
-        out["message"] = f"links {_fmt(left)} {spec.comparator} rechts {_fmt(right)} — Abweichung {_fmt(diff)} (Toleranz {_fmt(tol)})"
+    out.update(status="failed", left=_fmt(left), right=_fmt(right), diff=_fmt(diff), tolerance=_fmt(tol))
+    out["message"] = f"links {_fmt(left)} {spec.comparator} rechts {_fmt(right)} — Abweichung {_fmt(diff)} (Toleranz {_fmt(tol)})"
+    if len(variants) > 1:
+        out["variant"] = idx + 1
+        out["message"] += f"; keine der {len(variants)} Varianten passt (nächste: Variante {idx + 1})"
     return out
 
 
@@ -547,7 +572,8 @@ def load_specs(db: Session, only_enabled: bool = True) -> list[RuleSpec]:
     q = db.query(ValidationRule).order_by(ValidationRule.position, ValidationRule.id)
     if only_enabled:
         q = q.filter(ValidationRule.enabled.is_(True))
-    return [RuleSpec(r.id, r.name, r.entity_name, r.left_expr, r.right_expr, r.comparator, r.tolerance_abs, r.tolerance_pct, r.severity)
+    return [RuleSpec(r.id, r.name, r.entity_name, r.left_expr, r.right_expr, r.comparator, r.tolerance_abs, r.tolerance_pct, r.severity,
+                     list(r.alt_left_exprs or []))
             for r in q.all()]
 
 

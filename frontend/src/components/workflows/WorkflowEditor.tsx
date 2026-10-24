@@ -108,6 +108,8 @@ function summary(type: WorkflowNodeType, cfg: WorkflowNodeConfig, lookups: Looku
         .filter(Boolean).join(" · ") || "nur prüfen";
     case "normalize_units":
       return `Gewichte → ${cfg.target ?? "t"}${(cfg.target ?? "t") === "t" && (cfg.mode ?? "tonne_prices") === "tonne_prices" ? " (nur Preis je t)" : ""}`;
+    case "check_rules":
+      return "Prüfregeln anwenden";
     case "discard":
       return `${cfg.only_if === "always" ? "immer" : "nur Nicht-Rechnungen"} → Papierkorb`;
     case "ai_refine":
