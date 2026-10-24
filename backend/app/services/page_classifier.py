@@ -227,3 +227,57 @@ def describe(pages: list[PageVerdict]) -> list[str]:
         lines.append(f"Seite {ranges_text(list(range(pages[i].seite, pages[j].seite + 1)))}: {pages[i].typ}" + (f" (Rechnungsnr. {nr})" if nr else ""))
         i = j + 1
     return lines
+
+
+# ─── Sicherheitsnetz und Aufteilen mehrerer Rechnungen ────────────────────────
+
+@dataclass
+class InvoiceGroup:
+    pages: list[int]                 # Rechnungsseiten dieser Rechnung (aufsteigend, 1-basiert)
+    number: str | None
+    sender: str | None
+
+
+def uncertainty(pages: list[PageVerdict], warnings: list[str], summary: Summary) -> list[str]:
+    """
+    Gründe, warum die Seitenerkennung zu unsicher ist, um die PDF automatisch zu beschneiden/aufzuteilen
+    (leere Liste = sicher genug). Im Zweifel wird nichts verändert — der Beleg kommt zur Nachbearbeitung.
+    """
+    reasons: list[str] = []
+    if warnings:
+        reasons.append("Seiten nicht eindeutig erkannt: " + "; ".join(warnings[:3]))
+    noted = [p for p in pages if p.hinweis and p.hinweis.strip() and p.typ != "leer"]
+    if noted:
+        reasons.append("Unsichere Zuordnung auf Seite " + ranges_text([p.seite for p in noted[:10]]) + f" („{noted[0].hinweis.strip()[:80]}“)")
+    if summary.invoice_pages:
+        first = next(p for p in pages if p.seite == summary.invoice_pages[0])
+        if first.typ != "rechnung":
+            reasons.append(f"Die erste Rechnungsseite (Seite {first.seite}) wurde nur als Folgeseite erkannt — Rechnungsbeginn fehlt")
+    groups = invoice_groups(pages, summary)
+    if len(groups) > 1:
+        blind = [i + 1 for i, g in enumerate(groups) if not g.number and not g.sender]
+        if blind:
+            reasons.append(f"Mehrere Rechnungen erkannt, aber bei Rechnung {', '.join(map(str, blind))} sind weder Nummer noch Absender sichtbar")
+    return reasons
+
+
+def invoice_groups(pages: list[PageVerdict], summary: Summary) -> list[InvoiceGroup]:
+    """
+    Rechnungen in der PDF: jeder zusammenhängende Rechnungsabschnitt ist eine Rechnung; Abschnitte mit derselben Rechnungsnummer
+    (z. B. durch eingeschobene Anlagen getrennt) werden zu einer Rechnung zusammengefasst.
+    """
+    by_seite = {p.seite: p for p in pages}
+    groups: list[InvoiceGroup] = []
+    for seg in summary.segments:
+        if seg.kind != "rechnung":
+            continue
+        inv_pages = [n for n in range(seg.first, seg.last + 1) if by_seite[n].typ in INVOICE_KINDS]
+        if not inv_pages:
+            continue
+        key = (seg.invoice_number or "").strip().casefold()
+        same = next((g for g in groups if key and (g.number or "").strip().casefold() == key), None)
+        if same:
+            same.pages = sorted(set(same.pages) | set(inv_pages))
+        else:
+            groups.append(InvoiceGroup(inv_pages, seg.invoice_number, seg.sender))
+    return groups

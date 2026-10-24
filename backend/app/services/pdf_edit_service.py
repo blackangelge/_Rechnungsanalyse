@@ -233,6 +233,27 @@ def remove_pages(
     )
 
 
+def create_child_document(db: Session, doc: Document, pages: list[int], label: str) -> Document:
+    """
+    Legt aus den Seiten `pages` (1-basiert, bezogen auf die aktuelle Version) einen NEUEN Beleg im selben Import an
+    (Status `pending`, eigene PDF `{id}.pdf`). Das Original bleibt unverändert. Wird zum Abspalten mehrerer Rechnungen
+    aus einer Sammel-PDF genutzt. Commit macht der Aufrufer.
+    """
+    if not pages:
+        raise PdfEditError("Keine Seiten für den neuen Beleg")
+    src = current_path(doc)
+    stem = Path(doc.original_filename).stem
+    child = Document(batch_id=doc.batch_id, original_filename=f"{stem}_{label}.pdf", file_size_bytes=0, status="pending", page_count=len(pages))
+    db.add(child)
+    db.flush()
+    dst = doc_dir(doc) / f"{child.id}.pdf"
+    _write_pages(src, dst, sorted(pages))
+    child.stored_filename = dst.name
+    child.file_size_bytes = dst.stat().st_size
+    db.flush()
+    return child
+
+
 def restore_version(db: Session, doc: Document, number: int) -> DocumentVersion:
     """Macht eine frühere Version wieder aktuell — als NEUE Version (Verlauf bleibt erhalten)."""
     target = get_version(db, doc.id, number)

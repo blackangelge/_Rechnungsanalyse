@@ -47,6 +47,7 @@ def sqlite_session_factory(monkeypatch):
     monkeypatch.setattr("app.services.change_log.SessionLocal", factory)
     monkeypatch.setattr("app.services.data_backup.SessionLocal", factory)
     monkeypatch.setattr("app.services.page_count_service.SessionLocal", factory)
+    monkeypatch.setattr("app.routers.imports.SessionLocal", factory)
     return factory
 
 

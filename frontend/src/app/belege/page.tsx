@@ -65,6 +65,7 @@ const ERROR_CODE_LABELS: Record<string, string> = {
   too_many_pages: "Zu viele Seiten",
   encrypted: "Verschlüsselt",
   unreadable: "Nicht lesbar",
+  pages_unsure: "Seitenerkennung unsicher",
 };
 
 function StatusBadge({ status, errorCode }: { status: string; errorCode?: string | null }) {

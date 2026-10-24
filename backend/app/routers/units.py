@@ -181,6 +181,15 @@ def review(db: Session = Depends(get_db)):
     return cu.review_groups(db)
 
 
+@router.get("/review/count")
+def review_count(db: Session = Depends(get_db)):
+    """Kennzahl für das Menü: offene Schreibweisen und Vorkommen (billiger als die volle Liste)."""
+    from sqlalchemy import func
+    from app.models.units import UnitReviewItem
+    row = db.query(func.count(func.distinct(UnitReviewItem.alias_key)), func.count(UnitReviewItem.id)).filter(UnitReviewItem.status == "open").one()
+    return {"aliases": int(row[0] or 0), "occurrences": int(row[1] or 0)}
+
+
 class AssignIn(BaseModel):
     alias: str
     unit_id: int

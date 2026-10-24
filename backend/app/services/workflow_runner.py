@@ -72,6 +72,8 @@ class RunContext:
     # „Nur neu auslesen“: bereits gespeicherter Dokumententyp wird übernommen statt erneut erkannt
     skip_type_detection: bool = False
     existing_type_id: int | None = None
+    workflow_id: int | None = None        # Workflow dieser Analyse (abgespaltene Belege werden damit eingereiht)
+    system_prompt_id: int | None = None
 
     # Laufzeitzustand
     invoice_page_count: int | None = None   # Ergebnis der Seitenerkennung (Seiten, die zur Rechnung gehören)
@@ -435,6 +437,25 @@ def _db_save_pages(doc_id: int, pages) -> int:
         db.close()
 
 
+def _db_split_children(doc_id: int, groups, workflow_id: int | None, system_prompt_id: int | None) -> list[int]:
+    """Legt je weiterer Rechnung einen eigenen Beleg an (PDF aus den Seiten der Gruppe) und reiht ihn zur Analyse ein."""
+    from app.routers.imports import _db_enqueue_for_analysis
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, doc_id)
+        ids: list[int] = []
+        for i, g in enumerate(groups, start=2):
+            child = pdf_edit_service.create_child_document(db, doc, g.pages, f"Rechnung{i}")
+            ids.append(child.id)
+        db.commit()
+        logger.info("Beleg #%d: %d weitere Rechnung(en) abgespalten → %s", doc_id, len(ids), ids)
+    finally:
+        db.close()
+    if ids and workflow_id:
+        _db_enqueue_for_analysis(ids, system_prompt_id, workflow_id)
+    return ids
+
+
 def _db_keep_pages(doc_id: int, keep: list[int], description: str) -> int:
     """Neue PDF-Version mit nur diesen Seiten. Gibt die neue Seitenzahl zurück."""
     db = SessionLocal()
@@ -477,12 +498,25 @@ async def _h_classify_pages(cfg, ctx: RunContext):
                    "model": getattr(proxy, "model_name", None), "notes": notes}
     detail = (f"{total} Seite(n): {len(summary.invoice_pages)} Rechnung, {len(summary.other_pages)} andere, {len(summary.empty_pages)} leer "
               f"→ {ctx.document_type_name}")
-    if cfg.action == "keep_invoice_pages" and summary.invoice_pages and len(summary.invoice_pages) < total:
-        keep = summary.invoice_pages
-        desc = f"Nur Rechnungsseiten behalten (Seitenerkennung): Seite(n) {page_classifier.ranges_text(keep)} von {total}"
-        ctx.page_count = await asyncio.to_thread(_db_keep_pages, ctx.doc_id, keep, desc)
-        ctx.images = None
-        detail += f"; PDF auf {ctx.page_count} Seite(n) gekürzt"
+    if cfg.action in ("keep_invoice_pages", "split_invoices") and summary.invoice_pages:
+        # Sicherheitsnetz: nur bei eindeutiger Erkennung wird die PDF verändert — sonst nichts anfassen, Nachbearbeitung
+        unsure = page_classifier.uncertainty(out.pages, out.warnings, summary)
+        if unsure:
+            raise NeedsRework("pages_unsure", "Seitenerkennung unsicher — PDF bleibt unverändert, bitte prüfen. " + " | ".join(unsure))
+        groups = page_classifier.invoice_groups(out.pages, summary)
+        keep = groups[0].pages if (cfg.action == "split_invoices" and groups) else summary.invoice_pages
+        if cfg.action == "split_invoices" and len(groups) > 1:
+            created = await asyncio.to_thread(_db_split_children, ctx.doc_id, groups[1:], ctx.workflow_id, ctx.system_prompt_id)
+            detail += f"; {len(created)} weitere Rechnung(en) als eigene Belege abgespalten (#{', #'.join(map(str, created))})"
+            ctx.node_io["notes"] = list(ctx.node_io.get("notes") or []) + [
+                f"Abgespalten: Beleg #{cid} ← Seite(n) {page_classifier.ranges_text(g.pages)}" + (f", Rechnungsnr. {g.number}" if g.number else "")
+                for cid, g in zip(created, groups[1:])]
+            ctx.invoice_page_count = len(keep)
+        if len(keep) < total:
+            desc = f"Nur Rechnungsseiten behalten (Seitenerkennung): Seite(n) {page_classifier.ranges_text(keep)} von {total}"
+            ctx.page_count = await asyncio.to_thread(_db_keep_pages, ctx.doc_id, keep, desc)
+            ctx.images = None
+            detail += f"; PDF auf {ctx.page_count} Seite(n) gekürzt"
     return NodeResult(detail=detail)
 
 
@@ -645,6 +679,7 @@ async def analyze_with_workflow(
         known_supplier_name=await asyncio.to_thread(_db_known_supplier, doc_id),
         skip_type_detection=skip_type_detection, existing_type_id=data.get("existing_document_type") or None,
         max_pages=capacity.max_pages(data.get("ai_max_context_tokens")),
+        workflow_id=workflow.get("id"), system_prompt_id=system_prompt_id,
     )
     try:
         ctx.page_count = await asyncio.to_thread(pdf_service.get_page_count, ctx.pdf_path)

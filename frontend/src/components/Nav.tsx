@@ -11,6 +11,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Icon } from "@/components/ui";
+import { unitsApi } from "@/lib/api";
 
 interface NavItem { href: string; label: string; icon: string }
 interface NavGroup { title: string; items: NavItem[] }
@@ -75,10 +76,20 @@ export default function Nav({
   const pathname = usePathname();
   const [jsOk, setJsOk] = useState(false);
   const [open, setOpen] = useState(false);
+  const [unitReview, setUnitReview] = useState(0);              // offene Schreibweisen in der Einheiten-Prüfliste
   const full = pathname === "/assistent" || pathname.startsWith("/assistent/");   // Vollbild-Seite ohne Rand
 
   useEffect(() => { setJsOk(true); }, []);
   useEffect(() => { setOpen(false); }, [pathname]);
+  useEffect(() => {
+    // Zähler der Einheiten-Prüfliste: beim Seitenwechsel, alle 60 s und sofort, wenn die Einheiten-Seite etwas ändert
+    let cancelled = false;
+    const refresh = () => { unitsApi.reviewCount().then((c) => { if (!cancelled) setUnitReview(c.aliases); }).catch(() => undefined); };
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener("ra-units-review", refresh);
+    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("ra-units-review", refresh); };
+  }, [pathname]);
 
   const sidebar = (
     <div className="flex h-full flex-col bg-[var(--ra-sidebar)] text-[var(--ra-sidebar-text)]">
@@ -100,6 +111,10 @@ export default function Nav({
                         active ? "bg-[var(--ra-sidebar-active)] font-medium text-white" : "hover:bg-white/10 hover:text-white"}`}>
                       <Icon name={it.icon} className="h-4 w-4 shrink-0 opacity-90" />
                       <span className="truncate">{it.label}</span>
+                      {it.href === "/einheiten" && unitReview > 0 && (
+                        <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[11px] font-semibold text-slate-900" title={`${unitReview} unbekannte Schreibweise(n) in der Prüfliste`}
+                          data-testid="nav-units-review">{unitReview > 99 ? "99+" : unitReview}</span>
+                      )}
                     </Link>
                   </li>
                 );

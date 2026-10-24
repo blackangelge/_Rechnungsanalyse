@@ -49,7 +49,7 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
   },
   classify_pages: {
     label: "Seiten erkennen",
-    description: "Die KI ordnet jede Seite einem Typ zu (Rechnung, Lieferschein …) — auch bei Scans. Optional bleiben nur die Rechnungsseiten (neue PDF-Version).",
+    description: "Die KI ordnet jede Seite einem Typ zu (Rechnung, Lieferschein …) — auch bei Scans. Optional bleiben nur die Rechnungsseiten (neue PDF-Version) oder jede weitere Rechnung der PDF wird ein eigener Beleg. Bei unsicherer Erkennung wird nichts verändert (Nachbearbeiten).",
     head: "bg-orange-600 text-white", border: "border-orange-400",
     defaultConfig: { dpi: 80, chunk_size: 10, action: "classify_only", ai_config_id: null },
   },

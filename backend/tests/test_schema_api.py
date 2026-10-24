@@ -60,3 +60,15 @@ def test_group_rename(client):
     assert r.status_code == 200 and r.json()["name"] == "Neu"
     client.post("/api/units/groups", json={"name": "Zweite"})
     assert client.patch(f"/api/units/groups/{g['id']}", json={"name": "Zweite"}).status_code == 409
+
+
+def test_unit_can_be_edited_later_and_review_count(client, db):
+    from app.services.units_seed import seed_default_units
+    seed_default_units(db)
+    db.commit()
+    kg = next(u for g in client.get("/api/units").json() for u in g["units"] if u["symbol"] == "kg")
+    r = client.patch(f"/api/units/{kg['id']}", json={"name": "Kilo", "symbol": "kgm", "factor": "1001"})
+    assert r.status_code == 200 and r.json()["name"] == "Kilo" and float(r.json()["factor"]) == 1001
+    t = next(u for g in client.get("/api/units").json() for u in g["units"] if u["is_base"] and u["symbol"] == "t")
+    assert client.patch(f"/api/units/{t['id']}", json={"factor": "2"}).status_code == 409        # Basis bleibt Faktor 1
+    assert client.get("/api/units/review/count").json() == {"aliases": 0, "occurrences": 0}

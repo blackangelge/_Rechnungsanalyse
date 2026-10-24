@@ -13,6 +13,7 @@ export default function UnitsPage() {
   const [groupModal, setGroupModal] = useState(false);
   const [unitModal, setUnitModal] = useState<UnitGroupItem | null>(null);
   const [renameGroup, setRenameGroup] = useState<UnitGroupItem | null>(null);
+  const [editUnit, setEditUnit] = useState<UnitItem | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -23,6 +24,7 @@ export default function UnitsPage() {
       const [g, r] = await Promise.all([unitsApi.list(), unitsApi.review()]);
       setGroups(g);
       setReview(r);
+      window.dispatchEvent(new Event("ra-units-review"));      // Menü-Zähler aktualisieren
     } catch (err) {
       setError(extractApiError(err, "Einheiten konnten nicht geladen werden"));
     } finally {
@@ -63,7 +65,15 @@ export default function UnitsPage() {
         actions={tab === "groups" ? <button className="btn btn-primary" onClick={() => setGroupModal(true)}><Icon name="plus" /> Gruppe</button> : undefined} />
       {error && <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>}
       {info && <div className="mb-4"><Alert tone="success" onClose={() => setInfo(null)}>{info}</Alert></div>}
-      <Tabs tabs={[{ id: "groups", label: "Gruppen & Einheiten" }, { id: "review", label: "Prüfliste", badge: review.length ? <span className="badge badge-amber">{review.length}</span> : null }]} value={tab} onChange={setTab} />
+      {review.length > 0 && tab === "groups" && (
+        <div className="mb-4">
+          <Alert tone="warn">
+            <b>{review.length}</b> unbekannte Schreibweise{review.length === 1 ? "" : "n"} ({review.reduce((s, r) => s + r.count, 0).toLocaleString("de-DE")} Vorkommen in {review.reduce((s, r) => s + r.documents, 0).toLocaleString("de-DE")} Belegen) warten auf Zuordnung.{" "}
+            <button type="button" className="font-medium underline" onClick={() => setTab("review")}>Zur Prüfliste</button>
+          </Alert>
+        </div>
+      )}
+      <Tabs tabs={[{ id: "groups", label: "Gruppen & Einheiten" }, { id: "review", label: "Prüfliste", badge: review.length ? <span className="badge badge-amber" title={`${review.length} Schreibweisen, ${review.reduce((s, r) => s + r.count, 0)} Vorkommen`}>{review.length}</span> : null }]} value={tab} onChange={setTab} />
       {loading && groups.length === 0 && <Spinner />}
 
       {tab === "groups" && (
@@ -82,9 +92,9 @@ export default function UnitsPage() {
               </>}>
               <div className="overflow-x-auto">
                 <table className="table-ra">
-                  <thead><tr><th>Einheit</th><th>Symbol</th><th>Faktor</th><th>Schreibweisen (Aliasse)</th><th className="w-12" /></tr></thead>
+                  <thead><tr><th>Einheit</th><th>Symbol</th><th>Faktor</th><th>Schreibweisen (Aliasse)</th><th className="w-24" /></tr></thead>
                   <tbody>
-                    {g.units.map((u) => <UnitRow key={u.id} unit={u} deletable={!u.is_base || g.units.length === 1} onChange={run} />)}
+                    {g.units.map((u) => <UnitRow key={u.id} unit={u} onEdit={() => setEditUnit(u)} deletable={!u.is_base || g.units.length === 1} onChange={run} />)}
                     {g.units.length === 0 && <tr><td colSpan={5} className="text-gray-400">Noch keine Einheit.</td></tr>}
                   </tbody>
                 </table>
@@ -110,12 +120,14 @@ export default function UnitsPage() {
 
       {groupModal && <NameModal title="Neue Gruppe" onClose={() => setGroupModal(false)} onSave={async (name) => { await unitsApi.createGroup(name); setGroupModal(false); await load(); }} />}
       {renameGroup && <NameModal title="Gruppe umbenennen" initial={renameGroup.name} submitLabel="Speichern" onClose={() => setRenameGroup(null)} onSave={async (name) => { await unitsApi.patchGroup(renameGroup.id, { name }); setRenameGroup(null); await load(); }} />}
+      {editUnit && <EditUnitModal unit={editUnit} onClose={() => setEditUnit(null)}
+        onSave={async (d) => { await unitsApi.patchUnit(editUnit.id, d); setEditUnit(null); await load(); }} />}
       {unitModal && <UnitModal group={unitModal} onClose={() => setUnitModal(null)} onSave={async (d) => { await unitsApi.createUnit(unitModal.id, d); setUnitModal(null); await load(); }} />}
     </div>
   );
 }
 
-function UnitRow({ unit, deletable, onChange }: { unit: UnitItem; deletable: boolean; onChange: (fn: () => Promise<unknown>) => Promise<void> }) {
+function UnitRow({ unit, deletable, onEdit, onChange }: { unit: UnitItem; deletable: boolean; onEdit: () => void; onChange: (fn: () => Promise<unknown>) => Promise<void> }) {
   const [alias, setAlias] = useState("");
   return (
     <tr>
@@ -134,7 +146,8 @@ function UnitRow({ unit, deletable, onChange }: { unit: UnitItem; deletable: boo
           </form>
         </div>
       </td>
-      <td className="text-right">
+      <td className="whitespace-nowrap text-right">
+        <button className="btn btn-ghost btn-sm" aria-label={`${unit.name} bearbeiten`} title="Name, Symbol und Faktor ändern" onClick={onEdit}><Icon name="edit" /></button>
         {deletable ? <button className="btn btn-ghost btn-sm text-red-600" aria-label={`${unit.name} löschen`} onClick={() => confirm(`Einheit „${unit.name}“ löschen?`) && onChange(() => unitsApi.deleteUnit(unit.id))}><Icon name="trash" /></button> : <span className="text-xs text-gray-400" title="Die Basiseinheit lässt sich erst löschen, wenn alle anderen Einheiten der Gruppe entfernt sind">Basis</span>}
       </td>
     </tr>
@@ -198,6 +211,39 @@ function UnitModal({ group, onClose, onSave }: { group: UnitGroupItem; onClose: 
         {!isBase && <div><label className="label" htmlFor="u-f">Faktor (pro 1 Basiseinheit)</label><input id="u-f" className="input font-mono" value={factor} onChange={(e) => setFactor(e.target.value)} /></div>}
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={ci} onChange={(e) => setCi(e.target.checked)} /> Groß-/Kleinschreibung egal</label>
         <div className="sm:col-span-2"><label className="label" htmlFor="u-al">Aliasse (Komma-getrennt)</label><input id="u-al" className="input" value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="Kilo, KG, kgs" /></div>
+      </div>
+    </Modal>
+  );
+}
+
+function EditUnitModal({ unit, onClose, onSave }: { unit: UnitItem; onClose: () => void; onSave: (d: { name: string; symbol: string; factor?: number; case_insensitive: boolean }) => Promise<void> }) {
+  const [name, setName] = useState(unit.name);
+  const [symbol, setSymbol] = useState(unit.symbol);
+  const [factor, setFactor] = useState(String(unit.factor));
+  const [ci, setCi] = useState(unit.case_insensitive);
+  const [error, setError] = useState<string | null>(null);
+  const factorNum = Number(factor.replace(",", "."));
+  const factorOk = unit.is_base || (Number.isFinite(factorNum) && factorNum > 0);
+  async function save() {
+    try {
+      await onSave({ name: name.trim(), symbol: symbol.trim(), ...(unit.is_base ? {} : { factor: factorNum }), case_insensitive: ci });
+    } catch (e) { setError(extractApiError(e, "Einheit konnte nicht geändert werden")); }
+  }
+  return (
+    <Modal title={`Einheit „${unit.name}“ bearbeiten`} onClose={onClose}
+      footer={<><button className="btn btn-secondary" onClick={onClose}>Abbrechen</button>
+        <button className="btn btn-primary" disabled={!name.trim() || !symbol.trim() || !factorOk} onClick={save}>Speichern</button></>}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {error && <div className="sm:col-span-2"><Alert tone="error">{error}</Alert></div>}
+        <div><label className="label" htmlFor="e-name">Name</label><input id="e-name" className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
+        <div><label className="label" htmlFor="e-sym">Symbol</label><input id="e-sym" className="input" value={symbol} onChange={(e) => setSymbol(e.target.value)} /></div>
+        <div>
+          <label className="label" htmlFor="e-f">Faktor (pro 1 Basiseinheit)</label>
+          <input id="e-f" className="input font-mono" value={unit.is_base ? "1" : factor} disabled={unit.is_base} onChange={(e) => setFactor(e.target.value)} />
+          {unit.is_base && <p className="hint">Die Basiseinheit hat immer den Faktor 1.</p>}
+        </div>
+        <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" checked={ci} onChange={(e) => setCi(e.target.checked)} /> Groß-/Kleinschreibung egal</label>
+        {!unit.is_base && <p className="hint sm:col-span-2">Ein geänderter Faktor gilt für neue Auslesungen. Bereits gespeicherte Belege behalten ihre bisher umgerechneten Werte (die Originalwerte bleiben immer erhalten).</p>}
       </div>
     </Modal>
   );

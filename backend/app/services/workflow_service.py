@@ -64,7 +64,9 @@ class ClassifyPagesConfig(BaseModel):
     ai_config_id: int | None = None          # None = in der Analyse gewählte KI
     dpi: int = Field(80, ge=40, le=200)      # niedrige Auflösung genügt zum Erkennen und spart Token
     chunk_size: int = Field(10, ge=1, le=30) # Seiten je KI-Anfrage
-    action: Literal["classify_only", "keep_invoice_pages"] = "classify_only"   # keep: PDF-Version nur mit den Rechnungsseiten anlegen
+    action: Literal["classify_only", "keep_invoice_pages", "split_invoices"] = "classify_only"
+    # keep: PDF-Version nur mit den Rechnungsseiten anlegen; split: zusätzlich jede weitere Rechnung der PDF als eigenen Beleg abspalten
+    # (beides nur, wenn die Erkennung eindeutig ist — sonst „Nachbearbeiten“, nichts wird verändert)
     system_prompt_id: int | None = None      # optionaler Baustein: Zusatzanweisung (z. B. Besonderheiten Ihrer Lieferanten)
 
 
@@ -555,7 +557,7 @@ def templates() -> list[dict]:
     pages = {
         "nodes": [
             _node("start", "start", "Start", 0, 160),
-            _node("pages", "classify_pages", "Seiten erkennen", 220, 160, {"action": "keep_invoice_pages"}),
+            _node("pages", "classify_pages", "Seiten erkennen", 220, 160, {"action": "split_invoices"}),
             _node("branch", "branch", "Rechnungsseiten gefunden?", 480, 160,
                   {"field": "invoice_page_count", "op": "gt", "value": "0"}),
             _node("extract", "schema_extract", "Schema-Extraktion", 740, 60),
@@ -570,7 +572,7 @@ def templates() -> list[dict]:
     }
     return [
         {"key": "pages_schema", "name": "Seiten erkennen + Schema-Extraktion",
-         "description": "Erkennt je Seite, ob sie zur Rechnung gehört, behält nur die Rechnungsseiten und extrahiert sie nach dem Schema. Für gescannte Sammel-PDFs.",
+         "description": "Erkennt je Seite, ob sie zur Rechnung gehört, behält nur die Rechnungsseiten (weitere Rechnungen der PDF werden eigene Belege) und extrahiert nach dem Schema. Bei unsicherer Erkennung: Nachbearbeiten. Für gescannte Sammel-PDFs.",
          "graph": pages},
         {"key": "schema", "name": "Schema-Extraktion",
          "description": "Extrahiert nach der aktiven Schema-Definition (Structured Outputs) und speichert die Datensätze.",
@@ -596,7 +598,7 @@ def templates() -> list[dict]:
 def has_page_reduction(graph: dict) -> bool:
     """True, wenn ein Knoten „Seiten erkennen“ mit Aktion „nur Rechnungsseiten behalten“ im Ablauf liegt."""
     for node in graph.get("nodes", []):
-        if node.get("type") == "classify_pages" and ((node.get("data") or {}).get("config") or {}).get("action") == "keep_invoice_pages":
+        if node.get("type") == "classify_pages" and ((node.get("data") or {}).get("config") or {}).get("action") in ("keep_invoice_pages", "split_invoices"):
             return True
     return False
 

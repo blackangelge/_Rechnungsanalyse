@@ -265,11 +265,12 @@ function Inspector({
 
       {t === "classify_pages" && (
         <>
-          <Field label="Ergebnis" hint="„Nur Rechnungsseiten behalten“ legt eine neue PDF-Version an, das Original bleibt erhalten.">
+          <Field label="Ergebnis" hint="„Behalten“ und „Trennen“ legen eine neue PDF-Version an (das Original bleibt erhalten) — aber nur, wenn die Erkennung eindeutig ist. Sonst bleibt die PDF unverändert und der Beleg kommt zur Nachbearbeitung.">
             <select className={inputCls} value={cfg.action ?? "classify_only"}
-              onChange={(e) => onChange({ config: { action: e.target.value as "classify_only" | "keep_invoice_pages" } })}>
+              onChange={(e) => onChange({ config: { action: e.target.value as "classify_only" | "keep_invoice_pages" | "split_invoices" } })}>
               <option value="classify_only">Nur erkennen (PDF bleibt)</option>
               <option value="keep_invoice_pages">Nur Rechnungsseiten behalten</option>
+              <option value="split_invoices">Rechnungen trennen (jede weitere Rechnung wird ein eigener Beleg)</option>
             </select>
           </Field>
           <Field label="Auflösung (dpi)" hint="Niedrig genügt zum Erkennen und spart Token.">

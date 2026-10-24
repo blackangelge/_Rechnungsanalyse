@@ -851,7 +851,7 @@ export interface WorkflowNodeConfig {
   // classify_pages
   dpi?: number;
   chunk_size?: number;
-  action?: "classify_only" | "keep_invoice_pages";
+  action?: "classify_only" | "keep_invoice_pages" | "split_invoices";
   // validate
   auto_correct?: boolean;
   ai_recheck?: boolean;
@@ -1822,6 +1822,7 @@ export const unitsApi = {
   addAlias: (unitId: number, alias: string) => apiClient.post<UnitAliasItem>(`/api/units/${unitId}/aliases`, { alias }).then((r) => r.data),
   deleteAlias: (aliasId: number) => apiClient.delete(`/api/units/aliases/${aliasId}`),
   review: () => apiClient.get<UnitReviewGroup[]>("/api/units/review").then((r) => r.data),
+  reviewCount: () => apiClient.get<{ aliases: number; occurrences: number }>("/api/units/review/count").then((r) => r.data),
   assign: (alias: string, unitId: number) => apiClient.post("/api/units/review/assign", { alias, unit_id: unitId }).then((r) => r.data),
   ignore: (alias: string) => apiClient.post("/api/units/review/ignore", { alias }).then((r) => r.data),
   convert: (value: number, unit: string | null, groupId?: number | null) =>
