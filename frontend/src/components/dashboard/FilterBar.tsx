@@ -34,7 +34,7 @@ export default function FilterBar({ availableYears, filters, onChange }: Props) 
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-4 rounded-lg border bg-white p-4 shadow-sm">
+    <div className="flex flex-wrap items-center gap-4 card p-4">
       {/* Firmenname-Suche */}
       <div className="flex items-center gap-2">
         <label className="text-sm font-medium text-gray-600">Firma:</label>

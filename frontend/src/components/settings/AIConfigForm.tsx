@@ -89,7 +89,7 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border bg-white p-6 shadow-sm">
+    <form onSubmit={handleSubmit} className="space-y-4 card p-6">
       <h2 className="text-base font-semibold">
         {initialData ? "KI-Client bearbeiten" : "Neuer KI-Client"}
       </h2>
@@ -321,7 +321,7 @@ export default function AIConfigForm({ initialData, onSaved, onCancel }: Props) 
         <button
           type="submit"
           disabled={loading}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="btn btn-primary"
         >
           {loading ? "Speichern..." : "Speichern"}
         </button>

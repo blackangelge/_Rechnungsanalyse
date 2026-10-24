@@ -92,7 +92,7 @@ export default function ImageSettingsPage() {
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6 rounded-lg border bg-white p-6 shadow-sm">
+      <form onSubmit={handleSubmit} className="space-y-6 card p-6">
 
         {/* Fehler- und Erfolgsmeldungen */}
         {error && (

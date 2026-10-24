@@ -59,7 +59,7 @@ function PdfTrimSettings() {
   }
 
   return (
-    <div className="rounded-lg border bg-white p-6 shadow-sm">
+    <div className="card p-6">
       <h2 className="mb-1 text-base font-semibold text-gray-800">Lange PDFs automatisch kürzen</h2>
       <p className="mb-5 text-sm text-gray-500">
         Hat eine PDF mehr Seiten als eingestellt, werden vor der KI-Analyse nur die ersten Seiten behalten.
@@ -158,7 +158,7 @@ function ValidationBackfill() {
   const hasRun = !!state?.started_at;
 
   return (
-    <div className="rounded-lg border bg-white p-6 shadow-sm" data-testid="backfill-card">
+    <div className="card p-6" data-testid="backfill-card">
       <h2 className="mb-1 text-base font-semibold text-gray-800">Prüfung für den Altbestand nachrüsten</h2>
       <p className="mb-4 text-sm text-gray-500">
         Belege, die vor der Plausibilitätsprüfung analysiert wurden, haben keinen Prüfstatus. Hier wird er <b>ohne KI</b> nachgeholt:
@@ -216,7 +216,7 @@ function ValidationBackfill() {
             Vorschau (nichts speichern)
           </button>
           <button type="button" onClick={() => start(false)} disabled={busy || !state?.pending} data-testid="backfill-start"
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            className="btn btn-primary">
             Nachrüstung starten
           </button>
         </div>
@@ -326,7 +326,7 @@ export default function AutomationSettingsPage() {
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6 rounded-lg border bg-white p-6 shadow-sm">
+      <form onSubmit={handleSubmit} className="space-y-6 card p-6">
         {error && (
           <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
         )}

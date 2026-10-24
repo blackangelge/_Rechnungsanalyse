@@ -551,7 +551,7 @@ function Editor({ workflow, prompts, aiConfigs, docTypes, onSaved }: WorkflowEdi
 
       <div className="flex gap-3" style={{ height: "calc(100vh - 15rem)", minHeight: 460 }}>
         {/* Palette */}
-        <aside className="w-52 shrink-0 overflow-y-auto rounded-lg border bg-white p-3 shadow-sm">
+        <aside className="w-52 shrink-0 overflow-y-auto card p-3">
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Knoten hinzufügen</h3>
           <p className="mb-3 text-xs text-gray-400">Klicken oder auf die Fläche ziehen.</p>
           <div className="space-y-2">
@@ -592,7 +592,7 @@ function Editor({ workflow, prompts, aiConfigs, docTypes, onSaved }: WorkflowEdi
         </div>
 
         {/* Eigenschaften + Prüfung */}
-        <aside className="w-72 shrink-0 overflow-y-auto rounded-lg border bg-white p-4 shadow-sm">
+        <aside className="w-72 shrink-0 overflow-y-auto card p-4">
           {selected ? (
             <Inspector node={selected} onChange={patchSelected} docTypes={docTypes} />
           ) : (

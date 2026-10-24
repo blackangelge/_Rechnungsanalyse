@@ -41,7 +41,7 @@ export default function AccountPage() {
           {msg.text}
         </div>
       )}
-      <form onSubmit={submit} className="space-y-4 rounded-lg border bg-white p-6 shadow-sm">
+      <form onSubmit={submit} className="space-y-4 card p-6">
         <div>
           <label htmlFor="cur" className="mb-1 block text-sm font-medium text-gray-700">Aktuelles Passwort</label>
           <input id="cur" type="password" autoComplete="current-password" required value={current} onChange={(e) => setCurrent(e.target.value)} className={input} />

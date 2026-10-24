@@ -122,7 +122,7 @@ function RestoreDialog({ backup, onClose, onStarted }: { backup: BackupFile; onC
         <div className="flex gap-2">
           <button onClick={() => start(true)} disabled={busy || selected.size === 0} className="rounded border border-blue-600 px-4 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50" data-testid="restore-preview">Vorschau</button>
           <button onClick={() => start(false)} disabled={busy || selected.size === 0} className="rounded bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50" data-testid="restore-run">Jetzt importieren</button>
-          <button onClick={onClose} className="ml-auto rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">Schließen</button>
+          <button onClick={onClose} className="ml-auto btn btn-secondary btn-sm">Schließen</button>
         </div>
       </div>
     </div>
@@ -198,7 +198,7 @@ export default function DataBackupPage() {
       {job.running && <Progress job={job} onCancel={() => dataBackupApi.cancel().then(() => undefined)} />}
       <ResultBox job={job} />
 
-      <section className="mb-6 rounded-lg border bg-white p-4 shadow-sm">
+      <section className="mb-6 card p-4">
         <h2 className="mb-2 text-lg font-semibold text-gray-900">Neues Backup</h2>
         <div className="mb-3 space-y-1 text-sm text-gray-700">
           <label className="flex items-center gap-2"><input type="checkbox" checked={includePdfs} onChange={(e) => setIncludePdfs(e.target.checked)} data-testid="opt-pdfs" />
@@ -216,13 +216,13 @@ export default function DataBackupPage() {
             ))}
           </div>
         </details>
-        <button onClick={create} disabled={job.running} className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" data-testid="create-backup">
+        <button onClick={create} disabled={job.running} className="btn btn-primary" data-testid="create-backup">
           Backup erstellen
         </button>
         <p className="mt-2 text-xs text-gray-400">Läuft im Hintergrund; die Seite darf geschlossen werden. Während eines Backups bitte keine großen Importe starten.</p>
       </section>
 
-      <section className="rounded-lg border bg-white p-4 shadow-sm">
+      <section className="card p-4">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-gray-900">Vorhandene Backups</h2>
           <div>

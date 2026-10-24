@@ -179,7 +179,7 @@ export default function MergeModal({
         </div>
 
         <div className="flex justify-end gap-2 border-t px-6 py-4">
-          <button onClick={onClose} disabled={busy} className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-100">Abbrechen</button>
+          <button onClick={onClose} disabled={busy} className="btn btn-secondary btn-sm">Abbrechen</button>
           <button onClick={submit} disabled={busy}
             className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
             {busy ? "Führe zusammen…" : "Zusammenführen"}

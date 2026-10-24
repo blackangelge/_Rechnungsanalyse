@@ -299,7 +299,7 @@ export default function ArtikelPage() {
       </p>
 
       {/* ── Filter ─────────────────────────────────────────────────── */}
-      <div className="mb-4 rounded-lg border bg-white p-4 shadow-sm">
+      <div className="mb-4 card p-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex min-w-[20rem] flex-1 flex-col gap-1">
             <label className="text-xs font-medium text-gray-600">Suche (Bezeichnung oder Artikelnummer, mehrere Wörter = UND)</label>
@@ -338,8 +338,8 @@ export default function ArtikelPage() {
             </select>
           </div>
           <button onClick={() => apply()} data-testid="apply"
-            className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Suchen</button>
-          <button onClick={reset} className="rounded border border-gray-300 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100">Zurücksetzen</button>
+            className="btn btn-primary">Suchen</button>
+          <button onClick={reset} className="btn btn-secondary btn-sm">Zurücksetzen</button>
           <button onClick={() => {
             setShowUnits((v) => !v);
             if (unitTable.length === 0) positionsApi.unitTable().then(setUnitTable).catch(() => undefined);
@@ -460,7 +460,7 @@ export default function ArtikelPage() {
       {summaryLoading && (
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="summary-loading">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="rounded-lg border bg-white p-3 shadow-sm">
+            <div key={i} className="card p-3">
               <div className="mb-2 h-3 w-24 animate-pulse rounded bg-gray-200" />
               <div className="mb-1.5 h-6 w-36 animate-pulse rounded bg-gray-200" />
               <div className="h-3 w-28 animate-pulse rounded bg-gray-100" />
@@ -475,21 +475,21 @@ export default function ArtikelPage() {
       )}
       {!summaryLoading && summary && searched && (
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="summary">
-          <div className="rounded-lg border bg-white p-3 shadow-sm">
+          <div className="card p-3">
             <div className="text-xs text-gray-500">Treffer</div>
             <div className="text-xl font-semibold text-gray-900">{summary.count.toLocaleString("de-DE")} Positionen</div>
             <div className="text-xs text-gray-400">in {summary.documents.toLocaleString("de-DE")} Beleg(en)</div>
           </div>
-          <div className="rounded-lg border bg-white p-3 shadow-sm">
+          <div className="card p-3">
             <div className="text-xs text-gray-500">Summe Gesamtpreis</div>
             <div className="text-xl font-semibold text-gray-900">{eur(summary.total_price_sum)}</div>
           </div>
-          <div className="rounded-lg border bg-white p-3 shadow-sm">
+          <div className="card p-3">
             <div className="text-xs text-gray-500">Einzelpreis (Ø · min · max)</div>
             <div className="text-xl font-semibold text-gray-900">{eur(summary.unit_price_avg, 4)}</div>
             <div className="text-xs text-gray-400">{eur(summary.unit_price_min, 4)} – {eur(summary.unit_price_max, 4)}</div>
           </div>
-          <div className="rounded-lg border bg-white p-3 shadow-sm">
+          <div className="card p-3">
             <div className="text-xs text-gray-500">Nach Einheit <span className="text-gray-400">(t/kg/g → kg, hl/l/ml → l)</span></div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {summary.by_unit.length === 0 && <span className="text-sm text-gray-300">–</span>}
@@ -506,7 +506,7 @@ export default function ArtikelPage() {
 
       {/* ── Tabelle ────────────────────────────────────────────────── */}
       {pager("pager-top")}
-      <div className="relative overflow-x-auto rounded-lg border bg-white shadow-sm">
+      <div className="relative overflow-x-auto card">
         {loading && (
           <div className="absolute inset-x-0 top-0 z-10 h-1 overflow-hidden bg-blue-100" data-testid="loading-bar">
             <div className="h-1 w-1/3 animate-[slide_1.1s_ease-in-out_infinite] rounded bg-blue-500" />

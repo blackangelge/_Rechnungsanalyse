@@ -82,7 +82,7 @@ export default function ProgressPanel({
     : null;
 
   return (
-    <div className="rounded-lg border bg-white p-5 shadow-sm">
+    <div className="card p-5">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="font-semibold">Import-Fortschritt</h2>
         <span

@@ -29,7 +29,7 @@ export default function LoginPage() {
   }
 
   return (
-    <form onSubmit={submit} className="rounded-lg border bg-white p-8 shadow-sm" data-testid="login-form">
+    <form onSubmit={submit} className="card p-8" data-testid="login-form">
       <h1 className="mb-1 text-2xl font-bold text-blue-700">Rechnungsanalyse</h1>
       <p className="mb-6 text-sm text-gray-500">Bitte anmelden.</p>
 
@@ -64,7 +64,7 @@ export default function LoginPage() {
       <button
         type="submit"
         disabled={busy}
-        className="w-full rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        className="w-full btn btn-primary"
       >
         {busy ? "Melde an…" : "Anmelden"}
       </button>

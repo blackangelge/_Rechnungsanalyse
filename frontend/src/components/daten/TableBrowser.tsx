@@ -148,14 +148,14 @@ function RowEditor({
         )}
         <div className="mt-4 flex items-center gap-3">
           {writable && original !== null && (
-            <button onClick={save} disabled={busy} className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            <button onClick={save} disabled={busy} className="btn btn-primary">
               {busy ? "Speichere…" : "Speichern"}
             </button>
           )}
           {writable && !isNew && (
             <button onClick={remove} disabled={busy} className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50">Löschen</button>
           )}
-          <button onClick={onClose} className="ml-auto rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">Schließen</button>
+          <button onClick={onClose} className="ml-auto btn btn-secondary btn-sm">Schließen</button>
         </div>
         {!writable && <p className="mt-2 text-xs text-gray-400">Nur Ansicht — zum Ändern oben „Bearbeiten erlauben“ einschalten.</p>}
       </div>
@@ -253,7 +253,7 @@ export default function TableBrowser() {
   return (
     <div className="grid gap-4 lg:grid-cols-[14rem_1fr]">
       {/* Tabellenliste */}
-      <aside className="rounded-lg border bg-white p-2 shadow-sm" data-testid="table-list">
+      <aside className="card p-2" data-testid="table-list">
         <div className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-gray-400">Tabellen</div>
         {tablesLoading && tables.length === 0 && <p className="px-2 py-1 text-xs text-gray-400">Lade Tabellen…</p>}
         {tablesError && (
@@ -279,7 +279,7 @@ export default function TableBrowser() {
       </aside>
 
       <section className="min-w-0">
-        <div className="mb-3 flex flex-wrap items-end gap-3 rounded-lg border bg-white p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-end gap-3 card p-3">
           <div className="flex min-w-[16rem] flex-1 flex-col gap-1">
             <label className="text-xs font-medium text-gray-600">Suche in allen Textspalten (mehrere Wörter = UND; Zahl = auch ID)</label>
             <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && apply()} className={`${field} w-full`} data-testid="db-q" />
@@ -294,7 +294,7 @@ export default function TableBrowser() {
               <input value={filterVal} disabled={!filterCol} onChange={(e) => setFilterVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && apply()} className={`${field} w-40`} />
             </div>
           </div>
-          <button onClick={apply} className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Suchen</button>
+          <button onClick={apply} className="btn btn-primary">Suchen</button>
           <label className="ml-auto flex cursor-pointer items-center gap-2 text-sm text-gray-700" title="Ohne diesen Schalter sind alle Daten schreibgeschützt">
             <input type="checkbox" checked={writable} onChange={(e) => setWritable(e.target.checked)} data-testid="write-toggle" />
             Bearbeiten erlauben
@@ -316,7 +316,7 @@ export default function TableBrowser() {
           onPage={(p) => load(Math.min(Math.max(0, p), totalPages - 1), pageSize)}
           onPageSize={(s) => { setPageSize(s); load(0, s); }}
         />
-        <div className="relative overflow-x-auto rounded-lg border bg-white shadow-sm">
+        <div className="relative overflow-x-auto card">
           <table className="min-w-full text-xs" data-testid="db-grid">
             <thead className="bg-gray-50 text-gray-600">
               <tr>

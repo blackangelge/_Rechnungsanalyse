@@ -87,14 +87,14 @@ export default function DocumentsTable({ documents, onRefresh }: Props) {
             <button
               onClick={() => setPage(0)}
               disabled={page === 0}
-              className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              className="btn btn-secondary btn-sm disabled:opacity-40"
             >
               «
             </button>
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
-              className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              className="btn btn-secondary btn-sm disabled:opacity-40"
             >
               ‹
             </button>
@@ -104,14 +104,14 @@ export default function DocumentsTable({ documents, onRefresh }: Props) {
             <button
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={page >= totalPages - 1}
-              className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              className="btn btn-secondary btn-sm disabled:opacity-40"
             >
               ›
             </button>
             <button
               onClick={() => setPage(totalPages - 1)}
               disabled={page >= totalPages - 1}
-              className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              className="btn btn-secondary btn-sm disabled:opacity-40"
             >
               »
             </button>
@@ -122,7 +122,7 @@ export default function DocumentsTable({ documents, onRefresh }: Props) {
       <div className={previewDocId !== null ? "flex gap-4" : ""}>
         {/* Tabelle */}
         <div
-          className={`overflow-x-auto rounded-lg border bg-white shadow-sm ${
+          className={`overflow-x-auto card ${
             previewDocId !== null ? "w-1/2 shrink-0" : "w-full"
           }`}
         >
@@ -259,7 +259,7 @@ export default function DocumentsTable({ documents, onRefresh }: Props) {
 
         {/* PDF-Vorschau rechts */}
         {previewDocId !== null && (
-          <div className="flex w-1/2 shrink-0 flex-col rounded-lg border bg-white shadow-sm">
+          <div className="flex w-1/2 shrink-0 flex-col card">
             <div className="flex items-center justify-between border-b px-4 py-2">
               <h3 className="text-sm font-medium">PDF-Vorschau #{previewDocId}</h3>
               <button

@@ -195,7 +195,7 @@ export default function Assistant() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col rounded-lg border bg-white shadow-sm" data-testid="assistant">
+    <div className="flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col card" data-testid="assistant">
       <div className="flex flex-wrap items-center gap-3 border-b px-4 py-2 text-sm">
         <label className="flex items-center gap-2 text-gray-600">
           KI:
@@ -254,7 +254,7 @@ export default function Assistant() {
         <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={2} placeholder="Frage stellen … (Enter = senden, Shift+Enter = Zeilenumbruch)"
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
           className="flex-1 resize-none rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" data-testid="assistant-input" />
-        <button type="submit" disabled={busy || !input.trim()} className="self-end rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">Senden</button>
+        <button type="submit" disabled={busy || !input.trim()} className="self-end btn btn-primary">Senden</button>
       </form>
     </div>
   );

@@ -24,6 +24,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Pager from "@/components/common/Pager";
+import { Alert, PageHeader } from "@/components/ui";
 import { fetchAllPages, matchesWords } from "@/lib/loadAll";
 import AnalysisHistoryPanel from "@/components/belege/AnalysisHistoryPanel";
 import AskModal from "@/components/belege/AskModal";
@@ -789,18 +790,18 @@ export default function BelegePage() {
     <>
       {/* ── Kopfbereich ─────────────────────────────────────────────────── */}
       <div>
-        <h1 className="mb-6 text-2xl font-semibold tracking-tight text-gray-900">Belege</h1>
+        <PageHeader title="Belege" subtitle="Belege filtern, mit einem Workflow analysieren und die Ergebnisse prüfen." />
 
         {/* ── Meldungen ──────────────────────────────────────────────── */}
         {error && (
-          <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700 border border-red-200">{error}</div>
+          <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>
         )}
         {successMsg && (
-          <div className="mb-4 rounded-md bg-green-50 p-3 text-sm text-green-700 border border-green-200">{successMsg}</div>
+          <div className="mb-4"><Alert tone="success" onClose={() => setSuccessMsg(null)}>{successMsg}</Alert></div>
         )}
 
         {/* ── Filter ────────────────────────────────────────────────── */}
-        <div className="mb-4 rounded-lg border bg-white p-4 shadow-sm">
+        <div className="card mb-4 p-4">
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Import</label>
@@ -912,7 +913,7 @@ export default function BelegePage() {
             </label>
             <div className="flex gap-2 mt-auto">
               <button onClick={applyFilters}
-                className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
+                className="btn btn-primary transition-colors">
                 Filter anwenden
               </button>
               <button onClick={resetFilters}
@@ -952,7 +953,7 @@ export default function BelegePage() {
               </label>
             </div>
             <button onClick={startAnalysis} disabled={analyzing || selectedIds.size === 0 || !selectedWorkflowId}
-              className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              className="btn btn-primary disabled:cursor-not-allowed transition-colors">
               {analyzing ? "Wird eingereiht…" : "KI-Analyse starten"}
             </button>
           </div>
@@ -992,7 +993,7 @@ export default function BelegePage() {
           <div ref={infosContainerRef}>
             <div className="mb-4 flex items-center gap-3 rounded-lg border bg-white px-4 py-2.5 shadow-sm">
               <button onClick={closeView}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                className="btn btn-secondary btn-sm transition-colors">
                 ← Zur Liste
               </button>
               <div className="h-5 w-px bg-gray-200" />
@@ -1004,11 +1005,11 @@ export default function BelegePage() {
               )}
               <div className="ml-auto flex items-center gap-2">
                 <button onClick={() => navigateInfos(-1)} disabled={page * pageSize + infosIdx <= 0 || viewLoading}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
+                  className="btn btn-secondary btn-sm disabled:opacity-40 transition-colors">
                   ← Vorherige
                 </button>
                 <button onClick={() => navigateInfos(1)} disabled={page * pageSize + infosIdx >= total - 1 || viewLoading}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
+                  className="btn btn-secondary btn-sm disabled:opacity-40 transition-colors">
                   Nächste →
                 </button>
                 {infosDocId !== null && (
@@ -1030,12 +1031,12 @@ export default function BelegePage() {
             </div>
 
             {viewLoading ? (
-              <div className="flex items-center justify-center py-16 text-gray-400 text-sm rounded-xl border bg-white shadow-sm">
+              <div className="flex items-center justify-center py-16 text-gray-400 text-sm card">
                 <span className="animate-spin mr-2 inline-block">⟳</span> Lade…
               </div>
             ) : viewedDoc ? (
               <div className="flex gap-4">
-                <div className="w-1/2 shrink-0 overflow-y-auto rounded-xl border bg-white shadow-sm" style={{ maxHeight: "calc(113vh - 14rem)" }}>
+                <div className="w-1/2 shrink-0 overflow-y-auto card" style={{ maxHeight: "calc(113vh - 14rem)" }}>
                   <div className="sticky top-0 z-10 border-b bg-white px-5 py-3">
                     <h2 className="text-sm font-semibold text-gray-900 truncate">{viewedDoc.original_filename}</h2>
                     <p className="text-xs text-gray-500">{viewedDoc.company} {viewedDoc.year} · #{viewedDoc.id}</p>
@@ -1050,7 +1051,7 @@ export default function BelegePage() {
                     <InfosView doc={viewedDoc} onDocChange={setViewedDoc} />
                   </div>
                 </div>
-                <div className="w-1/2 shrink-0 rounded-xl border bg-white shadow-sm overflow-hidden">
+                <div className="w-1/2 shrink-0 card overflow-hidden">
                   <iframe
                     src={documentsApi.previewUrl(viewedDoc.id)}
                     className="w-full rounded-xl"
@@ -1060,7 +1061,7 @@ export default function BelegePage() {
                 </div>
               </div>
             ) : (
-              <div className="rounded-xl border bg-white shadow-sm p-6 text-sm text-red-500">
+              <div className="card p-6 text-sm text-red-500">
                 Dokument konnte nicht geladen werden.
               </div>
             )}
@@ -1077,9 +1078,9 @@ export default function BelegePage() {
               localFilter={localQ} onLocalFilter={changeLocalFilter} />
 
             {/* Tabelle */}
-            <div className={`overflow-x-auto rounded-lg border bg-white shadow-sm ${showPreview ? "w-1/2" : "w-full"}`}>
-              <table className="min-w-full divide-y divide-gray-200 text-sm">
-                <thead className="bg-gray-50">
+            <div className={`card overflow-x-auto ${showPreview ? "w-1/2" : "w-full"}`}>
+              <table className="table-ra min-w-full">
+                <thead>
                   <tr>
                     <th className="w-10 px-3 py-3">
                       <input type="checkbox" checked={allSelected}
@@ -1087,26 +1088,26 @@ export default function BelegePage() {
                         onChange={toggleSelectAll}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
                     </th>
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">#</th>
-                    {!showPreview && <th className="px-3 py-3 text-left font-medium text-gray-600">Firma</th>}
-                    {!showPreview && <th className="px-3 py-3 text-left font-medium text-gray-600">Jahr</th>}
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">Dateiname</th>
-                    {!showPreview && <th className="px-3 py-3 text-right font-medium text-gray-600">Seiten</th>}
-                    {!showPreview && <th className="px-3 py-3 text-right font-medium text-gray-600">Betrag</th>}
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">Status</th>
-                    {!showPreview && <th className="px-3 py-3 text-left font-medium text-gray-600">KI</th>}
-                    <th className="px-3 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Prüfung</th>
+                    <th className="px-3 py-3 text-left">#</th>
+                    {!showPreview && <th className="px-3 py-3 text-left">Firma</th>}
+                    {!showPreview && <th className="px-3 py-3 text-left">Jahr</th>}
+                    <th className="px-3 py-3 text-left">Dateiname</th>
+                    {!showPreview && <th className="px-3 py-3 text-right">Seiten</th>}
+                    {!showPreview && <th className="px-3 py-3 text-right">Betrag</th>}
+                    <th className="px-3 py-3 text-left">Status</th>
+                    {!showPreview && <th className="px-3 py-3 text-left">KI</th>}
+                    <th className="px-3 py-3 text-left whitespace-nowrap">Prüfung</th>
                     {!showPreview && (
                       <>
-                        <th className="px-3 py-3 text-left font-medium text-gray-600">Dokumententyp</th>
-                        <th className="px-3 py-3 text-left font-medium text-gray-600">Rechnungsnr.</th>
-                        <th className="px-3 py-3 text-left font-medium text-gray-600">Lieferant</th>
+                        <th className="px-3 py-3 text-left">Dokumententyp</th>
+                        <th className="px-3 py-3 text-left">Rechnungsnr.</th>
+                        <th className="px-3 py-3 text-left">Lieferant</th>
                       </>
                     )}
-                    <th className="px-3 py-3 text-left font-medium text-gray-600">Aktionen</th>
+                    <th className="px-3 py-3 text-left">Aktionen</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody>
                   {loading && documents.length === 0 && (
                     <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">Wird geladen...</td></tr>
                   )}

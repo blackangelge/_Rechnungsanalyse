@@ -122,7 +122,7 @@ export default function SystemPromptsPage() {
         <button
           onClick={openNew}
           disabled={editingId !== null}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="btn btn-primary"
         >
           + Neuer Prompt
         </button>
@@ -133,7 +133,7 @@ export default function SystemPromptsPage() {
 
       {/* Formular */}
       {editingId !== null && (
-        <div className="rounded-lg border bg-white p-5 shadow-sm space-y-4">
+        <div className="card p-5 space-y-4">
           <h2 className="text-sm font-semibold">
             {editingId === "new" ? "Neuer Systemprompt" : "Systemprompt bearbeiten"}
           </h2>
@@ -229,7 +229,7 @@ export default function SystemPromptsPage() {
             <button
               onClick={save}
               disabled={saving || !formName.trim() || !formContent.trim()}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="btn btn-primary"
             >
               {saving ? "Speichern..." : "Speichern"}
             </button>
@@ -259,7 +259,7 @@ export default function SystemPromptsPage() {
       ) : (
         <div className="space-y-3">
           {prompts.map((p) => (
-            <div key={p.id} className="rounded-lg border bg-white p-4 shadow-sm">
+            <div key={p.id} className="card p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">

@@ -76,7 +76,7 @@ export default function BackupPage() {
       )}
 
       {/* Backup herunterladen */}
-      <div className="rounded-lg border bg-white p-6 shadow-sm">
+      <div className="card p-6">
         <h2 className="mb-1 text-base font-semibold text-gray-900">Backup herunterladen</h2>
         <p className="mb-4 text-sm text-gray-500">
           Exportiert alle KI-Konfigurationen, Systemprompts und Bildeinstellungen als JSON-Datei.
@@ -91,7 +91,7 @@ export default function BackupPage() {
       </div>
 
       {/* Backup wiederherstellen */}
-      <div className="rounded-lg border bg-white p-6 shadow-sm">
+      <div className="card p-6">
         <h2 className="mb-1 text-base font-semibold text-gray-900">Backup wiederherstellen</h2>
         <p className="mb-1 text-sm text-gray-500">
           Stellt Einstellungen aus einer zuvor erstellten Backup-Datei wieder her.

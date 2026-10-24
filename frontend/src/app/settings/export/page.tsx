@@ -24,7 +24,7 @@ function FieldCheckboxGroup({
     }
   }
   return (
-    <div className="rounded-lg border bg-white p-5 shadow-sm">
+    <div className="card p-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="font-semibold">{title}</h2>
         <div className="flex gap-2">

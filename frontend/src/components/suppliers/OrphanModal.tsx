@@ -126,7 +126,7 @@ export default function OrphanModal({
           <div className="flex gap-2">
             <button onClick={onClose} className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">Schließen</button>
             <button onClick={apply} disabled={busy || chosen.length === 0} data-testid="orphan-apply"
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+              className="btn btn-primary">
               Ausgewählte zuordnen
             </button>
           </div>

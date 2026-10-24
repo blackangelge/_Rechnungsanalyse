@@ -75,7 +75,7 @@ export default function AiTestPage() {
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border bg-white p-6 shadow-sm">
+      <form onSubmit={handleSubmit} className="space-y-4 card p-6">
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">
             KI-Konfiguration <span className="text-red-500">*</span>
@@ -139,7 +139,7 @@ export default function AiTestPage() {
         <button
           type="submit"
           disabled={loading || !configId || !file}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="btn btn-primary"
         >
           {loading ? "Sende Testanfrage… (kann bei lokalen Modellen mehrere Minuten dauern)" : "Test senden"}
         </button>
@@ -178,7 +178,7 @@ export default function AiTestPage() {
 
 function JsonBlock({ title, data }: { title: string; data: unknown }) {
   return (
-    <div className="rounded-lg border bg-white shadow-sm">
+    <div className="card">
       <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-700">{title}</div>
       <pre className="overflow-x-auto p-4 text-xs leading-relaxed text-gray-800 whitespace-pre-wrap break-words">
         {JSON.stringify(data, null, 2)}
@@ -195,7 +195,7 @@ function RawBlock({ title, text }: { title: string; text: string }) {
     // kein valides JSON — Rohtext anzeigen
   }
   return (
-    <div className="rounded-lg border bg-white shadow-sm">
+    <div className="card">
       <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-700">{title}</div>
       <pre className="overflow-x-auto p-4 text-xs leading-relaxed text-gray-800 whitespace-pre-wrap break-words max-h-[600px] overflow-y-auto">
         {display}

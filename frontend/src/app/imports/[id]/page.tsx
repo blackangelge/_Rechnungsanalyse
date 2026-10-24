@@ -266,7 +266,7 @@ export default function ImportDetailPage() {
                 setError("Aus-/Einblenden fehlgeschlagen");
               }
             }}
-            className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
+            className="btn btn-secondary btn-sm"
             title={batch.hidden_at ? "Wieder in Dashboard und Belegen anzeigen" : "Aus Dashboard und Belegen ausblenden (nichts wird gelöscht)"}
           >
             {batch.hidden_at ? "Einblenden" : "Ausblenden"}
@@ -309,7 +309,7 @@ export default function ImportDetailPage() {
       </div>
 
       {/* Workflow dieses Imports */}
-      <div className="rounded-lg border bg-white p-4 shadow-sm">
+      <div className="card p-4">
         <div className="flex flex-wrap items-center gap-3">
           <label htmlFor="batch-wf" className="text-sm font-semibold text-gray-900">Analyse-Workflow</label>
           <select id="batch-wf" className="input w-auto min-w-[16rem]" value={batch.workflow_id ?? ""} onChange={(e) => handleWorkflowChange(e.target.value)}>
@@ -322,7 +322,7 @@ export default function ImportDetailPage() {
 
       {/* Worker-Queue-Status für diesen Import */}
       {queueStatus && (
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
+        <div className="card p-4">
           <div className="flex flex-wrap items-center gap-4">
             <h2 className="text-sm font-semibold text-gray-900">Worker-Queue</h2>
             <span className="text-sm text-gray-600">
@@ -391,7 +391,7 @@ export default function ImportDetailPage() {
             <button
               onClick={handleManualRefresh}
               disabled={docsLoading}
-              className="rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              className="btn btn-secondary btn-sm disabled:opacity-40"
             >
               {docsLoading ? "Lade…" : "↻ Aktualisieren"}
             </button>
