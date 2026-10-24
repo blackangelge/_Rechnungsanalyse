@@ -886,6 +886,7 @@ def _build_export_excel(
     invoice_fields: list[str],
     position_fields: list[str],
     batches=None,
+    title: str | None = None,
 ) -> bytes:
     """
     Erstellt eine formatierte Excel-Datei mit zwei Sheets.
@@ -1084,7 +1085,7 @@ def _build_export_excel(
 
     title = WriteOnlyCell(
         ws1,
-        value=(f"Export: {len(batches)} Imports" if batches and len(batches) > 1 else f"Export: {batch.company_name} {batch.year}"),
+        value=(title or (f"Export: {len(batches)} Imports" if batches and len(batches) > 1 else f"Export: {batch.company_name} {batch.year}")),
     )
     title.font = Font(name="Arial", size=13, bold=True)
     ws1.append([title])

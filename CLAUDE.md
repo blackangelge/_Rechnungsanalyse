@@ -950,6 +950,13 @@ Der Worker-Container (`app/worker/main.py`) ist nur im Docker-Netz erreichbar (`
 - Neue Tabellen erscheinen automatisch; ein Geheimnis in einer neuen Spalte gehört in `SECRET_COLUMNS`, eine neue Zugangs-Tabelle in `HIDDEN_TABLES` (`db_tools.py`). Tests: `tests/test_db_browser.py` (KI-Antworten werden vorgegeben).
 - Belege-Infos: Mengen/Einheit/Einzelpreis zeigen die **gespeicherten** Werte; weichen sie (Altbestand, früher umgerechnet) von der KI-Auslesung ab, steht der Wortlaut der Rechnung darunter („lt. Rechnung: 25.500 kg“).
 
+### Excel-Export nach Lieferanten (`routers/vendors.py`)
+
+`GET /api/vendors/export?ids=1&ids=2` — alle nicht gelöschten Belege/Positionen der gewählten Lieferanten (über alle Imports, auch ausgeblendete) in einer Datei,
+gleiche Spalten wie der Import-Export (`_build_export_excel(..., title=...)`); Zuordnung über `name_key` des extrahierten Namens (Schreibvarianten zählen mit);
+≥ 2 Imports → Spalte „Import“. 404 bei unbekannter ID oder ohne Belege. Frontend `/lieferanten`: Auswahl → „↓ Excel exportieren“. Route steht vor `/{vendor_id}`.
+Referenz zum erwarteten KI-JSON: `docs/KI-Antwortformat.md`.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:

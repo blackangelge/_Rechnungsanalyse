@@ -5,6 +5,7 @@ Endpunkte:
   GET    /api/vendors          — alle Lieferanten auflisten
   GET    /api/vendors/duplicate-groups — Dublettensuche (IBAN, USt-IdNr., Steuernr., Name)
   POST   /api/vendors/merge    — Lieferanten zusammenführen
+  GET    /api/vendors/export           — alle Belege/Positionen gewählter Lieferanten als Excel (?ids=1&ids=2)
   GET    /api/vendors/orphan-names     — Belege, deren Lieferantenname zu keinem Lieferanten gehört (mit Vorschlag)
   POST   /api/vendors/reassign-names   — bestätigte Zuordnungen umschreiben (protokolliert, rückgängig machbar)
   GET    /api/vendors/{id}     — einzelnen Lieferanten abrufen
@@ -16,7 +17,11 @@ Lieferanten werden beim Anlegen automatisch dedupliziert (find_or_create in crud
 Diese Endpunkte dienen zur manuellen Verwaltung bestehender Einträge.
 """
 
+import io
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app import crud
@@ -135,6 +140,67 @@ def merge_vendors(payload: VendorMergeRequest, db: Session = Depends(get_db)):
         merged_ids=result.merged_ids,
         moved_documents=result.moved_documents,
         moved_bank_accounts=result.moved_bank_accounts,
+    )
+
+
+@router.get("/export")
+def export_vendors_excel(
+    ids: list[int] = Query(..., description="Lieferanten-IDs (mehrfach angeben)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Exportiert ALLE Belege (Sheet „Rechnungen") und Positionen (Sheet „Positionen") der gewählten Lieferanten in eine Excel-Datei
+    — über alle Imports hinweg (auch ausgeblendete), nicht gelöschte Belege, gleiche Spalten wie der Import-Export.
+    Die Zuordnung läuft über den extrahierten Lieferantennamen (Groß/Klein und Leerzeichen egal); liegen die Belege in mehreren
+    Imports, kommt am Ende die Spalte „Import" dazu.
+    """
+    from app.models.document import Document
+    from app.models.import_batch import ImportBatch
+    from app.models.invoice_extraction import InvoiceExtraction
+    from app.routers.imports import _build_export_excel, _content_disposition, _get_export_config_fields
+    from sqlalchemy.orm import joinedload
+
+    ids = list(dict.fromkeys(ids))
+    vendors = [crud.vendor.get_by_id(db, i) for i in ids]
+    missing = [i for i, v in zip(ids, vendors) if v is None]
+    if missing:
+        raise HTTPException(status_code=404, detail="Lieferant(en) nicht gefunden: " + ", ".join(f"#{i}" for i in missing))
+    keys = {crud.vendor.name_key(v.name) for v in vendors}
+    names = [n for (n,) in db.query(InvoiceExtraction.vendor_id).filter(InvoiceExtraction.vendor_id.isnot(None)).distinct()
+             if crud.vendor.name_key(n) in keys]
+    base = (
+        db.query(Document.id).join(InvoiceExtraction, InvoiceExtraction.document_id == Document.id)
+        .filter(InvoiceExtraction.vendor_id.in_(names), Document.soft_deleted == False)  # noqa: E712
+    ) if names else None
+    batch_ids = sorted({r[0] for r in db.query(Document.batch_id).filter(Document.id.in_(base.subquery().select()))}) if base is not None else []
+    if not batch_ids:
+        raise HTTPException(status_code=404, detail="Zu den gewählten Lieferanten gibt es keine Belege.")
+    batches = db.query(ImportBatch).filter(ImportBatch.id.in_(batch_ids)).order_by(ImportBatch.id).all()
+
+    def docs():
+        last = 0
+        while True:
+            chunk = (
+                db.query(Document).join(InvoiceExtraction, InvoiceExtraction.document_id == Document.id)
+                .options(joinedload(Document.extraction), joinedload(Document.order_positions))
+                .filter(InvoiceExtraction.vendor_id.in_(names), Document.soft_deleted == False, Document.id > last)  # noqa: E712
+                .order_by(Document.id).limit(300).all()
+            )
+            if not chunk:
+                break
+            last = chunk[-1].id
+            yield from chunk
+            db.expunge_all()
+
+    invoice_fields, position_fields = _get_export_config_fields(db)
+    title = f"Export: {vendors[0].name}" if len(vendors) == 1 else f"Export: {len(vendors)} Lieferanten"
+    excel = _build_export_excel(batches[0], docs(), invoice_fields, position_fields,
+                                batches=batches if len(batches) > 1 else None, title=title)
+    label = (vendors[0].name if len(vendors) == 1 else f"{len(vendors)}_Lieferanten").replace(" ", "_")[:60]
+    return StreamingResponse(
+        io.BytesIO(excel),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": _content_disposition(f"Export_Lieferant_{label}_{date.today().isoformat()}.xlsx")},
     )
 
 

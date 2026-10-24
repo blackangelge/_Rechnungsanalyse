@@ -274,3 +274,49 @@ def test_reassign_unknown_vendor_changes_nothing(client, world):
     assert r.status_code == 404
     world.db.expire_all()
     assert d.extraction.vendor_id == "Alter Name"
+
+
+# ─── Excel-Export nach Lieferanten ─────────────────────────────────────────────
+
+def _export(client, *ids):
+    import io
+    from openpyxl import load_workbook
+    r = client.get("/api/vendors/export", params={"ids": list(ids)})
+    assert r.status_code == 200, r.text
+    wb = load_workbook(io.BytesIO(r.content))
+    return wb["Rechnungen"], wb["Positionen"], r
+
+
+def test_vendor_export_contains_only_selected_vendors_documents(client, world):
+    _variant_docs(world)                                    # 3 Belege mit Schreibvarianten (2× ACME, 1× Acme & Co.)
+    ws, _, r = _export(client, world.a.id)
+    rows = [[c.value for c in row] for row in ws.iter_rows(min_row=3)]            # Zeile 1 = Titel, 2 = Kopf
+    header = [c.value for c in ws[2]]
+    names = [row[header.index("Lieferant")] for row in rows]
+    assert len(rows) == 4 and set(n.strip().casefold() for n in names) <= {"acme gmbh", "acme   gmbh"} or all("acme" in n.casefold() for n in names)
+    assert not any("Fremd" in (n or "") for n in names)
+    assert "xlsx" in r.headers["content-disposition"]
+    assert ws["A1"].value == "Export: ACME GmbH"
+
+
+def test_vendor_export_multiple_vendors_and_positions_sheet(client, world):
+    ws, wsp, _ = _export(client, world.a.id, world.c.id)
+    assert ws["A1"].value == "Export: 2 Lieferanten"
+    docs_rows = [row for row in ws.iter_rows(min_row=3, values_only=True) if any(row)]
+    assert len(docs_rows) == 3                              # a1, a2, c1
+
+
+def test_vendor_export_errors(client, world):
+    assert client.get("/api/vendors/export", params={"ids": [99999]}).status_code == 404
+    empty = Vendor(name="Ohne Belege")
+    world.db.add(empty)
+    world.db.commit()
+    r = client.get("/api/vendors/export", params={"ids": [empty.id]})
+    assert r.status_code == 404 and "keine Belege" in r.json()["detail"]
+
+
+def test_vendor_export_excludes_deleted_documents(client, world):
+    world.docs["a2"].soft_deleted = True
+    world.db.commit()
+    ws, _, _ = _export(client, world.a.id)
+    assert len([row for row in ws.iter_rows(min_row=3, values_only=True) if any(row)]) == 1

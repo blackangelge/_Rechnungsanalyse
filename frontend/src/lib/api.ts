@@ -1025,6 +1025,8 @@ export interface OrphanName {
 }
 
 export const vendorsApi = {
+  /** Excel mit allen Belegen und Positionen der gewählten Lieferanten */
+  exportUrl: (ids: number[]) => `/api/vendors/export/?${ids.map((i) => `ids=${i}`).join("&")}`,
   /** Belegnamen ohne Lieferant (z. B. nach früherem Zusammenführen) mit Vorschlag — verändert nichts */
   orphanNames: () =>
     apiClient.get<{ total: number; orphans: OrphanName[] }>("/api/vendors/orphan-names").then((r) => r.data),
