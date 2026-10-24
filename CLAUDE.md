@@ -977,6 +977,11 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - **Systemfunktionen** (`services/field_functions.py`, Quelle `system`): `page_count`, `file_name`, `file_hash` (SHA-256 der aktuellen PDF), `received_at`, `document_type_id`, `batch_company`, `batch_year`, `constant`.
   `DocumentContext` (kein DB-Zugriff in den Funktionen) wird mit `build_context(document)` gebaut. Ergebnistyp muss zum Feldtyp passen (`validate_function`); Kette und Funktion werden beim Speichern und beim Aktivieren geprüft.
 - API (nur lesend): `GET /api/schema/normalizers|functions` (inkl. Parameter-Schema für Formulare), `POST /api/schema/normalizers/preview` (Kette auf Beispielwert, nichts gespeichert).
+- **Mengeneinheiten** (Migration `0019_units`, `models/units.py`, `crud/units.py`, `services/units.py`, `routers/units.py`): Gruppen (Masse, Volumen, Länge, Fläche, Anzahl, Verpackung), je Gruppe genau eine Basiseinheit (Faktor 1,
+  partieller Unique-Index); Faktor = Anzahl dieser Einheit pro 1 Basiseinheit (Basis Tonne: kg = 1000), normiert = Original ÷ Faktor. Aliasse global eindeutig; Einheiten mit `case_insensitive` kollidieren auch bei anderer Schreibweise,
+  Konflikt → `UnitError`/HTTP 409 mit Hinweis auf die belegende Einheit. Mengenfelder im JSONB: `{original_value, original_unit, value, unit, unit_id, group_id, status}` (`status`: ok · no_unit · unknown_unit · wrong_group · invalid · no_value).
+  **Unbekannte Einheiten werden nie stillschweigend übernommen:** Originalwert/-einheit bleiben, `value`/`unit` leer, ein Eintrag in `unit_review_items` (je Datensatz+Feld). Zuordnung (`POST /api/units/review/assign`) legt den Alias an und rechnet alle offenen Vorkommen neu.
+  Seed: `services/units_seed.py` (über `python -m app.scripts.seed_schema`). Basen wie bisher: t, l, m, m², Stk.
 - **Entscheidung: nur Workflows, kein „Standard“.** Im neuen System läuft jede Analyse über einen ausdrücklich gewählten Workflow — kein Standard-Workflow, kein klassischer Ablauf,
   keine automatische Auswahl (Phase 4 baut die Einstiegspunkte entsprechend um: Workflow ist bei jeder Abfrage Pflicht).
 - Geplant: Phase 3 Einheiten (unbekannte Einheiten → Prüfliste, Beleg wird trotzdem fertig), 4 Pydantic-Modelle → `response_format: json_schema` (vLLM 0.32) + Tool-Erweiterungspunkt, 5 Export, 6 komplett neues Frontend.
