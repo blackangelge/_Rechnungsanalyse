@@ -70,6 +70,7 @@ export default function ImageSettingsPage() {
         dpi,
         image_format: imageFormat,
         jpeg_quality: jpegQuality,
+        grayscale: settings?.grayscale ?? false,
       });
       setSuccess(true);
       // Erfolgsmeldung nach 3 Sekunden ausblenden

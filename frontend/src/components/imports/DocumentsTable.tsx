@@ -155,8 +155,8 @@ export default function DocumentsTable({ documents, onRefresh }: Props) {
                     {doc.stored_filename && (
                       <p className="text-xs text-gray-400">→ {doc.stored_filename}</p>
                     )}
-                    {doc.error_message && (
-                      <p className="text-xs text-red-500 mt-0.5">{doc.error_message}</p>
+                    {doc.error_code && (
+                      <p className="mt-0.5 text-xs text-orange-700">Nachbearbeitung nötig: {doc.error_code}</p>
                     )}
                   </td>
 

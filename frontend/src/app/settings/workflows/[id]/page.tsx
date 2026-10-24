@@ -35,15 +35,9 @@ export default function WorkflowEditPage() {
   }, [id]);
 
   return (
-    <div className="relative left-1/2 w-screen -translate-x-1/2 px-6">
+    <div className="w-full">
       <div className="mb-3 flex items-center gap-3 text-sm">
         <Link href="/settings/workflows" className="text-blue-700 hover:underline">← Alle Workflows</Link>
-        {workflow?.is_default && (
-          <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Standard-Workflow</span>
-        )}
-        {workflow && workflow.supplier_count > 0 && (
-          <span className="text-xs text-gray-500">verwendet von {workflow.supplier_count} Lieferant(en)</span>
-        )}
       </div>
       {error && <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {!workflow && !error && <p className="py-10 text-center text-sm text-gray-400">Lade…</p>}

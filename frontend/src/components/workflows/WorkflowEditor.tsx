@@ -240,6 +240,56 @@ function Inspector({
         </>
       )}
 
+      {t === "schema_extract" && (
+        <>
+          <Field label="Schema-Version" hint="Leer = aktive Version. Eine feste Version macht den Workflow reproduzierbar.">
+            <input type="number" min={1} className={inputCls} value={cfg.schema_version_id ?? ""} placeholder="aktive Version"
+              onChange={(e) => onChange({ config: { schema_version_id: num(e.target.value) } })} />
+          </Field>
+          <Field label="Zusatzanweisung (Baustein)" hint="Optionaler Systemprompt, der hinter den generierten Prompt gehängt wird (z. B. Besonderheiten Ihrer Lieferanten).">
+            <select className={inputCls} value={cfg.system_prompt_id ?? ""}
+              onChange={(e) => onChange({ config: { system_prompt_id: num(e.target.value) } })}>
+              <option value="">Keine</option>
+              {prompts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+          <Field label="KI-Konfiguration" hint="Leer = in der Analyse gewählte KI.">
+            <select className={inputCls} value={cfg.ai_config_id ?? ""}
+              onChange={(e) => onChange({ config: { ai_config_id: num(e.target.value) } })}>
+              <option value="">Wie in der Analyse</option>
+              {aiConfigs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+        </>
+      )}
+
+      {t === "classify_pages" && (
+        <>
+          <Field label="Ergebnis" hint="„Nur Rechnungsseiten behalten“ legt eine neue PDF-Version an, das Original bleibt erhalten.">
+            <select className={inputCls} value={cfg.action ?? "classify_only"}
+              onChange={(e) => onChange({ config: { action: e.target.value as "classify_only" | "keep_invoice_pages" } })}>
+              <option value="classify_only">Nur erkennen (PDF bleibt)</option>
+              <option value="keep_invoice_pages">Nur Rechnungsseiten behalten</option>
+            </select>
+          </Field>
+          <Field label="Auflösung (dpi)" hint="Niedrig genügt zum Erkennen und spart Token.">
+            <input type="number" min={40} max={200} className={inputCls} value={cfg.dpi ?? 80}
+              onChange={(e) => onChange({ config: { dpi: Math.min(200, Math.max(40, Number(e.target.value) || 80)) } })} />
+          </Field>
+          <Field label="Seiten je KI-Anfrage">
+            <input type="number" min={1} max={30} className={inputCls} value={cfg.chunk_size ?? 10}
+              onChange={(e) => onChange({ config: { chunk_size: Math.min(30, Math.max(1, Number(e.target.value) || 10)) } })} />
+          </Field>
+          <Field label="KI-Konfiguration" hint="Leer = in der Analyse gewählte KI.">
+            <select className={inputCls} value={cfg.ai_config_id ?? ""}
+              onChange={(e) => onChange({ config: { ai_config_id: num(e.target.value) } })}>
+              <option value="">Wie in der Analyse</option>
+              {aiConfigs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+        </>
+      )}
+
       {t === "validate" && (
         <>
           <label className="mb-2 flex items-start gap-2 text-sm text-gray-700">

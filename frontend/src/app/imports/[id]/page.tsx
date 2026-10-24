@@ -14,7 +14,7 @@
 import { downloadLinkHandler } from "@/lib/download";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { BatchKiStats, BatchQueueStatus, ImportBatch, DocumentItem, importsApi } from "@/lib/api";
+import { BatchKiStats, BatchQueueStatus, ImportBatch, DocumentItem, WorkflowListItem, extractApiError, importsApi, workflowsApi } from "@/lib/api";
 import ProgressPanel from "@/components/imports/ProgressPanel";
 import DocumentsTable from "@/components/imports/DocumentsTable";
 
@@ -32,6 +32,9 @@ export default function ImportDetailPage() {
   // Worker-Queue-Status für diesen Batch (pending/in_progress/completed/failed)
   const [queueStatus, setQueueStatus] = useState<BatchQueueStatus | null>(null);
   const [queueActionLoading, setQueueActionLoading] = useState(false);
+  // Workflow dieses Imports (Pflicht für Ordner-Sync und erneutes Einreihen — kein Standard-Workflow)
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+  useEffect(() => { workflowsApi.list().then(setWorkflows).catch(() => setWorkflows([])); }, []);
 
   const [metaLoading, setMetaLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +204,19 @@ export default function ImportDetailPage() {
     }
   }, [batchId, loadQueueStatus]);
 
+  /** Workflow dieses Imports festlegen */
+  const handleWorkflowChange = useCallback(
+    async (value: string) => {
+      try {
+        const updated = await importsApi.updateAutomation(batchId, { workflow_id: value ? Number(value) : null });
+        setBatch(updated);
+      } catch (err) {
+        setError(extractApiError(err, "Workflow konnte nicht gespeichert werden"));
+      }
+    },
+    [batchId]
+  );
+
   /** Ordner-Sync bzw. automatischen Export nachträglich umschalten */
   const handleToggleAutomation = useCallback(
     async (field: "folder_sync" | "auto_export", value: boolean) => {
@@ -298,6 +314,18 @@ export default function ImportDetailPage() {
         </div>
       </div>
 
+      {/* Workflow dieses Imports */}
+      <div className="rounded-lg border bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="batch-wf" className="text-sm font-semibold text-gray-900">Analyse-Workflow</label>
+          <select id="batch-wf" className="input w-auto min-w-[16rem]" value={batch.workflow_id ?? ""} onChange={(e) => handleWorkflowChange(e.target.value)}>
+            <option value="">— kein Workflow gewählt —</option>
+            {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <span className="text-xs text-gray-500">Gilt für „Import erneut senden“ und die Ordner-Überwachung. Es gibt keinen Standard-Workflow.</span>
+        </div>
+      </div>
+
       {/* Worker-Queue-Status für diesen Import */}
       {queueStatus && (
         <div className="rounded-lg border bg-white p-4 shadow-sm">
@@ -318,7 +346,7 @@ export default function ImportDetailPage() {
             <div className="ml-auto flex gap-2">
               <button
                 onClick={handleRequeueBatch}
-                disabled={queueActionLoading}
+                disabled={queueActionLoading || !batch.workflow_id}
                 title="Alle Dokumente dieses Imports erneut zur KI-Analyse einreihen"
                 className="rounded border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-40 transition-colors"
               >

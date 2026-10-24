@@ -41,6 +41,18 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
     head: "bg-blue-700 text-white", border: "border-blue-400",
     defaultConfig: { system_prompt_id: null, ai_config_id: null },
   },
+  schema_extract: {
+    label: "Schema-Extraktion",
+    description: "Die KI füllt das aktive Schema (Entitäten, Felder, Normalisierer, Einheiten) per Structured Output. Der Prompt entsteht aus der Schema-Definition.",
+    head: "bg-indigo-700 text-white", border: "border-indigo-400",
+    defaultConfig: { ai_config_id: null, schema_version_id: null, system_prompt_id: null },
+  },
+  classify_pages: {
+    label: "Seiten erkennen",
+    description: "Die KI ordnet jede Seite einem Typ zu (Rechnung, Lieferschein …) — auch bei Scans. Optional bleiben nur die Rechnungsseiten (neue PDF-Version).",
+    head: "bg-orange-600 text-white", border: "border-orange-400",
+    defaultConfig: { dpi: 80, chunk_size: 10, action: "classify_only", ai_config_id: null },
+  },
   validate: {
     label: "Plausibilität prüfen",
     description: "Rechnerische Prüfung, Einheiten-Korrektur, optional zweite KI-Abfrage.",
@@ -68,13 +80,14 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
 };
 
 export const NODE_ORDER: WorkflowNodeType[] = [
-  "trim_pages", "detect_type", "branch", "extract", "validate", "normalize_units", "ai_refine", "end",
+  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "end",
 ];
 
 export const BRANCH_FIELDS: Record<string, string> = {
   document_type: "Dokumententyp",
   supplier_name: "Lieferant",
   page_count: "Seitenzahl",
+  invoice_page_count: "Rechnungsseiten (nach Seitenerkennung)",
   validation_status: "Prüfstatus",
 };
 
@@ -92,6 +105,7 @@ export const ALLOWED_OPS: Record<string, string[]> = {
   document_type: ["equals", "not_equals", "in", "contains"],
   supplier_name: ["equals", "not_equals", "contains", "in"],
   page_count: ["equals", "not_equals", "gt", "lt", "in"],
+  invoice_page_count: ["equals", "not_equals", "gt", "lt", "in"],
   validation_status: ["equals", "not_equals", "in"],
 };
 
@@ -99,5 +113,6 @@ export const VALUE_HINTS: Record<string, string> = {
   document_type: "ID oder Name, z.B. 1 oder Eingangsrechnung (mehrere mit Komma)",
   supplier_name: "Teil des Namens, z.B. ACME (Groß-/Kleinschreibung egal)",
   page_count: "Zahl, z.B. 3",
+  invoice_page_count: "Zahl, z.B. 0 (keine Rechnungsseite gefunden)",
   validation_status: "ok, corrected, ai_corrected, needs_review, manual_ok",
 };

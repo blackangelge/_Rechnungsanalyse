@@ -200,6 +200,8 @@ export interface ImportBatch {
   company_name: string;
   year: number;
   comment: string | null;
+  /** Workflow für Analyse nach Import, Ordner-Sync und erneutes Einreihen */
+  workflow_id?: number | null;
   status: "pending" | "running" | "done" | "error";
   folder_sync: boolean | null;
   last_synced_at: string | null;
@@ -225,6 +227,8 @@ export interface ImportBatchCreate {
   year?: number;
   ai_config_id?: number;
   system_prompt_id?: number;
+  /** Pflicht bei analyze_after_import oder folder_sync — es gibt keinen Standard-Workflow */
+  workflow_id?: number;
   analyze_after_import?: boolean;
   delete_source_files?: boolean;
   folder_sync?: boolean;
@@ -264,7 +268,7 @@ export const importsApi = {
     apiClient.get<ImportBatch>(`/api/imports/${id}/status`).then((r) => r.data),
   kiStats: (id: number) =>
     apiClient.get<BatchKiStats>(`/api/imports/${id}/ki-stats`).then((r) => r.data),
-  updateAutomation: (id: number, data: { folder_sync?: boolean; auto_export?: boolean }) =>
+  updateAutomation: (id: number, data: { folder_sync?: boolean; auto_export?: boolean; workflow_id?: number | null }) =>
     apiClient.patch<ImportBatch>(`/api/imports/${id}/automation/`, data).then((r) => r.data),
   queueStatus: (id: number) =>
     apiClient.get<BatchQueueStatus>(`/api/imports/${id}/queue-status/`).then((r) => r.data),
@@ -292,6 +296,10 @@ export interface DocumentItem {
   stored_filename: string | null;
   file_size_bytes: number;
   page_count: number;
+  /** Zustand der PDF (Hintergrunddienst): ok | encrypted | unreadable; null = noch nicht geprüft */
+  pdf_state?: "ok" | "encrypted" | "unreadable" | null;
+  /** Fehlercode, wenn der Beleg nachbearbeitet werden muss: too_many_pages | encrypted | unreadable */
+  error_code?: string | null;
   company: string | null;
   year: number | null;
   /** Integer: 0=Unbekannt, 1=Eingangsrechnung, 2=Ausgangsrechnung, … */
@@ -513,6 +521,8 @@ export interface DocumentFilter {
   doc_id?: number;
   document_type_ids?: number[];
   validation_status?: ValidationStatus[];
+  /** "any" = alle Belege, die nachbearbeitet werden müssen, oder konkrete Codes */
+  error_code?: string[];
 }
 
 export interface AnalyzeRequest {
@@ -593,11 +603,11 @@ export const documentsApi = {
   confirmValidation: (id: number) =>
     apiClient.post<DocumentDetail>(`/api/documents/${id}/validation/confirm`).then((r) => r.data),
   /** Dokumente in die Worker-Warteschlange einreihen; optional mit einem bestimmten Analyse-Workflow */
-  enqueue: (documentIds: number[], workflowId?: number, skipTypeDetection = false) =>
+  enqueue: (documentIds: number[], workflowId: number, skipTypeDetection = false) =>
     apiClient
       .post<{ enqueued: number; message: string }>("/api/documents/enqueue", {
         document_ids: documentIds,
-        ...(workflowId ? { workflow_id: workflowId } : {}),
+        workflow_id: workflowId,
         ...(skipTypeDetection ? { skip_type_detection: true } : {}),
       })
       .then((r) => r.data),
@@ -821,7 +831,7 @@ export const logsApi = {
 // ─── Typen: Workflows ─────────────────────────────────────────────────────────
 
 export type WorkflowNodeType =
-  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "validate" | "normalize_units" | "ai_refine" | "end";
+  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "end";
 
 export interface WorkflowNodeConfig {
   // trim_pages
@@ -836,11 +846,17 @@ export interface WorkflowNodeConfig {
   mode?: "tonne_prices" | "all";
   // ai_refine
   include_images?: boolean;
+  // schema_extract
+  schema_version_id?: number | null;
+  // classify_pages
+  dpi?: number;
+  chunk_size?: number;
+  action?: "classify_only" | "keep_invoice_pages";
   // validate
   auto_correct?: boolean;
   ai_recheck?: boolean;
   // branch
-  field?: "document_type" | "supplier_name" | "page_count" | "validation_status";
+  field?: "document_type" | "supplier_name" | "page_count" | "invoice_page_count" | "validation_status";
   op?: "equals" | "not_equals" | "contains" | "gt" | "lt" | "in";
   value?: string;
 }
@@ -942,10 +958,6 @@ export const workflowsApi = {
   delete: (id: number) => apiClient.delete(`/api/workflows/${id}`),
   validate: (graph: WorkflowGraph) =>
     apiClient.post<WorkflowValidation>("/api/workflows/validate", { graph }).then((r) => r.data),
-  setDefault: (id: number) =>
-    apiClient.post<Workflow>(`/api/workflows/${id}/set-default`).then((r) => r.data),
-  clearDefault: (id: number) =>
-    apiClient.post<Workflow>(`/api/workflows/${id}/clear-default`).then((r) => r.data),
   duplicate: (id: number) =>
     apiClient.post<Workflow>(`/api/workflows/${id}/duplicate`).then((r) => r.data),
 };
@@ -1053,9 +1065,6 @@ export const vendorsApi = {
   update: (id: number, data: VendorUpdate) =>
     apiClient.put<Vendor>(`/api/vendors/${id}/`, data).then((r) => r.data),
   delete: (id: number) => apiClient.delete(`/api/vendors/${id}/`),
-  /** Analyse-Workflow des Lieferanten festlegen (null = Standard-Workflow) */
-  setWorkflow: (id: number, workflow_id: number | null) =>
-    apiClient.put<Vendor>(`/api/vendors/${id}/workflow`, { workflow_id }).then((r) => r.data),
 };
 
 // ─── Typen: SSE-Fortschritts-Event ───────────────────────────────────────────

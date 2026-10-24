@@ -28,6 +28,8 @@ import {
   extractApiError,
   importsApi,
   importSettingsApi,
+  WorkflowListItem,
+  workflowsApi,
 } from "@/lib/api";
 
 export default function ImportForm() {
@@ -51,6 +53,8 @@ export default function ImportForm() {
 
   // KI-Konfigurationen (nur für canAnalyze-Prüfung)
   const [aiConfigs, setAiConfigs] = useState<AIConfig[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+  const [workflowId, setWorkflowId] = useState("");
 
   useEffect(() => {
     importSettingsApi.getPaths()
@@ -60,10 +64,13 @@ export default function ImportForm() {
     aiConfigsApi.list()
       .then((configs) => setAiConfigs(configs))
       .catch(() => {});
+    workflowsApi.list().then(setWorkflows).catch(() => {});
   }, []);
 
   // "Dokumente an KI senden" ist nur verfügbar wenn mindestens eine KI-Konfiguration vorhanden ist
   const canAnalyze = aiConfigs.length > 0;
+  // Analyse nach Import und Ordner-Sync brauchen ausdrücklich einen Workflow (kein Standard)
+  const needsWorkflow = (analyzeAfterImport && canAnalyze) || folderSync;
 
   // Pfad-Vorschau
   const importFolderPreview = subfolder.trim()
@@ -88,6 +95,7 @@ export default function ImportForm() {
   /** Sendet das Formular an POST /api/imports und leitet auf die Import-Detailseite weiter. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (needsWorkflow && !workflowId) { setError("Bitte einen Workflow wählen."); return; }
     setLoading(true);
     setError(null);
     try {
@@ -100,6 +108,7 @@ export default function ImportForm() {
         analyze_after_import: analyzeAfterImport && canAnalyze,
         delete_source_files: deleteSourceFiles,
         auto_export: autoExport,
+        workflow_id: needsWorkflow ? parseInt(workflowId, 10) : undefined,
       });
       router.push(`/imports/${batch.id}`);
     } catch (err: unknown) {
@@ -269,9 +278,20 @@ export default function ImportForm() {
         </label>
       </div>
 
+      {needsWorkflow && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+          <label className="mb-1 block text-sm font-medium text-gray-800" htmlFor="imp-wf">Workflow <span className="text-red-500">*</span></label>
+          <select id="imp-wf" className="input" value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} required>
+            <option value="">— Workflow wählen —</option>
+            {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <p className="mt-1 text-xs text-gray-600">Legt fest, welche Schritte die KI durchläuft. Es gibt keinen Standard-Workflow (Einstellungen → Workflows).</p>
+        </div>
+      )}
+
       <button
         type="submit"
-        disabled={loading || !company.trim() || !year.trim()}
+        disabled={loading || !company.trim() || !year.trim() || (needsWorkflow && !workflowId)}
         className="rounded bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
         {loading ? "Starte Import..." : "Import starten"}

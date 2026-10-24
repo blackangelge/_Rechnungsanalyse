@@ -6,8 +6,8 @@ import MergeModal from "@/components/suppliers/MergeModal";
 import CompareModal from "@/components/suppliers/CompareModal";
 import OrphanModal from "@/components/suppliers/OrphanModal";
 import {
-  DuplicateGroup, DuplicateSearchOptions, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount, WorkflowListItem,
-  vendorsApi, workflowsApi, extractApiError,
+  DuplicateGroup, DuplicateSearchOptions, Vendor, VendorMergeResult, VendorUpdate, VendorBankAccount,
+  vendorsApi, extractApiError,
 } from "@/lib/api";
 
 function VendorEditModal({
@@ -137,21 +137,6 @@ export default function LieferantenPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
-
-  useEffect(() => {
-    workflowsApi.list().then(setWorkflows).catch(() => { /* Spalte bleibt ohne Auswahl nutzbar */ });
-  }, []);
-
-  async function handleWorkflowChange(vendorId: number, value: string) {
-    try {
-      const updated = await vendorsApi.setWorkflow(vendorId, value ? Number(value) : null);
-      setVendors((prev) => prev.map((v) => (v.id === vendorId ? { ...v, workflow_id: updated.workflow_id } : v)));
-    } catch (err) {
-      setError(extractApiError(err, "Workflow konnte nicht zugewiesen werden"));
-    }
-  }
 
   function toggleSelected(id: number) {
     setSelected((prev) => {
@@ -425,7 +410,6 @@ export default function LieferantenPage() {
                 <th className="px-4 py-3 text-left">IBAN</th>
                 <th className="px-4 py-3 text-left">BIC</th>
                 <th className="px-4 py-3 text-center">Belege</th>
-                <th className="px-4 py-3 text-left" title="Analyse-Ablauf (Workflow) für diesen Lieferanten">Workflow</th>
                 <th className="px-4 py-3 text-right">Aktionen</th>
               </tr>
             </thead>
@@ -456,19 +440,6 @@ export default function LieferantenPage() {
                       <span className="inline-block rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
                         {v.document_count ?? 0}
                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={v.workflow_id ?? ""}
-                        onChange={(e) => handleWorkflowChange(v.id, e.target.value)}
-                        aria-label={`Workflow für ${v.name}`}
-                        className={`rounded border px-2 py-1 text-xs focus:outline-none ${
-                          v.workflow_id ? "border-blue-300 bg-blue-50 text-blue-800" : "border-gray-300 text-gray-500"
-                        }`}
-                      >
-                        <option value="">Standard</option>
-                        {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                      </select>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">

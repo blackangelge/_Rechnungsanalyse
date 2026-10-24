@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import {
-  WorkflowListItem, WorkflowTemplate, extractApiError, workflowsApi,
-} from "@/lib/api";
+import { Alert, Card, EmptyState, Icon, Modal, PageHeader, Spinner } from "@/components/ui";
+import { WorkflowListItem, WorkflowTemplate, extractApiError, workflowsApi } from "@/lib/api";
 
 export default function WorkflowsPage() {
   const router = useRouter();
@@ -15,7 +14,7 @@ export default function WorkflowsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newTemplate, setNewTemplate] = useState("standard");
+  const [newTemplate, setNewTemplate] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -24,6 +23,7 @@ export default function WorkflowsPage() {
       const [list, tpls] = await Promise.all([workflowsApi.list(), workflowsApi.templates()]);
       setItems(list);
       setTemplates(tpls);
+      setNewTemplate((cur) => cur || tpls[0]?.key || "__empty");
       setError(null);
     } catch (err) {
       setError(extractApiError(err, "Workflows konnten nicht geladen werden"));
@@ -31,7 +31,6 @@ export default function WorkflowsPage() {
       setLoading(false);
     }
   }, []);
-
   useEffect(() => { load(); }, [load]);
 
   async function run(action: () => Promise<unknown>) {
@@ -47,10 +46,7 @@ export default function WorkflowsPage() {
     setBusy(true);
     setError(null);
     try {
-      const wf = await workflowsApi.create({
-        name: newName.trim(),
-        template: newTemplate === "__empty" ? undefined : newTemplate,
-      });
+      const wf = await workflowsApi.create({ name: newName.trim(), template: newTemplate === "__empty" ? undefined : newTemplate });
       router.push(`/settings/workflows/${wf.id}`);
     } catch (err) {
       setError(extractApiError(err, "Workflow konnte nicht angelegt werden"));
@@ -58,127 +54,61 @@ export default function WorkflowsPage() {
     }
   }
 
-  const hasDefault = items.some((w) => w.is_default);
+  const tpl = templates.find((t) => t.key === newTemplate);
 
   return (
     <div>
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">Workflows</h1>
-        <button onClick={() => { setShowNew(true); setNewName(""); }}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-          + Neuer Workflow
-        </button>
-      </div>
-      <p className="mb-4 max-w-3xl text-sm text-gray-500">
-        Ein Workflow legt fest, welche Schritte die KI-Analyse eines Belegs durchläuft und welche
-        Systemprompts dabei verwendet werden — wie in n8n als Ablaufdiagramm. Für einzelne Lieferanten
-        kannst du einen eigenen Workflow festlegen (Seite „Lieferanten").
-      </p>
+      <PageHeader title="Workflows"
+        subtitle="Ein Workflow legt als Ablaufdiagramm fest, welche Schritte die KI-Analyse durchläuft (Seiten erkennen, Schema-Extraktion, Prüfung …). Es gibt keinen Standard: Jede Analyse, jeder Import mit Analyse und jede Ordner-Überwachung nennt ihren Workflow ausdrücklich."
+        actions={<button className="btn btn-primary" onClick={() => { setShowNew(true); setNewName(""); }}><Icon name="plus" /> Neuer Workflow</button>} />
+      {error && <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>}
+      {loading && items.length === 0 && <Spinner />}
+      {!loading && items.length === 0 && <EmptyState title="Noch kein Workflow" text="Lege einen aus einer Vorlage an, z. B. „Schema-Extraktion“." />}
 
-      <div className="mb-5 max-w-3xl rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
-        <b>Welcher Workflow wird verwendet?</b>
-        <ol className="ml-5 mt-1 list-decimal text-blue-800">
-          <li>der in der Analyse ausdrücklich gewählte Workflow,</li>
-          <li>sonst der Workflow des Lieferanten (sobald dieser bekannt ist, also z.B. bei erneuter Analyse),</li>
-          <li>sonst der <b>Standard-Workflow</b>,</li>
-          <li>gibt es keinen, läuft der klassische Ablauf wie bisher.</li>
-        </ol>
-        {!hasDefault && items.length > 0 && (
-          <p className="mt-2 text-amber-800">Derzeit ist kein Standard-Workflow gesetzt — es läuft der klassische Ablauf.</p>
-        )}
-      </div>
-
-      {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {items.length > 0 && (
+        <Card pad={false}>
+          <div className="overflow-x-auto">
+            <table className="table-ra">
+              <thead><tr><th>Name</th><th>Beschreibung</th><th className="text-right">Knoten</th><th className="text-right">Aktionen</th></tr></thead>
+              <tbody>
+                {items.map((w) => (
+                  <tr key={w.id} data-testid={`wf-row-${w.id}`}>
+                    <td className="font-medium"><Link href={`/settings/workflows/${w.id}`} className="text-gray-900 hover:text-blue-700 hover:underline">{w.name}</Link></td>
+                    <td className="text-gray-600">{w.description ?? "–"}</td>
+                    <td className="text-right tabular-nums">{w.node_count}</td>
+                    <td>
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        <Link href={`/settings/workflows/${w.id}`} className="btn btn-primary btn-sm">Bearbeiten</Link>
+                        <button disabled={busy} className="btn btn-secondary btn-sm" onClick={() => run(() => workflowsApi.duplicate(w.id))}>Duplizieren</button>
+                        <button disabled={busy} className="btn btn-danger-outline btn-sm"
+                          onClick={() => { if (confirm(`Workflow „${w.name}“ löschen?`)) run(() => workflowsApi.delete(w.id)); }}>Löschen</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {showNew && (
-        <div className="mb-5 rounded-lg border bg-white p-5 shadow-sm">
-          <h2 className="mb-3 text-base font-semibold text-gray-800">Neuer Workflow</h2>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[16rem] flex-1">
-              <label className="text-xs font-medium text-gray-600">Name</label>
-              <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && createWorkflow()}
-                placeholder="z.B. Lieferant ACME"
-                className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none" />
-            </div>
-            <div className="min-w-[16rem] flex-1">
-              <label className="text-xs font-medium text-gray-600">Startpunkt</label>
-              <select value={newTemplate} onChange={(e) => setNewTemplate(e.target.value)}
-                className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
+        <Modal title="Neuer Workflow" onClose={() => setShowNew(false)}
+          footer={<><button className="btn btn-secondary" onClick={() => setShowNew(false)}>Abbrechen</button>
+            <button className="btn btn-primary" disabled={busy || !newName.trim()} onClick={createWorkflow}>Anlegen &amp; bearbeiten</button></>}>
+          <div className="space-y-4">
+            <div><label className="label" htmlFor="wf-name">Name</label>
+              <input id="wf-name" autoFocus className="input" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createWorkflow()} placeholder="z. B. Rechnungen mit Seitenerkennung" /></div>
+            <div><label className="label" htmlFor="wf-tpl">Startpunkt</label>
+              <select id="wf-tpl" className="input" value={newTemplate} onChange={(e) => setNewTemplate(e.target.value)}>
                 {templates.map((t) => <option key={t.key} value={t.key}>Vorlage: {t.name}</option>)}
                 <option value="__empty">Leer (nur Start)</option>
               </select>
+              {tpl && <p className="hint">{tpl.description}</p>}
             </div>
-            <button onClick={createWorkflow} disabled={busy || !newName.trim()}
-              className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40">
-              Anlegen &amp; bearbeiten
-            </button>
-            <button onClick={() => setShowNew(false)}
-              className="rounded border border-gray-300 px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100">Abbrechen</button>
           </div>
-          {templates.find((t) => t.key === newTemplate) && (
-            <p className="mt-2 text-xs text-gray-500">{templates.find((t) => t.key === newTemplate)!.description}</p>
-          )}
-        </div>
+        </Modal>
       )}
-
-      <div className="overflow-hidden rounded-lg border bg-white shadow-sm">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
-            <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Beschreibung</th>
-              <th className="px-4 py-3 text-right">Knoten</th>
-              <th className="px-4 py-3 text-right">Lieferanten</th>
-              <th className="px-4 py-3 text-right">Aktionen</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {loading && items.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">Lade…</td></tr>
-            )}
-            {!loading && items.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">
-                Noch kein Workflow. Lege einen aus der Vorlage „Standard (wie bisher)" an und setze ihn als Standard.
-              </td></tr>
-            )}
-            {items.map((w) => (
-              <tr key={w.id} data-testid={`wf-row-${w.id}`}>
-                <td className="px-4 py-3 font-medium text-gray-900">
-                  <Link href={`/settings/workflows/${w.id}`} className="hover:text-blue-700 hover:underline">{w.name}</Link>
-                  {w.is_default && (
-                    <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Standard</span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-gray-600">{w.description ?? "–"}</td>
-                <td className="px-4 py-3 text-right tabular-nums text-gray-700">{w.node_count}</td>
-                <td className="px-4 py-3 text-right tabular-nums text-gray-700">{w.supplier_count}</td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap justify-end gap-1.5">
-                    <Link href={`/settings/workflows/${w.id}`}
-                      className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">Bearbeiten</Link>
-                    {w.is_default ? (
-                      <button disabled={busy} onClick={() => run(() => workflowsApi.clearDefault(w.id))}
-                        className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-100">Standard aufheben</button>
-                    ) : (
-                      <button disabled={busy} onClick={() => run(() => workflowsApi.setDefault(w.id))}
-                        className="rounded border border-green-300 px-2.5 py-1 text-xs text-green-700 hover:bg-green-50">Als Standard</button>
-                    )}
-                    <button disabled={busy} onClick={() => run(() => workflowsApi.duplicate(w.id))}
-                      className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-100">Duplizieren</button>
-                    <button disabled={busy}
-                      onClick={() => {
-                        const extra = w.supplier_count > 0 ? ` ${w.supplier_count} Lieferant(en) fallen dann auf den Standard zurück.` : "";
-                        if (confirm(`Workflow „${w.name}" löschen?${extra}`)) run(() => workflowsApi.delete(w.id));
-                      }}
-                      className="rounded border border-red-300 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50">Löschen</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

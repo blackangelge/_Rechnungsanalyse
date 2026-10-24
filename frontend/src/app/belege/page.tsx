@@ -60,7 +60,21 @@ function formatCurrency(amount: number | null | undefined): string {
   return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(amount);
 }
 
-function StatusBadge({ status }: { status: string }) {
+const ERROR_CODE_LABELS: Record<string, string> = {
+  too_many_pages: "Zu viele Seiten",
+  encrypted: "Verschlüsselt",
+  unreadable: "Nicht lesbar",
+};
+
+function StatusBadge({ status, errorCode }: { status: string; errorCode?: string | null }) {
+  if (status === "error" && errorCode && ERROR_CODE_LABELS[errorCode]) {
+    return (
+      <span title="Nachbearbeitung nötig: PDF kürzen/entsperren (Seiten-Dialog), danach erneut mit Workflow analysieren"
+        className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
+        Nachbearbeiten · {ERROR_CODE_LABELS[errorCode]}
+      </span>
+    );
+  }
   const styles: Record<string, string> = {
     pending: "bg-gray-100 text-gray-600",
     processing: "bg-blue-100 text-blue-700",
@@ -275,6 +289,7 @@ export default function BelegePage() {
   const [filterSupplierName, setFilterSupplierName] = useState("");
   const [filterDocId, setFilterDocId] = useState("");
   const [filterValidation, setFilterValidation] = useState("");
+  const [filterRework, setFilterRework] = useState(false);
   const [activeFilters, setActiveFilters] = useState<DocumentFilter>({});
 
   // Daten
@@ -468,6 +483,7 @@ export default function BelegePage() {
     if (filterKi === "nein") f.has_extraction = false;
     if (filterSupplierName.trim()) f.supplier_name = filterSupplierName.trim();
     if (filterDocId.trim()) f.doc_id = parseInt(filterDocId.trim(), 10);
+    if (filterRework) f.error_code = ["any"];
     if (filterValidation && VALIDATION_FILTERS[filterValidation]) {
       f.validation_status = VALIDATION_FILTERS[filterValidation].statuses;
     }
@@ -500,7 +516,7 @@ export default function BelegePage() {
     setFilterYear(""); setFilterStatus("");
     setFilterTotalMin(""); setFilterTotalMax(""); setFilterPageMin(""); setFilterPageMax("");
     setSelectedBatchIds(new Set()); setSelectedDocTypeIds(new Set()); setIncludeDeleted(false); setIncludeHidden(false);
-    setFilterKi(""); setFilterSupplierName(""); setFilterDocId(""); setFilterValidation("");
+    setFilterKi(""); setFilterSupplierName(""); setFilterDocId(""); setFilterValidation(""); setFilterRework(false);
     const f: DocumentFilter = {};
     syncUrl(f);
     setActiveFilters(f);
@@ -602,13 +618,14 @@ export default function BelegePage() {
 
   async function startAnalysis() {
     if (selectedIds.size === 0) return;
+    if (!selectedWorkflowId) { setError("Bitte einen Workflow wählen — es gibt keinen Standard."); return; }
     setAnalyzing(true);
     setError(null);
     setSuccessMsg(null);
     try {
       const result = await documentsApi.enqueue(
         Array.from(selectedIds),
-        selectedWorkflowId ? parseInt(selectedWorkflowId, 10) : undefined,
+        parseInt(selectedWorkflowId, 10),
         onlyReextract,
       );
       setSuccessMsg(result.message);
@@ -839,6 +856,10 @@ export default function BelegePage() {
                 placeholder="z.B. 42" min="1"
                 className="rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none w-28" />
             </div>
+            <label className="flex items-end gap-1.5 pb-2 text-xs font-medium text-gray-700" title="Zu große, verschlüsselte oder nicht lesbare PDFs">
+              <input type="checkbox" checked={filterRework} onChange={(e) => setFilterRework(e.target.checked)} data-testid="filter-rework" />
+              Nur „Nachbearbeitung nötig“
+            </label>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Plausibilität</label>
               <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
@@ -918,11 +939,11 @@ export default function BelegePage() {
             <div className="ml-auto flex items-center gap-2">
               <label className={`text-xs font-medium ${selectedIds.size > 0 ? "text-blue-700" : "text-gray-500"}`}>Workflow</label>
               <select value={selectedWorkflowId} onChange={(e) => setSelectedWorkflowId(e.target.value)}
-                title="Automatisch: Workflow des Lieferanten, sonst Standard-Workflow, sonst klassischer Ablauf"
+                title="Jede Analyse braucht einen ausdrücklich gewählten Workflow (Einstellungen → Workflows)" aria-required="true"
                 className="rounded border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
-                <option value="">Automatisch</option>
+                <option value="">— Workflow wählen —</option>
                 {workflows.map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}{w.is_default ? " (Standard)" : ""}</option>
+                  <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
               <label className="flex items-center gap-1 text-xs text-gray-700" title="Bereits erkannte Dokumententypen werden übernommen; es werden nur die Rechnungsdaten neu ausgelesen (spart eine KI-Anfrage je Beleg)">
@@ -930,7 +951,7 @@ export default function BelegePage() {
                 nur neu auslesen
               </label>
             </div>
-            <button onClick={startAnalysis} disabled={analyzing || selectedIds.size === 0}
+            <button onClick={startAnalysis} disabled={analyzing || selectedIds.size === 0 || !selectedWorkflowId}
               className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               {analyzing ? "Wird eingereiht…" : "KI-Analyse starten"}
             </button>
@@ -1132,7 +1153,7 @@ export default function BelegePage() {
                         </td>
 
                         {!showPreview && <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">
-                          {doc.page_count > 0 ? doc.page_count : "–"}
+                          {doc.page_count > 0 ? doc.page_count : doc.pdf_state === "encrypted" ? "verschl." : "–"}
                           {(doc.pdf_version ?? 1) > 1 && (
                             <span
                               title={`PDF bearbeitet (Version ${doc.pdf_version})${
@@ -1150,7 +1171,7 @@ export default function BelegePage() {
                         {!showPreview && <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">
                           {formatCurrency(doc.total_amount)}
                         </td>}
-                        <td className="px-3 py-2.5 whitespace-nowrap"><StatusBadge status={doc.status} /></td>
+                        <td className="px-3 py-2.5 whitespace-nowrap"><StatusBadge status={doc.status} errorCode={doc.error_code} /></td>
                         {!showPreview && <td className="px-3 py-2.5"><KiBadge hasExtraction={doc.has_extraction ?? false} /></td>}
                         <td className="px-3 py-2.5 whitespace-nowrap"><ValidationBadge status={doc.validation_status} /></td>
 
