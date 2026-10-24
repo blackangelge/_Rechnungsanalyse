@@ -42,6 +42,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "Verarbeitung",
     items: [
+      { href: "/migration", label: "Übernahme aus MAIN", icon: "upload" },
       { href: "/settings/workflows", label: "Workflows", icon: "flow" },
       { href: "/tasks", label: "Tasks", icon: "list" },
       { href: "/logs", label: "KI-Statistiken", icon: "chart" },

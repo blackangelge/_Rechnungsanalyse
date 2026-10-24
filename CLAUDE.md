@@ -1037,6 +1037,27 @@ Regeln hängen an **Entitäts-/Feldnamen**, nicht an einer Schema-Version (gelte
 - **Infos-Ansicht** der Belege: `RuleChecksPanel` (Gesamtergebnis, Auffälliges, „Alle Ergebnisse“) über dem alten Prüfpanel; erscheint nur bei Belegen mit Regel-Ergebnissen.
 - Tests: `tests/test_rule_engine.py`.
 
+### Übernahme aus dem MAIN-Projekt (`services/main_migration.py`, `routers/main_migration.py`, `models/main_migration.py`, Migration `0028_main_migration`, Seite `/migration`)
+
+Einmalige, wiederholbare Übernahme von Imports, Belegen und Lieferanten aus der Datenbank des MAIN-Projekts **ohne KI** (MAIN wird nur lesend benutzt, PostgreSQL-Verbindung mit `default_transaction_read_only=on`).
+
+- **IDs bleiben gleich:** Import- und Beleg-IDs aus MAIN werden unverändert übernommen (die PDFs heißen `{ID}.pdf`, `{Firma}_{Jahr}` bleibt der Ordner). Ist eine ID im neuen System schon belegt, wird der Beleg **nicht** übernommen, sondern als Fehler gemeldet (nichts wird überschrieben).
+  Nach jedem Block werden die PostgreSQL-Sequenzen hinter die höchste ID gesetzt (`advance_sequences`). Deshalb die Übernahme am besten in ein System, in dem die IDs frei sind.
+- **Quelle:** nur der aktuelle Stand — letzte KI-Antwort (`invoice_extractions.raw_response`, „Variante A“); Positionen aus `positionen[i]` der Antwort, ergänzt um `order_positions` (nur als Rückfall); Historie/PDF-Versionen werden nicht übernommen.
+- **Übersetzungstabelle** (`main_migration_config.mapping`, Oberfläche Tab „2 · Übersetzung“): je Schemafeld `target` (`<Entität>.<Feld>`), `sources` (erste gefüllte gewinnt), bei Mengenfeldern `unit_sources`, `transform` (`sum`, `first`, `join`, `price_unit`).
+  Quellen: `doc.`/`ext.`/`sup.`/`pos.` (Spalten der MAIN-Tabellen), `raw.`/`rawpos.` (Pfad in der KI-Antwort bzw. in Position i; `liste[*].feld`, `liste[0].feld`), `const:Text`. `default_mapping(version)` liefert den Vorschlag für die Entitäten `beleg`/`position`/`lieferant` des Ausgangsschemas
+  (inkl. Steuerbetrag = Summe der USt-Zeilen, Preiseinheit aus „je t“ → `t`); `check_mapping` meldet unbekannte Ziele/Quellen, doppelte Ziele, fehlende Pflichtfeld-Zeilen. **Ändert sich das Schema, muss die Tabelle angepasst werden** (Quelldaten kommen weiter aus MAIN).
+  `GET /source-fields` entdeckt die verfügbaren Quellen (Spalten + alle Pfade einer Stichprobe der KI-Antworten) für die Auswahl; `POST /preview` übersetzt einen MAIN-Beleg ohne zu speichern und zeigt Schema-Fehler.
+- **Pipeline:** das übersetzte Dict geht durch dieselben Schritte wie eine echte Analyse (`validate_output` → `build_drafts` mit Normalisierern/Einheiten/Lieferanten-Matching → `save_drafts`), danach `rule_engine.evaluate_document` — die Prüfregeln laufen also über jeden Beleg.
+  Belege ohne verwertbare KI-Antwort (Fehlertext, kein JSON; Typ Rechnung/unbekannt) werden ohne Datensätze übernommen und im Protokoll als `no_data` geführt; in MAIN fehlerhafte Belege behalten Status `error`; in MAIN gelöschte kommen in den Papierkorb.
+  Lieferanten-Stammdaten aus `suppliers` werden vorab über dieselbe Zuordnung (IBAN → USt-IdNr. → Name) angelegt/ergänzt (`main_migration_items.source_table='supplier'`).
+- **PDFs:** aus „Ordner mit den MAIN-PDFs“ (`{Firma}_{Jahr}/{ID}.pdf` bzw. `stored_filename`) nach `STORAGE_PATH/{Firma}_{Jahr}/{ID}.pdf` kopiert; liegt die Datei schon dort in gleicher Größe, wird nichts kopiert (MAIN-Ordner direkt als Speicherordner möglich). Fehlt sie, wird der Beleg trotzdem übernommen („PDF nicht gefunden“).
+- **Lauf:** Hintergrund-Thread in Blöcken à 200 (Keyset über die MAIN-Beleg-ID), je Beleg ein Savepoint (ein Fehler stoppt den Lauf nicht, erste 30 Meldungen sichtbar), Commit je Block, Abbrechen möglich. `dry_run` = alles durchrechnen und je Block zurückrollen (keine Dateien, kein Protokoll).
+  `limit` = Stichprobe; Filter nach MAIN-Import-/Beleg-IDs; `retry_errors`. **Wiederholbar:** `main_migration_items` (old_id → new_id, Status `imported|no_data|error|skipped`) — Übernommenes wird übersprungen.
+- **Nachbearbeitung:** `GET /summary` (Belege je Status, Prüfregel-Ergebnis über die übernommenen Belege), `POST /reanalyze {workflow_id, include: [needs_review, warn, unchecked, no_data], limit}` reiht die gewählten Belege über `enqueue_documents` zur KI-Analyse ein (alte Auslesung bleibt in der Analyse-Historie).
+- Verbindungs-URL wird in der Datenbank gespeichert und in der API **maskiert** (`postgresql://user:••••••@host/db`); eine maskiert zurückgeschickte URL überschreibt nichts.
+- Tests: `tests/test_main_migration.py` (Fake-MAIN-Datenbank in SQLite; die Datei richtet die Test-SQLite für echte SAVEPOINTs ein — pysqlite committet sonst implizit).
+
 ### Seitenanzahl im Hintergrund, Nachbearbeitung, Seitenklassifizierung (Migration `0022_pdf_state_pages`)
 
 - **Import liest keine Seiten mehr.** `services/page_count_service.py` (pypdf) läuft parallel als Hintergrundaufgabe (`routers/imports.py::start_import` → `run_for_batch`, dazu Nachholschleife `worker/page_counts.py` im Worker) und trägt `documents.page_count` + `documents.pdf_state` (`ok|encrypted|unreadable`) ein. Geschrieben wird nur, wenn der Beleg noch nicht analysiert ist (`analyzed_pdf_version IS NULL`, Status `pending|done`). `seitenanzahl` ist ein **gesperrtes Standardfeld der Wurzel-Entität** (`ROOT_STANDARD_FIELDS`, `system_function=page_count`; wird per `ensure_root_standard_fields` bei Beziehungen/Aktivierung ergänzt).

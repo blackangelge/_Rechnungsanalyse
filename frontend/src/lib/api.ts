@@ -1956,3 +1956,37 @@ export const validationRulesApi = {
     apiClient.post<{ documents: number; rules: number; counts: Record<string, number>; flagged_sample: number[] }>(
       "/api/validation-rules/run", { document_ids: documentIds ?? null }).then((r) => r.data),
 };
+
+// ─── Übernahme aus dem MAIN-Projekt ───────────────────────────────────────────
+export interface MigrationConfig { source_url: string | null; has_url: boolean; source_storage_path: string | null }
+export interface MigrationMappingEntry { target: string; sources: string[]; unit_sources?: string[]; transform?: string | null }
+export interface MigrationTarget { target: string; entity: string; entity_label: string; field: string; label: string; data_type: string; required: boolean }
+export interface MigrationState {
+  running: boolean; dry_run?: boolean; total?: number; processed?: number; counts?: Record<string, number>; errors?: string[];
+  message?: string; failed?: boolean; cancelled?: boolean; started_at?: string; finished_at?: string | null;
+}
+export interface MigrationSummary {
+  documents: Record<string, number>; batches: number; suppliers: number;
+  rules: { ok: number; warn: number; needs_review: number; unchecked: number; none: number };
+}
+
+export const mainMigrationApi = {
+  config: () => apiClient.get<MigrationConfig>("/api/main-migration/config").then((r) => r.data),
+  saveConfig: (d: { source_url?: string; source_storage_path?: string }) => apiClient.put<MigrationConfig>("/api/main-migration/config", d).then((r) => r.data),
+  test: () => apiClient.post<{ ok: boolean; counts: Record<string, number>; storage: { path: string | null; exists: boolean; sample: string | null } }>("/api/main-migration/test").then((r) => r.data),
+  sourceFields: () => apiClient.get<Record<string, string[]>>("/api/main-migration/source-fields").then((r) => r.data),
+  targets: () => apiClient.get<{ schema_version: number | null; targets: MigrationTarget[]; transforms: string[] }>("/api/main-migration/targets").then((r) => r.data),
+  mapping: () => apiClient.get<{ mapping: MigrationMappingEntry[]; problems: string[] }>("/api/main-migration/mapping").then((r) => r.data),
+  saveMapping: (mapping: MigrationMappingEntry[]) => apiClient.put<{ mapping: MigrationMappingEntry[]; problems: string[] }>("/api/main-migration/mapping", { mapping }).then((r) => r.data),
+  defaultMapping: () => apiClient.post<{ mapping: MigrationMappingEntry[]; problems: string[] }>("/api/main-migration/mapping/default").then((r) => r.data),
+  preview: (old_document_id: number) =>
+    apiClient.post<{ document: Record<string, unknown>; has_raw_response: boolean; parsed: Record<string, unknown> | null; schema_errors: string[]; problems: string[] }>(
+      "/api/main-migration/preview", { old_document_id }).then((r) => r.data),
+  run: (d: { dry_run: boolean; limit?: number | null; old_batch_ids?: number[] | null; old_document_ids?: number[] | null; include_deleted?: boolean; suppliers?: boolean }) =>
+    apiClient.post<MigrationState>("/api/main-migration/run", d).then((r) => r.data),
+  state: () => apiClient.get<MigrationState>("/api/main-migration/state").then((r) => r.data),
+  cancel: () => apiClient.post<{ cancelled: boolean }>("/api/main-migration/cancel").then((r) => r.data),
+  summary: () => apiClient.get<MigrationSummary>("/api/main-migration/summary").then((r) => r.data),
+  reanalyze: (d: { workflow_id: number; include: string[]; limit?: number | null }) =>
+    apiClient.post<{ enqueued: number; candidates?: number; message?: string }>("/api/main-migration/reanalyze", d).then((r) => r.data),
+};
