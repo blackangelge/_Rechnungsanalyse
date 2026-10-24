@@ -1024,6 +1024,42 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - **Neu gestaltet:** Dashboard (Kennzahlen-Kacheln, Hinweise), Import-Detail, Batch-Tabelle; Excel-Export läuft überall über **Export-Vorlagen** (`/export-vorlagen?batch_ids=1,2` wählt Imports vor; der alte Export liest die leeren Alt-Tabellen und ist aus der Oberfläche entfernt). Seiten dürfen kein `w-screen`/`left-1/2` mehr verwenden (würde die Seitenleiste überdecken); Rahmen ohne Farbe sind global hellgrau (Tailwind 4 nimmt sonst schwarz).
 - Belege (Kopf, Meldungen, Filter, Tabelle) und alle übrigen Seiten nutzen jetzt `.card`/`.btn-*`/`table-ra` (per Mustertausch; Inhalte und Logik unverändert). Nicht einzeln gestaltet bleiben die Infos-Ansicht der Belege, Artikel, Daten, Tasks, Logs und die Einstellungsformulare — sie folgen nur dem gemeinsamen Stil.
 
+### KI-Assistent mit Chats und Werkzeugen (Migration `0023_assistant_chats`)
+
+Eigene Vollbild-Seite `/assistent` (Menü „Schema & Auswertung → KI-Assistent“, im OpenWebUI-Stil): Unterhaltung in der Mitte, **rechts die letzten Chats**
+(nach Tag gruppiert, umbenennen/löschen), Kopfzeile mit Modellwahl, **Token je Chat** (ein/aus/gesamt; je Antwort zusätzlich Aufrufe + Dauer) und „Neu starten“
+(löscht Nachrichten + Zähler des Chats). **Bilder** per Büroklammer, Einfügen (Strg+V) oder Ziehen — im Browser auf 1600 px verkleinert, als `image_url`-Data-URL an das Modell
+(nur die letzten 4 Bild-Nachrichten gehen mit; ob das Modell Bilder versteht, hängt vom Modell ab). Der frühere Tab „KI-Assistent“ in `/daten` ist entfernt (`?tab=assistent` leitet um);
+die alten Endpunkte `/api/db-assistant/*` und `db_assistant_service` bleiben (der neue Dienst nutzt `_chat`, `parse_action`, Reanalyse-Prüfung daraus).
+
+- **Tabellen:** `assistant_chats` (Titel, `ai_config_id`, `input_tokens`/`output_tokens`) und `assistant_messages` (`role`, `content`, `images`, `steps`, `proposals`, `usage` als JSON; CASCADE).
+- **Protokoll** (`services/assistant_service.py`, kein natives Tool-Calling nötig): je Schritt ein JSON `{"tool","args","reason"}`, bis zu 12 Schritte; `final` beendet. LESEN-Werkzeuge laufen sofort,
+  SCHREIBEN-Werkzeuge werden **nie ausgeführt, sondern als Vorschlag** (`proposals`, Status `pending|applied|dismissed|failed`) an der Antwort gespeichert. Der Stand der Vorschläge (inkl. Ergebnis/neuer IDs)
+  wird beim nächsten Zug an die Assistenten-Nachricht angehängt, damit die KI nach Freigaben weiß, was passiert ist. Kurzformen `sql`, `propose_update`, `propose_reanalysis` aus dem alten Assistenten werden weiter verstanden.
+- **Werkzeuge** (`services/assistant_tools.py`, Registry `TOOLS`; jedes Schreib-Werkzeug braucht eine `summary`-Funktion für die Oberfläche): Lesen — `sql`, `list_units`, `list_unit_review`, `get_schema`, `list_export_templates`,
+  `export_template_columns`, `list_workflows`, `get_workflow`, `workflow_node_types`, `workflow_templates`, `list_prompts`, `list_ai_clients`, `list_imports`, `list_import_folders`. Schreiben — Einheiten
+  (`create_unit_group`, `rename_unit_group`, `delete_unit_group`, `create_unit`, `update_unit`, `delete_unit`, `add_unit_alias`, `assign_review_alias`), Schema (`create_schema_draft`, `add_schema_entity`, `add_schema_field`,
+  `update_schema_field`, `delete_schema_field`, `delete_schema_entity`, `add_schema_relation`, `activate_schema_draft`, `discard_schema_draft`), Export-Vorlagen (`create|update|delete_export_template`),
+  Workflows (`create_workflow`, `update_workflow`, `delete_workflow`; Graph als einfache Knoten-/Kantenliste → `build_graph` setzt Layout, danach gelten die Editor-Regeln von `validate_graph`) und `create_import`
+  (ruft `routers/imports.start_import` auf — bei `analyze_after_import`/`folder_sync` ist `workflow_id` Pflicht). Die Werkzeuge rufen bestehende Router-/CRUD-Funktionen, es gelten also dieselben Prüfungen wie in der Oberfläche.
+  Neue Objekte werden **per Name** angesprochen (Gruppe „Masse“, Entität „position“), weil IDs vor der Freigabe unbekannt sind. Nicht möglich: Belege löschen, Benutzer/Zugangsdaten, KI-Konfigurationen ändern, Dateien hochladen.
+- **Freigabe** (`routers/assistant.py`, `POST …/messages/{mid}/proposals/{pid}/apply|dismiss`): `apply` ist `async` (wegen `start_import`, das Hintergrund-Tasks auf dem Haupt-Loop startet); `execute_write` committet bei Erfolg, rollt bei Fehler zurück
+  und gibt eine verständliche Meldung (Status `failed`, erneut freigebbar). `propose_update` schreibt wie der Daten-Browser (mit Änderungsprotokoll `assistant`), `propose_reanalysis` verlangt bei der Freigabe einen Workflow.
+  Oberfläche: „Freigeben & ausführen“, „Verwerfen“, „Alle offenen der Reihe nach freigeben“, danach „Dem Assistenten Bescheid geben und weitermachen“.
+- **Endpunkte** (`/api/assistant`): `GET /models`, `GET|POST /chats`, `GET|PATCH|DELETE /chats/{id}`, `POST /chats/{id}/restart`, `POST /chats/{id}/messages` (`{content, images[], ai_config_id}`; höchstens 6 Bilder, nur `data:image/…`, ≈ 6 MB;
+  die Nutzernachricht wird vor dem KI-Aufruf gespeichert — fällt die KI aus, bleibt sie im Chat). Router in `main.py` mit `dependencies=_protected`. Tests: `tests/test_assistant.py` (KI-Antworten werden vorgegeben).
+- **Neues Werkzeug:** Funktion mit `@_register(name, kind, args, doc, summary)` in `assistant_tools.py`; Auflösen von Namen über `_group/_unit/_entity/_field`. Ein Test für jedes neue Schreib-Werkzeug (`test_every_tool_has_summary_or_is_read` prüft nur `summary`).
+- Frontend: `app/assistent/page.tsx` (Vollbild: `Nav` rendert `/assistent` ohne Seitenrand, `h-screen`), `components/assistent/Markdown.tsx` (eigener, sicherer Renderer ohne Abhängigkeit),
+  `components/assistent/Parts.tsx` (`StepsView`, `ProposalCard`), `assistantApi` in `lib/api.ts` (Chat-Aufruf ohne Browser-Zeitlimit; Proxy erlaubt 15 Minuten).
+
+### Einheiten: Bearbeiten und Standardwerte
+
+- Gruppen lassen sich umbenennen (`PATCH /api/units/groups/{id}`, Stift-Button in der Gruppenkarte); Einheiten sind löschbar — die **Basiseinheit** erst, wenn sie die letzte der Gruppe ist (sonst stünden die Faktoren der anderen im Leeren).
+- **Standard-Gruppen und -Einheiten** (Masse, Volumen, Länge, Fläche, Anzahl, Verpackung inkl. Aliasse, `services/units_seed.py`) werden beim Backend-Start automatisch angelegt, wenn **noch keine Gruppe existiert** (`main._seed_units`);
+  der Button „Standard-Einheiten und Schema einspielen“ bleibt für leere Systeme. Wer bewusst alle Gruppen löscht, bekommt sie beim nächsten Start wieder.
+- **Prüfliste → bestehende Einheit:** Schreibweise in der Zeile wählen, Einheit im Dropdown auswählen, „Zuordnen“ — legt den Alias an der Einheit an und rechnet alle offenen Belege neu (Erklärtext steht über der Tabelle).
+- `Tabs` (`components/ui`) umbrechen statt zu scrollen (kein Scrollbalken mehr).
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:

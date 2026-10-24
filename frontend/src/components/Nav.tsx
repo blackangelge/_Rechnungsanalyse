@@ -33,6 +33,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/einheiten", label: "Einheiten", icon: "ruler" },
       { href: "/export-vorlagen", label: "Export-Vorlagen", icon: "sheet" },
       { href: "/daten", label: "Daten", icon: "database" },
+      { href: "/assistent", label: "KI-Assistent", icon: "sparkle" },
     ],
   },
   {
@@ -74,6 +75,7 @@ export default function Nav({
   const pathname = usePathname();
   const [jsOk, setJsOk] = useState(false);
   const [open, setOpen] = useState(false);
+  const full = pathname === "/assistent" || pathname.startsWith("/assistent/");   // Vollbild-Seite ohne Rand
 
   useEffect(() => { setJsOk(true); }, []);
   useEffect(() => { setOpen(false); }, [pathname]);
@@ -141,9 +143,13 @@ export default function Nav({
         </div>
       )}
 
-      <main className="min-w-0 flex-1 overflow-x-hidden">
-        <div className="mx-auto max-w-[1400px] p-4 sm:p-6 lg:p-8">{children}</div>
-      </main>
+      {full ? (
+        <main className="h-[calc(100dvh-49px)] min-w-0 flex-1 overflow-hidden lg:h-screen">{children}</main>
+      ) : (
+        <main className="min-w-0 flex-1 overflow-x-hidden">
+          <div className="mx-auto max-w-[1400px] p-4 sm:p-6 lg:p-8">{children}</div>
+        </main>
+      )}
     </div>
   );
 }

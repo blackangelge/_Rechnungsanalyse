@@ -1478,6 +1478,83 @@ export const dbAssistantApi = {
     apiClient.post<{ row: DbRow; changed: Record<string, { alt: unknown; neu: unknown }> }>("/api/db-assistant/apply/", p).then((r) => r.data),
 };
 
+// ─── KI-Assistent (Chats) ────────────────────────────────────────────────────
+
+export interface ChatInfo {
+  id: number;
+  title: string;
+  ai_config_id: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  created_at: string;
+  updated_at: string;
+  messages?: ChatMessage[];
+}
+
+export interface ChatStep {
+  tool: string;
+  args?: Record<string, unknown>;
+  ok: boolean;
+  preview?: string;
+  error?: string;
+  sql?: string;
+  row_count?: number;
+  columns?: string[];
+  rows?: unknown[][];
+  truncated?: boolean;
+}
+
+export interface ChatProposal {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  summary: string;
+  reason?: string;
+  status: "pending" | "applied" | "dismissed" | "failed";
+  result?: unknown;
+  error?: string | null;
+  current?: Record<string, unknown>;
+  reanalysis?: { count: number; skipped: number; truncated: boolean; sample: { id: number; filename: string; status: string }[] };
+}
+
+export interface ChatUsage { input_tokens: number; output_tokens: number; seconds: number; calls: number }
+
+export interface ChatMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  images: string[];
+  steps: ChatStep[];
+  proposals: ChatProposal[];
+  usage: ChatUsage | null;
+  created_at: string;
+}
+
+export const assistantApi = {
+  models: () =>
+    apiClient.get<{ id: number; name: string; model_name: string; active: boolean; default: boolean }[]>("/api/assistant/models").then((r) => r.data),
+  chats: () => apiClient.get<ChatInfo[]>("/api/assistant/chats").then((r) => r.data),
+  createChat: (aiConfigId?: number | null) =>
+    apiClient.post<ChatInfo>("/api/assistant/chats", { ai_config_id: aiConfigId ?? null }).then((r) => r.data),
+  getChat: (id: number) => apiClient.get<ChatInfo>(`/api/assistant/chats/${id}`).then((r) => r.data),
+  patchChat: (id: number, data: { title?: string; ai_config_id?: number | null }) =>
+    apiClient.patch<ChatInfo>(`/api/assistant/chats/${id}`, data).then((r) => r.data),
+  deleteChat: (id: number) => apiClient.delete(`/api/assistant/chats/${id}`),
+  restartChat: (id: number) => apiClient.post<ChatInfo>(`/api/assistant/chats/${id}/restart`).then((r) => r.data),
+  /** Lokale Modelle können mehrere Minuten brauchen → kein Zeitlimit im Browser (der Proxy erlaubt 15 Minuten) */
+  send: (id: number, content: string, images: string[], aiConfigId?: number | null) =>
+    apiClient
+      .post<{ chat: ChatInfo; user_message_id: number; message: ChatMessage }>(
+        `/api/assistant/chats/${id}/messages`, { content, images, ai_config_id: aiConfigId ?? null }, { timeout: 0 })
+      .then((r) => r.data),
+  applyProposal: (chatId: number, messageId: number, pid: string, workflowId?: number | null) =>
+    apiClient
+      .post<ChatMessage>(`/api/assistant/chats/${chatId}/messages/${messageId}/proposals/${pid}/apply`, { workflow_id: workflowId ?? null }, { timeout: 0 })
+      .then((r) => r.data),
+  dismissProposal: (chatId: number, messageId: number, pid: string) =>
+    apiClient.post<ChatMessage>(`/api/assistant/chats/${chatId}/messages/${messageId}/proposals/${pid}/dismiss`).then((r) => r.data),
+};
+
 // ─── Änderungsprotokoll ──────────────────────────────────────────────────────
 
 export interface ChangeRun {
