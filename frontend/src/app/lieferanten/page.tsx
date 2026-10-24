@@ -111,6 +111,7 @@ export default function LieferantenPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateGroup[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [exportHidden, setExportHidden] = useState(false);
   const [mergeVendors, setMergeVendors] = useState<Vendor[] | null>(null);
   const [compareVendors, setCompareVendors] = useState<Vendor[] | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -390,10 +391,14 @@ export default function LieferantenPage() {
           >
             Zusammenführen…
           </button>
+          <label className="flex items-center gap-1 text-xs text-blue-800">
+            <input type="checkbox" checked={exportHidden} onChange={(e) => setExportHidden(e.target.checked)} data-testid="export-hidden" />
+            Ausgeblendete Imports einbeziehen
+          </label>
           <a
-            href={vendorsApi.exportUrl([...selected])}
+            href={vendorsApi.exportUrl([...selected], exportHidden)}
             download
-            onClick={downloadLinkHandler(vendorsApi.exportUrl([...selected]), "Export_Lieferanten.xlsx")}
+            onClick={downloadLinkHandler(vendorsApi.exportUrl([...selected], exportHidden), "Export_Lieferanten.xlsx")}
             data-testid="export-selected"
             className="rounded bg-green-600 px-3 py-1 text-sm font-medium text-white hover:bg-green-700"
           >

@@ -331,3 +331,12 @@ def test_vendor_export_skips_hidden_imports(client, world):
         assert r.status_code == 404
     else:
         assert r.status_code == 200
+
+
+def test_vendor_export_include_hidden_switch(client, world):
+    from datetime import datetime, timezone
+    world.docs["a1"].batch.hidden_at = datetime.now(timezone.utc)
+    world.db.commit()
+    assert client.get("/api/vendors/export", params={"ids": [world.a.id]}).status_code == 404
+    r = client.get("/api/vendors/export", params={"ids": [world.a.id], "include_hidden": "true"})
+    assert r.status_code == 200
