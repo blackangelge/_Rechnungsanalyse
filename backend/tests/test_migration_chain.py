@@ -36,7 +36,7 @@ def test_branched_chain_is_reported_with_file_names(tmp_path):
     with pytest.raises(MigrationError) as exc:
         _assert_single_head(sd)
     msg = str(exc.value)
-    assert "2 Heads" in msg and "0002_stale" in msg and "0002_stale.py" in msg and "0020_batch_workflow" in msg
+    assert "2 Heads" in msg and "0002_stale" in msg and "0002_stale.py" in msg and "0021_export_templates" in msg
 
 
 def test_placeholder_revisions_of_the_production_database_exist_and_precede_plausibility():
