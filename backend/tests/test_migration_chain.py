@@ -49,3 +49,21 @@ def test_placeholder_revisions_of_the_production_database_exist_and_precede_plau
         assert sd.get_revision(rev) is not None
     chain = [r.revision for r in sd.walk_revisions("base", "head")]      # vom Head abwärts zur Basis
     assert chain.index("0007_plausibility") < chain.index("0008_token_count_ai_client") < chain.index("0007_export_config_table")
+
+
+def test_all_migrations_apply_on_real_postgres():
+    """
+    Spielt die komplette Kette auf einer LEEREN PostgreSQL-Datenbank ein (SQLite verträgt viele PG-Eigenheiten, z. B. doppelte
+    Indexnamen, nicht). Läuft nur, wenn `TEST_PG_URL` gesetzt ist, z. B.
+        TEST_PG_URL=postgresql://postgres@127.0.0.1:55432/ra_test pytest tests/test_migration_chain.py
+    (die Datenbank muss leer sein).
+    """
+    import os
+    import subprocess
+    import sys
+    url = os.environ.get("TEST_PG_URL")
+    if not url:
+        pytest.skip("TEST_PG_URL nicht gesetzt")
+    res = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env={**os.environ, "DATABASE_URL": url},
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr[-2000:]

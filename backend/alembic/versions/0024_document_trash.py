@@ -4,7 +4,7 @@ Revision ID: 0024_document_trash
 Revises: 0023_assistant_chats
 Create Date: 2026-10-29 09:00:00.000000
 
-Zwei nullable Spalten an documents (bestehende Belege bleiben unverändert).
+Zwei nullable Spalten an documents (bestehende Belege bleiben unverändert). Kein neuer Index (soft_deleted ist seit 0011 indiziert).
 """
 
 from alembic import op
@@ -19,10 +19,9 @@ depends_on = None
 def upgrade() -> None:
     op.add_column("documents", sa.Column("deleted_reason", sa.String(300), nullable=True))
     op.add_column("documents", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True))
-    op.create_index("ix_documents_soft_deleted", "documents", ["soft_deleted"])
+    # Index auf soft_deleted gibt es schon (0011_search_indexes: ix_documents_soft_deleted)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_documents_soft_deleted", table_name="documents")
     op.drop_column("documents", "deleted_at")
     op.drop_column("documents", "deleted_reason")
