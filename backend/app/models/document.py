@@ -24,7 +24,7 @@ Status-Flow:
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -78,6 +78,9 @@ class Document(Base):
     soft_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     deleted_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)           # warum im Papierkorb (z. B. „Keine Eingangsrechnung“)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Abschluss der letzten KI-Analyse (processing → done/error). Grundlage der Durchsatz-Kennzahlen — NICHT updated_at
+    # (das ändert sich auch beim Import, bei der Seitenzahl-Ermittlung, bei Kommentaren …)
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -207,3 +210,15 @@ class Document(Base):
             return None
         total = sum(tc.time_spent_seconds for tc in self.token_counts)
         return float(total) if total else None
+
+
+# ─── analyzed_at: genau dann setzen, wenn eine Analyse abgeschlossen wird (processing → done/error) ──────────────────────
+from sqlalchemy import event  # noqa: E402
+
+
+@event.listens_for(Document.status, "set", active_history=True)
+def _stamp_analysis_end(target: "Document", value, oldvalue, initiator) -> None:
+    """Gilt für JEDEN Weg, den Status zu setzen (update_status, direkte Zuweisung in Analyse/Workflow). Der Import
+    setzt dagegen pending/running → done und zählt deshalb nicht als Analyse."""
+    if oldvalue == "processing" and value in ("done", "error"):
+        target.analyzed_at = datetime.now(timezone.utc)

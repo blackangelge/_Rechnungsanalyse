@@ -594,8 +594,8 @@ Aggregierte Statistiken: `GET /api/logs/ki-stats` — gibt Summen und Durchschni
 
 | Feld | Bedeutung | Quelle |
 |---|---|---|
-| `processed_last_60min` | Belege mit `status='done'`, deren letzter Status-Übergang ≤ 60 Min. her ist | `documents.updated_at` |
-| `analyzed_last_24h` | Belege mit `status IN ('done','error')`, deren letzter Status-Übergang ≤ 24 Std. her ist (`waiting_capacity` zählt NICHT — noch nicht abgeschlossen) | `documents.updated_at` |
+| `processed_last_60min` | Belege, deren Analyse in den letzten 60 Min. mit `done` endete | `documents.analyzed_at` (nicht updated_at — Importe zählten sonst mit) |
+| `analyzed_last_24h` | Belege, deren Analyse in den letzten 24 Std. mit `done` oder `error` endete (`waiting_capacity` zählt NICHT) | `documents.analyzed_at` |
 
 Frontend: zwei zusätzliche `StatCard`-Kacheln im Analyse-Statistiken-Bereich von `/logs` ("Verarbeitet (letzte 60 Min.)", "Analysiert (letzte 24 Std.)").
 
@@ -1085,6 +1085,20 @@ Für dieses Projekt zählen nur Eingangsrechnungen. Alles andere wird **geprüft
    Extraktion/Positionen/Datensätzen/Historie (Cascade), wartende Worker-Tasks, `{id}.pdf` und `versions/{id}/` — nicht umkehrbar. Logik in `services/document_trash.py`; `GET /api/documents/non-invoices/summary` liefert die Zähler (Kennzahl in der Belege-Filterzeile). Filter `only_deleted=true` für Liste/IDs.
 - **KI-Assistent:** Lesewerkzeug `non_invoice_summary`, Schreibwerkzeuge `trash_documents` (`not_invoice: true` oder `document_ids`) und `restore_documents` — als Vorschläge mit Freigabe. **Endgültig löschen gibt es für den Assistenten bewusst nicht** (nur der Nutzer auf /papierkorb).
 - Tests: `tests/test_trash.py`.
+
+### KI-Statistiken: Live je KI-Rechner und saubere Durchsatz-Kennzahlen (Migration `0025_document_analyzed_at`)
+
+- **Durchsatz-Kennzahlen** (`GET /api/logs/ki-stats`: `processed_last_60min`, `analyzed_last_24h`) zählen den **Abschluss einer Analyse**: `documents.analyzed_at`, gesetzt von einem SQLAlchemy-Event auf `Document.status`
+  (**processing → done/error**, egal ob über `update_status` oder direkte Zuweisung). **Nicht** mehr `status`+`updated_at`: `updated_at` ändert sich auch beim Import (pending → done), beim Nachlesen der Seitenzahl, bei Kommentaren,
+  Papierkorb usw. — dadurch wurden Importe als „analysiert“ mitgezählt und die 24-Stunden-Zahl aufgebläht. `analyzed_at` wird beim ersten Start aus dem letzten `documents_token_counts`-Eintrag nachgetragen
+  (Belege ohne KI-Eintrag bleiben leer). Ein mehrfach analysierter Beleg zählt einmal (letzter Abschluss). Neue Wege, den Analyse-Abschluss zu setzen, müssen über `Document.status` laufen (nicht per Bulk-`UPDATE`, das löst das Event nicht aus).
+- **Live-Ansicht** (Seite `/logs`, oben „Live: KI-Rechner“, `components/logs/KiLiveView.tsx`): je KI-Rechner Status, belegte/maximale Slots und die Belege, die gerade dort laufen (Beleg-Link, Import, Seiten, **Läuft seit**; ab 2 Min. gelb, ab 10 Min. rot).
+  Aktualisiert sich selbst: Abruf alle 2 s (ohne Überlappung, pausiert bei verstecktem Tab, holt beim Zurückkehren sofort nach), die Laufzeit zählt dazwischen jede Sekunde weiter; bei Ausfall bleibt die letzte Anzeige mit Hinweis stehen.
+  Zusammenfassung: Warteschlange, laufend, „warten auf einen freien Slot“ (vom Worker übernommen, aber noch ohne KI-Slot bzw. in Vorbereitung: PDF rendern, Seitenerkennung …). Worker-Status alle 5 s, Statistik-Kacheln alle 15 s (ohne „Lade…“-Flackern).
+- **Technik:** `AIServer.running` (Worker, `worker.py`) merkt sich je KI-Rechner `{task_id, document_id, started_at, worker_id}` zwischen Slot-Erwerb und Ende des Tasks (`finally`); `GET /status` des Workers liefert `servers[].running[]` mit `elapsed_seconds`;
+  `GET /api/logs/ki-live` (Backend) ergänzt Dateiname/Seiten/Import aus der DB und nennt auch KI-Rechner ohne Last (und bei nicht erreichbarem Worker mit `worker_online: false`).
+  Die Dauer ist die Laufzeit der **ganzen Aufgabe** auf diesem Rechner (alle KI-Anfragen des Workflows), nicht die einer einzelnen HTTP-Anfrage; ein Knoten mit eigener `ai_config_id` wird dem Rechner des Slots zugerechnet.
+- Tests: `tests/test_ki_stats.py`.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 

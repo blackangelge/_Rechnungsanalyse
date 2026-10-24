@@ -10,7 +10,7 @@ worker-stats fragt worker_count/max_capacity per HTTP beim Worker-Container ab
 """
 
 import logging
-from datetime import timezone
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 @router.get("/ki-stats")
 def get_ki_stats(db: Session = Depends(get_db)):
     """Aggregierte KI-Statistiken aus documents_token_counts + zwei rollierende
-    Durchsatz-Kennzahlen aus documents (updated_at = Zeitpunkt des letzten
-    Status-Übergangs, siehe Document-Model)."""
+    Durchsatz-Kennzahlen aus documents.analyzed_at (Abschluss der letzten Analyse)."""
     from app.models.document_token_count import DocumentTokenCount
 
     row = db.query(
@@ -48,26 +47,16 @@ def get_ki_stats(db: Session = Depends(get_db)):
     def _float(v) -> float | None:
         return round(float(v), 2) if v is not None else None
 
-    # Belege, die in den letzten 60 Minuten erfolgreich über die Warteschlange
-    # fertig verarbeitet wurden (status='done', updated_at = Zeitpunkt des
-    # Abschlusses). Rollierendes Fenster — bei jedem Aufruf neu berechnet.
-    processed_last_60min = db.execute(
-        text(
-            "SELECT COUNT(*) FROM documents "
-            "WHERE status = 'done' AND updated_at >= NOW() - INTERVAL '60 minutes'"
-        )
-    ).scalar() or 0
-
-    # Belege, die in den letzten 24 Stunden durch die Rechnungsanalyse gegangen
-    # sind — done UND error zählen (beide sind ein abgeschlossener Durchlauf),
-    # waiting_capacity NICHT (dort läuft die Analyse noch/wartet auf Kapazität).
-    analyzed_last_24h = db.execute(
-        text(
-            "SELECT COUNT(*) FROM documents "
-            "WHERE status IN ('done', 'error') "
-            "AND updated_at >= NOW() - INTERVAL '24 hours'"
-        )
-    ).scalar() or 0
+    # Durchsatz: gezählt wird der ABSCHLUSS EINER ANALYSE (documents.analyzed_at, gesetzt bei processing → done/error).
+    # Nicht updated_at: das ändert sich auch beim Import, bei der Seitenzahl-Ermittlung, bei Kommentaren usw. und hat
+    # die Zahlen früher um jeden Import aufgebläht. Ein mehrfach analysierter Beleg zählt einmal (letzter Abschluss).
+    from datetime import timedelta
+    from app.models.document import Document
+    now = datetime.now(timezone.utc)
+    processed_last_60min = db.query(func.count(Document.id)).filter(
+        Document.status == "done", Document.analyzed_at >= now - timedelta(minutes=60)).scalar() or 0
+    analyzed_last_24h = db.query(func.count(Document.id)).filter(
+        Document.status.in_(("done", "error")), Document.analyzed_at >= now - timedelta(hours=24)).scalar() or 0
 
     return {
         "total_entries":      _int(row.total_entries),
@@ -133,7 +122,6 @@ async def get_worker_stats(db: Session = Depends(get_db)):
     ).scalar() or 0
 
     # Alle KI-Konfigurationen mit Verfügbarkeitsstatus
-    from datetime import datetime
     now = datetime.now(timezone.utc)
     configs = []
     for c in crud.ai_config.get_all(db):
@@ -167,4 +155,72 @@ async def get_worker_stats(db: Session = Depends(get_db)):
         "worker_online":      worker_online,
         "ai_configs":         configs,
         "documents_processed_total": int(documents_processed_total),
+    }
+
+
+@router.get("/ki-live")
+async def get_ki_live(db: Session = Depends(get_db)):
+    """
+    Live-Ansicht je KI-Rechner: welche Belege gerade dort laufen und wie lange schon.
+
+    Quelle ist der Worker-Container (`/status` → servers[].running); Dateiname/Seiten/Import kommen aus der Datenbank.
+    Ist der Worker nicht erreichbar, werden die KI-Konfigurationen ohne laufende Aufgaben geliefert (`worker_online: false`).
+    Die Oberfläche ruft das alle paar Sekunden ab und lässt die Laufzeit zwischen den Abrufen selbst weiterzählen.
+    Hinweis: Die Dauer ist die Laufzeit der ganzen Aufgabe auf diesem Rechner (alle KI-Anfragen des Workflows zusammen).
+    """
+    from app import crud
+    from app.models.document import Document
+    from app.models.import_batch import ImportBatch
+
+    data: dict = {}
+    worker_online = False
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            resp = await client.get(f"{settings.worker_api_url}/status")
+            resp.raise_for_status()
+            data = resp.json()
+            worker_online = True
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Worker-Container nicht erreichbar (/status): %s", exc)
+
+    configs = {c.id: c for c in crud.ai_config.get_all(db)}
+    live = {s["id"]: s for s in data.get("servers", [])} if worker_online else {}
+
+    doc_ids = [r["document_id"] for s in live.values() for r in s.get("running", []) if r.get("document_id")]
+    docs: dict[int, dict] = {}
+    if doc_ids:
+        for d, b in (db.query(Document, ImportBatch).join(ImportBatch, Document.batch_id == ImportBatch.id)
+                     .filter(Document.id.in_(doc_ids)).all()):
+            docs[d.id] = {"filename": d.original_filename, "pages": d.page_count or None, "company": b.company_name, "year": b.year,
+                          "pdf_version": d.pdf_version}
+
+    servers = []
+    for cid, c in sorted(configs.items()):
+        srv = live.get(cid, {})
+        running = [{
+            "task_id": r["task_id"], "document_id": r.get("document_id"), "elapsed_seconds": r.get("elapsed_seconds", 0.0),
+            **(docs.get(r.get("document_id")) or {}),
+        } for r in srv.get("running", [])]
+        ta = c.timeout_at
+        if ta is not None and ta.tzinfo is None:
+            ta = ta.replace(tzinfo=timezone.utc)
+        servers.append({
+            "id": cid, "name": c.name, "model_name": c.model_name, "url": srv.get("url"),
+            "active": bool(c.active), "is_down": bool(srv.get("is_down")) or bool(ta and ta > datetime.now(timezone.utc)),
+            "timeout_at": c.timeout_at.isoformat() if c.timeout_at else None,
+            "parallel_request": c.parallel_request, "busy": len(running), "running": running,
+        })
+
+    queue_pending = db.execute(text("SELECT COUNT(*) FROM workflow_tasks WHERE status = 'pending'")).scalar() or 0
+    in_progress = db.execute(text("SELECT COUNT(*) FROM workflow_tasks WHERE status = 'in_progress'")).scalar() or 0
+    on_servers = sum(len(s["running"]) for s in servers)
+    return {
+        "worker_online": worker_online,
+        "paused": bool(data.get("paused")),
+        "queue_pending": int(queue_pending),
+        "in_progress": int(in_progress),
+        "running_total": on_servers,
+        "waiting_for_slot": max(0, int(in_progress) - on_servers) if worker_online else 0,   # vom Worker übernommen, aber noch ohne freien Slot / in Vorbereitung
+        "servers": servers,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }

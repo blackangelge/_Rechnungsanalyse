@@ -8,7 +8,9 @@
  *    - Gesamtdauer aller Analysen
  *    - Quelle: GET /api/logs/ki-stats (aggregiert über documents_token_counts)
  *
- * 2. Worker-Pool-Status (automatisch alle 30 s aktualisiert):
+ * 0. Live je KI-Rechner (components/logs/KiLiveView): laufende Belege + Dauer, alle 2 s automatisch
+ *
+ * 2. Worker-Pool-Status (automatisch alle 5 s aktualisiert; Statistiken alle 15 s):
  *    - Aktive Worker / max. Kapazität
  *    - Warteschlange (pending), laufende und fehlgeschlagene Tasks
  *    - KI-Konfigurationen mit Verfügbarkeitsstatus (aktiv/temp. gesperrt/inaktiv)
@@ -18,6 +20,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import KiLiveView from "@/components/logs/KiLiveView";
 import { KiStats, WorkerStats, logsApi, workerApi } from "@/lib/api";
 
 export default function LogsPage() {
@@ -32,38 +35,41 @@ export default function LogsPage() {
   const workerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── KI-Statistiken laden ──────────────────────────────────────────────────
-  const loadKiStats = useCallback(async () => {
-    setKiStatsLoading(true);
-    setKiStatsError(null);
+  // silent = automatische Aktualisierung im Hintergrund: kein „Lade…“-Flackern, ein Fehler überschreibt die alten Werte nicht
+  const loadKiStats = useCallback(async (silent = false) => {
+    if (!silent) { setKiStatsLoading(true); setKiStatsError(null); }
     try {
       setKiStats(await logsApi.kiStats());
+      setKiStatsError(null);
     } catch {
-      setKiStatsError("KI-Statistiken konnten nicht geladen werden.");
+      if (!silent) setKiStatsError("KI-Statistiken konnten nicht geladen werden.");
     } finally {
-      setKiStatsLoading(false);
+      if (!silent) setKiStatsLoading(false);
     }
   }, []);
 
   // ── Worker-Status laden ───────────────────────────────────────────────────
-  const loadWorkerStats = useCallback(async () => {
-    setWorkerStatsLoading(true);
-    setWorkerStatsError(null);
+  const loadWorkerStats = useCallback(async (silent = false) => {
+    if (!silent) { setWorkerStatsLoading(true); setWorkerStatsError(null); }
     try {
       setWorkerStats(await workerApi.getStats());
+      setWorkerStatsError(null);
     } catch {
-      setWorkerStatsError("Worker-Status konnte nicht geladen werden.");
+      if (!silent) setWorkerStatsError("Worker-Status konnte nicht geladen werden.");
     } finally {
-      setWorkerStatsLoading(false);
+      if (!silent) setWorkerStatsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadKiStats();
     loadWorkerStats();
-    // Worker-Status alle 30 s automatisch aktualisieren
-    workerIntervalRef.current = setInterval(loadWorkerStats, 30_000);
+    // Worker-Status alle 5 s, Statistiken (Durchsatz-Kennzahlen) alle 15 s automatisch aktualisieren
+    workerIntervalRef.current = setInterval(() => loadWorkerStats(true), 5_000);
+    const kiTimer = setInterval(() => loadKiStats(true), 15_000);
     return () => {
       if (workerIntervalRef.current) clearInterval(workerIntervalRef.current);
+      clearInterval(kiTimer);
     };
   }, [loadKiStats, loadWorkerStats]);
 
@@ -114,14 +120,14 @@ export default function LogsPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-gray-900">KI-Statistiken</h1>
         <div className="flex gap-2">
           <button
-            onClick={loadWorkerStats}
+            onClick={() => loadWorkerStats()}
             disabled={workerStatsLoading}
             className="btn btn-secondary btn-sm"
           >
             {workerStatsLoading ? "Lade..." : "↻ Worker"}
           </button>
           <button
-            onClick={loadKiStats}
+            onClick={() => loadKiStats()}
             disabled={kiStatsLoading}
             className="btn btn-secondary btn-sm"
           >
@@ -130,12 +136,18 @@ export default function LogsPage() {
         </div>
       </div>
 
+      {/* ── Live: laufende Belege je KI-Rechner (aktualisiert sich selbst) ─ */}
+      <section>
+        <h2 className="mb-3 text-lg font-semibold text-gray-800">Live: KI-Rechner</h2>
+        <KiLiveView />
+      </section>
+
       {/* ── Worker-Status ─────────────────────────────────────────────── */}
       <section>
         <h2 className="mb-3 text-lg font-semibold text-gray-800">
           Worker-Status
           <span className="ml-2 text-xs font-normal text-gray-400">
-            (wird alle 30 s aktualisiert)
+            (wird alle 5 s aktualisiert)
           </span>
         </h2>
 

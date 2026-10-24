@@ -1123,7 +1123,45 @@ export interface WorkerStats {
   documents_processed_total: number;
 }
 
+export interface KiLiveRun {
+  task_id: number;
+  document_id: number | null;
+  /** Laufzeit der Aufgabe auf diesem Rechner zum Zeitpunkt der Abfrage */
+  elapsed_seconds: number;
+  filename?: string;
+  pages?: number | null;
+  company?: string;
+  year?: number;
+}
+
+export interface KiLiveServer {
+  id: number;
+  name: string;
+  model_name: string | null;
+  url: string | null;
+  active: boolean;
+  is_down: boolean;
+  timeout_at: string | null;
+  parallel_request: number;
+  busy: number;
+  running: KiLiveRun[];
+}
+
+export interface KiLive {
+  worker_online: boolean;
+  paused: boolean;
+  queue_pending: number;
+  in_progress: number;
+  running_total: number;
+  /** vom Worker übernommen, aber noch ohne freien KI-Slot bzw. in Vorbereitung */
+  waiting_for_slot: number;
+  servers: KiLiveServer[];
+  generated_at: string;
+}
+
 export const workerApi = {
+  /** Live-Ansicht je KI-Rechner (laufende Belege + Dauer) */
+  live: () => apiClient.get<KiLive>("/api/logs/ki-live/", { timeout: 8000 }).then((r) => r.data),
   getStats: () =>
     apiClient.get<WorkerStats>("/api/logs/worker-stats/").then((r) => r.data),
 };

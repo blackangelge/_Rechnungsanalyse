@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -139,6 +140,10 @@ class AIServer:
 
     #: Slot-Verwaltung; init=False, wird in __post_init__ gesetzt.
     semaphore: asyncio.Semaphore = field(init=False)
+
+    #: Aufgaben, die GERADE auf diesem Server laufen: task_id → {task_id, document_id, started_at (Unix-Zeit), worker_id}.
+    #: Nur für die Live-Ansicht (GET /status → servers[].running); wird beim Neuladen der Server-Liste beibehalten.
+    running: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.semaphore = asyncio.Semaphore(self.parallel_request)
@@ -521,6 +526,12 @@ class Worker:
                 log.info(
                     f"[{self.worker_id}] Task {task.id} auf {server.name}"
                 )
+                server.running[task.id] = {
+                    "task_id": task.id,
+                    "document_id": doc_id if isinstance(doc_id, int) else None,
+                    "started_at": time.time(),
+                    "worker_id": self.worker_id,
+                }
 
                 try:
                     result = await self.ai_client.send(server, task.payload)
@@ -560,6 +571,8 @@ class Worker:
                     # Fehleranzeige in der Belege-Übersicht, obwohl der Task längst
                     # fehlgeschlagen war).
                     await self._set_document_error(task, reason)
+                finally:
+                    server.running.pop(task.id, None)
 
         except TimeoutError:
             # Innerhalb von SLOT_ACQUIRE_TIMEOUT wurde kein passender Server frei —

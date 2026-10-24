@@ -11,6 +11,8 @@ kein Host-Port). Das Backend proxyt diese Endpunkte unter
     POST /resume   — Dispatcher nimmt wieder neue Tasks an
 """
 
+import time
+
 from fastapi import APIRouter, Request
 
 from app.worker.worker import Dispatcher
@@ -30,7 +32,9 @@ def health():
 @router.get("/status")
 def get_status(request: Request):
     d = _get_dispatcher(request)
+    now = time.time()
     return {
+        "now": now,
         "worker_count": len(d.workers),
         "queue_size": d.queue.qsize(),
         "paused": d.paused,
@@ -42,6 +46,11 @@ def get_status(request: Request):
                 "is_down": s.is_down,
                 "parallel_request": s.parallel_request,
                 "url": s.url,
+                # Aufgaben, die gerade auf diesem KI-Rechner laufen (Live-Ansicht der KI-Statistiken)
+                "running": [
+                    {**r, "elapsed_seconds": round(max(0.0, now - r["started_at"]), 1)}
+                    for r in sorted(s.running.values(), key=lambda r: r["started_at"])
+                ],
             }
             for s in d.pool._servers.values()
         ],
