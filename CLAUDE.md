@@ -1005,6 +1005,28 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - Tests: `tests/test_schema_definition.py`.
 
 
+### Prüfregeln (`services/rule_engine.py`, `routers/validation_rules.py`, `models/validation_rule.py`, Migration `0026_validation_rules`, Seite `/pruefregeln`)
+
+Frei definierbare Rechenregeln, mit denen die **schemagesteuert** extrahierten Datensätze gegengeprüft werden (ohne KI). Eine Regel = Entität („geprüft wird je Position/Beleg“),
+linker und rechter Rechenausdruck, Vergleich (`=`, `≤`, `≥`), Toleranz (absolut und/oder %), Schweregrad (`error` → Beleg „Prüfen!“, `warn` → Hinweis), aktiv/inaktiv.
+Regeln hängen an **Entitäts-/Feldnamen**, nicht an einer Schema-Version (gelten also über Versionswechsel hinweg); gespeichert wird nur, wenn die Definition zum **aktiven** Schema passt
+(Syntax, Entität, Feld vorhanden und Zahlenfeld → sonst HTTP 422).
+
+- **Ausdrücke** (eigener Parser, kein `eval`, `Decimal`): Zahlen (Punkt als Dezimaltrenner), `+ − * /`, Klammern, Felder (`menge`, `einzelpreis`), `eltern.feld` (Kopf aus der Position),
+  `SUM(position.gesamtpreis * position.steuersatz / 100)`, `SUMIF(wert; bedingung; vergleich)` (z. B. je Steuersatz), `COUNT(position)`, `ROUND`, `ABS`, `MIN`, `MAX`, `COALESCE(feld; ersatz)`
+  (deutsche Namen SUMME/SUMMEWENN/ANZAHL/RUNDEN/WENNLEER gelten auch; Argumente mit `;`).
+- **Fehlt ein Wert, wird nicht geraten:** Status `skipped` („nicht prüfbar — Wert fehlt: einzelpreis“), ebenso bei Division durch 0. Positionen ohne Wert werden in `SUM` ausgelassen. Wer einen Ersatz will, schreibt `COALESCE(preis_je_menge; 1)`.
+- **Einheiten:** Gespeicherte Mengen werden **nie** verändert. `menge` = Wert + Einheit **wie vom LLM gelesen** (`original_value`/`original_unit`). Eine Umrechnung gibt es nur **ausdrücklich innerhalb der Formel** über die Einheiten-Gruppen:
+  `menge.t`, `menge.kg`, `menge.g` … (Name/Symbol/Alias einer Einheit der Gruppe der Menge) oder `menge.basis` (Basiseinheit). Unbekannte Einheit der Menge oder andere Gruppe → nicht prüfbar statt falsch gerechnet.
+- **Ergebnis:** `evaluate_document` schreibt `data["_checks"]` (je Datensatz: Regel, Status ok|failed|skipped, links/rechts/Abweichung/Toleranz, Meldung) und an die Wurzel `data["_validation"]`
+  (`status`: `ok|warn|needs_review|unchecked`, Zähler). Läuft automatisch am Ende jeder Schema-Extraktion (`schema_pipeline.process_and_save`; Fehler dort brechen die Analyse nie ab).
+- **Standardregeln** (`rule_seed`, beim Start angelegt, wenn es noch keine Regel gibt, bzw. Button): Positionspreis = Menge × Einzelpreis (mit „Preis je N“ und Nachlass), Summe Positionen = Netto, Netto + Steuer = Brutto, Steuer aus Positionen = Steuerbetrag.
+- **Endpunkte** (`/api/validation-rules`): `GET` (mit Definitionsproblemen), `GET /meta` (Entitäten, Zahlenfelder, Unter-Entitäten, Funktionen, Einheiten für das Menü), `POST`, `PUT /{id}`, `DELETE /{id}`, `POST /seed-defaults`,
+  `POST /test` (ungespeicherte Regel an einem Beleg), `GET /document/{id}` (alle aktiven Regeln, nichts gespeichert), `POST /run` (`{document_ids?}` — ohne Angabe alle Belege neu prüfen und speichern; nach Regeländerungen nötig, weil bestehende Ergebnisse sonst alt bleiben).
+- **Oberfläche:** Menü „Schema & Auswertung → Prüfregeln“: Regelliste (aktiv-Haken, bearbeiten, löschen, Definitionsprobleme), Dialog mit Entitätswahl, Feld-/Funktions-Buttons, die in die zuletzt angeklickte Formelseite einfügen,
+  Toleranz/Schweregrad und „Ausprobieren an einem Beleg“; Kasten „Beleg prüfen“. Noch nicht umgesetzt: Anzeige des Prüfergebnisses in der Belegliste/Infos-Ansicht (kommt mit dem neuen Belege-Frontend) und ein Workflow-Knoten.
+- Tests: `tests/test_rule_engine.py`.
+
 ### Seitenanzahl im Hintergrund, Nachbearbeitung, Seitenklassifizierung (Migration `0022_pdf_state_pages`)
 
 - **Import liest keine Seiten mehr.** `services/page_count_service.py` (pypdf) läuft parallel als Hintergrundaufgabe (`routers/imports.py::start_import` → `run_for_batch`, dazu Nachholschleife `worker/page_counts.py` im Worker) und trägt `documents.page_count` + `documents.pdf_state` (`ok|encrypted|unreadable`) ein. Geschrieben wird nur, wenn der Beleg noch nicht analysiert ist (`analyzed_pdf_version IS NULL`, Status `pending|done`). `seitenanzahl` ist ein **gesperrtes Standardfeld der Wurzel-Entität** (`ROOT_STANDARD_FIELDS`, `system_function=page_count`; wird per `ensure_root_standard_fields` bei Beziehungen/Aktivierung ergänzt).

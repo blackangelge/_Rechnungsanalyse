@@ -23,6 +23,7 @@ from app.models.user import User, UserSession  # noqa: F401
 from app.models.data_change import DataChange, DataChangeRun  # noqa: F401
 from app.models.ai_query import AIQuery, DocumentAnswer  # noqa: F401
 from app.models.schema_def import SchemaVersion, SchemaEntity, SchemaField, SchemaRelation, ExtractedRecord  # noqa: F401
+from app.models.validation_rule import ValidationRule  # noqa: F401
 from app.models.units import UnitGroup, Unit, UnitAlias, UnitReviewItem  # noqa: F401
 from app.models.export_template import ExportTemplate  # noqa: F401
 from app.models.assistant_chat import AssistantChat, AssistantMessage  # noqa: F401

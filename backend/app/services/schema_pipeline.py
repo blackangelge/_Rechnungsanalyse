@@ -280,5 +280,11 @@ def process_and_save(
     ctx = field_functions.build_context(document)
     root = build_drafts(db, version, validated, ctx, UnitResolver(db))
     result = save_drafts(db, document.id, version, root)
+    try:                                   # Prüfregeln: ein Fehler hier darf die Analyse nie abbrechen
+        from app.services import rule_engine
+        with db.begin_nested():
+            rule_engine.evaluate_document(db, document.id)
+    except Exception:
+        logger.warning("Prüfregeln für Beleg %s fehlgeschlagen", document.id, exc_info=True)
     db.commit()
     return result

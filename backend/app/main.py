@@ -179,6 +179,23 @@ def _seed_units() -> None:
         logger.error("✗ Standard-Einheiten konnten nicht angelegt werden: %s", exc, exc_info=True)
 
 
+def _seed_rules() -> None:
+    """Legt Vorschläge für Prüfregeln an, wenn es noch keine gibt (idempotent)."""
+    try:
+        from app.database import SessionLocal
+        from app.services.rule_seed import seed_default_rules
+
+        db = SessionLocal()
+        try:
+            if seed_default_rules(db):
+                db.commit()
+                logger.info("✓ Standard-Prüfregeln angelegt")
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.error("✗ Standard-Prüfregeln konnten nicht angelegt werden: %s", exc, exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 60)
@@ -208,6 +225,7 @@ async def lifespan(app: FastAPI):
     logger.info("✓ Migration bereit")
     await asyncio.to_thread(_seed_users)
     await asyncio.to_thread(_seed_units)
+    await asyncio.to_thread(_seed_rules)
     logger.info("✓ Backend bereit")
     yield
     logger.info("=" * 60)
@@ -300,6 +318,7 @@ from app.routers import schema_registry as schema_registry_router
 from app.routers import units as units_router
 from app.routers import export_templates as export_templates_router
 from app.routers import assistant as assistant_router
+from app.routers import validation_rules as validation_rules_router
 from app.routers import positions as positions_router
 from app.routers import validation_backfill as validation_backfill_router
 from app.routers import export_settings as export_settings_router
@@ -323,6 +342,7 @@ app.include_router(vendors.router, dependencies=_protected)                     
 app.include_router(workflows.router, dependencies=_protected)                    # /api/workflows/*
 app.include_router(schema_registry_router.router, dependencies=_protected)       # /api/schema/* (Normalisierer, Systemfunktionen)
 app.include_router(units_router.router, dependencies=_protected)                 # /api/units/* (Einheiten, Prüfliste)
+app.include_router(validation_rules_router.router, dependencies=_protected)     # /api/validation-rules/* (Prüfregeln)
 app.include_router(assistant_router.router, dependencies=_protected)           # /api/assistant/* (KI-Assistent mit Chats)
 app.include_router(export_templates_router.router, dependencies=_protected)      # /api/export-templates/* (schemagesteuerter Export)
 app.include_router(batch.router, dependencies=_protected)                        # /api/batch/*

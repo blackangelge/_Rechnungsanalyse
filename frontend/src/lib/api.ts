@@ -1918,3 +1918,35 @@ export const exportTemplatesApi = {
     return `/api/export-templates/${id}/export${qs ? `?${qs}` : ""}`;
   },
 };
+
+// ─── Prüfregeln ───────────────────────────────────────────────────────────────
+export interface ValidationRule {
+  id: number; name: string; description: string | null; entity_name: string; left_expr: string; right_expr: string;
+  comparator: string; tolerance_abs: number; tolerance_pct: number; severity: "warn" | "error"; enabled: boolean; problems: string[];
+}
+export type ValidationRuleInput = Omit<ValidationRule, "id" | "problems">;
+export interface RuleMeta {
+  entities: { name: string; display_name: string; fields: { name: string; display_name: string; data_type: string }[]; children: string[]; has_parent: boolean }[];
+  functions: { name: string; example: string; text: string }[];
+  comparators: string[]; units: string[]; schema_version: number | null;
+}
+export interface RuleResult {
+  rule_id: number | null; name: string; severity: string; entity: string; record_id: number; position_index: number; formula: string;
+  status: "ok" | "failed" | "skipped"; left?: number; right?: number; diff?: number; tolerance?: number; message?: string;
+}
+export interface RuleCheckSummary { status: "ok" | "warn" | "needs_review" | "unchecked"; ok: number; failed: number; skipped: number }
+
+export const validationRulesApi = {
+  list: () => apiClient.get<ValidationRule[]>("/api/validation-rules").then((r) => r.data),
+  meta: () => apiClient.get<RuleMeta>("/api/validation-rules/meta").then((r) => r.data),
+  create: (d: ValidationRuleInput) => apiClient.post<ValidationRule>("/api/validation-rules", d).then((r) => r.data),
+  update: (id: number, d: ValidationRuleInput) => apiClient.put<ValidationRule>(`/api/validation-rules/${id}`, d).then((r) => r.data),
+  remove: (id: number) => apiClient.delete(`/api/validation-rules/${id}`),
+  seedDefaults: () => apiClient.post<{ created: number }>("/api/validation-rules/seed-defaults").then((r) => r.data),
+  test: (d: ValidationRuleInput, documentId: number) =>
+    apiClient.post<{ problems: string[]; results: RuleResult[] }>("/api/validation-rules/test", { ...d, document_id: documentId }).then((r) => r.data),
+  document: (id: number) => apiClient.get<{ summary: RuleCheckSummary; results: RuleResult[] }>(`/api/validation-rules/document/${id}`).then((r) => r.data),
+  run: (documentIds?: number[]) =>
+    apiClient.post<{ documents: number; rules: number; counts: Record<string, number>; flagged_sample: number[] }>(
+      "/api/validation-rules/run", { document_ids: documentIds ?? null }).then((r) => r.data),
+};
