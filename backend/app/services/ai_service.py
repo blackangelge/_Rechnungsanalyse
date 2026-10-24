@@ -617,6 +617,71 @@ def detect_document_type(
     return type_id, type_name, raw_text, ki_stats
 
 
+def ask_question(
+    images_b64: list[str],
+    config,
+    question: str,
+    answer_hint: str = "",
+) -> tuple[str, str | None, dict]:
+    """
+    Stellt der KI eine freie Frage zum Beleg (Seitenbilder) und erwartet NUR den gesuchten Wert als Antwort.
+
+    WICHTIG: Synchron — immer via asyncio.to_thread() aufrufen.
+
+    Returns:
+        (antwort_text, fehler, ki_stats) — `fehler` ist gesetzt (mit den üblichen Präfixen "KI-Fehler:", "KI-Timeout" …),
+        wenn die Anfrage scheiterte; dann ist der Antworttext leer.
+    """
+    system_prompt = (
+        "Du beantwortest eine Frage zu dem abgebildeten Beleg. Antworte AUSSCHLIESSLICH mit dem gesuchten Wert — "
+        "kein Satz, keine Erklärung, keine Anführungszeichen, kein JSON, kein Markdown. Gib den Wert genau so wieder, wie er auf dem Beleg steht. "
+        "Steht der gesuchte Wert nicht auf dem Beleg, antworte exakt mit: NICHT GEFUNDEN"
+        + (f"\n{answer_hint}" if answer_hint else "")
+    )
+    user_text = f"Frage zum Beleg ({len(images_b64)} Seite(n)): {question}"
+    endpoint_type = getattr(config, "endpoint_type", "openai") or "openai"
+
+    if endpoint_type == "lmstudio":
+        raw_text, ki_stats, error = _send_via_lmstudio(images_b64, config, system_prompt, user_text)
+        return ("" if error else raw_text), error, ki_stats
+
+    base = config.api_url.rstrip("/")
+    headers = {"Content-Type": "application/json"}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+    content_parts: list[dict] = [{"type": "text", "text": user_text}]
+    for data_url in images_b64:
+        content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+    body = {
+        "model": config.model_name,
+        "max_tokens": min(config.max_tokens or 1024, 2048),
+        "temperature": 0,
+        "stream": False,
+        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": content_parts}],
+    }
+    reasoning_param = build_reasoning_param(getattr(config, "reasoning", "off") or "off")
+    if reasoning_param is not None:
+        body["reasoning"] = reasoning_param
+    try:
+        t0 = time.monotonic()
+        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = client.post(base + "/v1/chat/completions", content=json.dumps(body).encode("utf-8"), headers=headers)
+        duration = time.monotonic() - t0
+        if response.status_code != 200:
+            return "", f"KI-Fehler: HTTP {response.status_code}", {}
+        data = json.loads(response.content)
+        text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "")
+        usage = data.get("usage") or {}
+        stats = {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"), "total_duration": duration}
+        return text, None, stats
+    except httpx.TimeoutException as exc:
+        return "", f"KI-Timeout: {exc}", {}
+    except httpx.ConnectError as exc:
+        return "", f"KI-Verbindungsfehler: {exc}", {}
+    except Exception as exc:                                  # noqa: BLE001
+        return "", f"Unerwarteter KI-Fehler: {exc}", {}
+
+
 def _normalize_decimal_commas(obj):
     """
     Normalisiert Dezimalkommas in Zahlenwerten rekursiv im gesamten geparsten JSON.
