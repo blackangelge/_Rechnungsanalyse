@@ -1024,7 +1024,9 @@ Regeln hängen an **Entitäts-/Feldnamen**, nicht an einer Schema-Version (gelte
 - **Endpunkte** (`/api/validation-rules`): `GET` (mit Definitionsproblemen), `GET /meta` (Entitäten, Zahlenfelder, Unter-Entitäten, Funktionen, Einheiten für das Menü), `POST`, `PUT /{id}`, `DELETE /{id}`, `POST /seed-defaults`,
   `POST /test` (ungespeicherte Regel an einem Beleg), `GET /document/{id}` (alle aktiven Regeln, nichts gespeichert), `POST /run` (`{document_ids?}` — ohne Angabe alle Belege neu prüfen und speichern; nach Regeländerungen nötig, weil bestehende Ergebnisse sonst alt bleiben).
 - **Oberfläche:** Menü „Schema & Auswertung → Prüfregeln“: Regelliste (aktiv-Haken, bearbeiten, löschen, Definitionsprobleme), Dialog mit Entitätswahl, Feld-/Funktions-Buttons, die in die zuletzt angeklickte Formelseite einfügen,
-  Toleranz/Schweregrad und „Ausprobieren an einem Beleg“; Kasten „Beleg prüfen“. Noch nicht umgesetzt: Anzeige des Prüfergebnisses in der Belegliste/Infos-Ansicht (kommt mit dem neuen Belege-Frontend) und ein Workflow-Knoten.
+  Toleranz/Schweregrad und „Ausprobieren an einem Beleg“; Kasten „Beleg prüfen“. **Belegliste:** Spalte „Prüfung“ zeigt bei Belegen ohne alte Plausibilitätsprüfung das Regel-Ergebnis (`RuleBadge` in `components/belege/RuleChecks.tsx`: Regeln OK · Hinweis · Prüfen! (n), Klick öffnet die Einzelergebnisse = frische Auswertung über `GET /document/{id}`);
+  `DocumentListRead` trägt `rule_status/rule_failed/rule_skipped` (eine feste Zusatzabfrage je Seite, nur `data._validation` des Wurzel-Datensatzes — `crud.document._attach_rule_status`). Der Filter `validation_status` (Plausibilität) trifft **auch** den Regel-Status (`ok|warn|needs_review`, ODER-Verknüpfung mit `invoice_extractions.validation_status`; Voreinstellung „Mit Hinweis (Prüfregeln)“).
+  Noch nicht umgesetzt: Anzeige in der Infos-Ansicht der Belege und ein Workflow-Knoten.
 - Tests: `tests/test_rule_engine.py`.
 
 ### Seitenanzahl im Hintergrund, Nachbearbeitung, Seitenklassifizierung (Migration `0022_pdf_state_pages`)

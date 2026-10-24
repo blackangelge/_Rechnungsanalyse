@@ -121,7 +121,8 @@ def test_list_query_does_not_load_heavy_columns(db, many):
     select = " ".join(statements).lower()
     for heavy in ("raw_response", "validation_details", "used_system_prompt", "used_workflow_graph", "workflow_trace"):
         assert heavy not in select, f"{heavy} darf in der Listenabfrage nicht geladen werden"
-    assert len(statements) == 1                       # kein N+1
+    # eine Listenabfrage + eine feste Abfrage für das Prüfregel-Ergebnis (nur data._validation) — kein N+1
+    assert len(statements) == 2 and "extracted_records" in statements[1].lower()
 
 
 def test_detail_still_has_heavy_columns(client, many):

@@ -192,3 +192,18 @@ def test_rules_api_crud_test_and_run(client, world):
     run = client.post("/api/validation-rules/run", json={}).json()
     assert run["documents"] == 1 and run["rules"] == 4 and sum(run["counts"].values()) == 1
     assert len(client.get("/api/validation-rules").json()) == 4
+
+
+def test_document_list_shows_rule_status_and_filters(client, world):
+    seed_default_rules(world.db)
+    world.db.commit()
+    good = world.add_doc()
+    bad = deepcopy(SAMPLE)
+    bad["gesamtbetrag_brutto"] = "5.000,00"
+    flagged = world.add_doc(bad)
+    rows = {r["id"]: r for r in client.get("/api/documents").json()}
+    assert rows[good.id]["rule_status"] == "ok" and rows[flagged.id]["rule_status"] == "needs_review"
+    assert rows[flagged.id]["rule_failed"] == 1 and rows[good.id]["rule_skipped"] >= 1
+    ids = client.get("/api/documents/ids", params={"validation_status": ["needs_review"]}).json()
+    assert ids == [flagged.id]
+    assert client.get("/api/documents/ids", params={"validation_status": ["ok"]}).json() == [good.id]

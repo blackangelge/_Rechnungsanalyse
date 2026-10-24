@@ -60,6 +60,10 @@ class DocumentListRead(DocumentRead):
     supplier_name: str | None = None       # InvoiceExtraction.vendor_id (Freitext-Name)
     has_extraction: bool = False           # True wenn InvoiceExtraction vorhanden
     validation_status: str | None = None   # Plausibilität: ok|corrected|ai_corrected|needs_review|manual_ok|unchecked
+    # Prüfregeln (Schema-Extraktion): ok|warn|needs_review|unchecked + Zähler (None = noch nicht geprüft)
+    rule_status: str | None = None
+    rule_failed: int | None = None
+    rule_skipped: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

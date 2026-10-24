@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Badge, Card, EmptyState, Icon, Modal, PageHeader, Spinner } from "@/components/ui";
+import { ResultTable } from "@/components/belege/RuleChecks";
 import {
   RuleMeta, RuleResult, ValidationRule, ValidationRuleInput, extractApiError, validationRulesApi,
 } from "@/lib/api";
@@ -10,36 +11,6 @@ const EMPTY: ValidationRuleInput = {
   name: "", description: "", entity_name: "", left_expr: "", right_expr: "", comparator: "=",
   tolerance_abs: 0.02, tolerance_pct: 0, severity: "error", enabled: true,
 };
-
-const STATUS_BADGE: Record<string, { tone: "green" | "red" | "gray"; label: string }> = {
-  ok: { tone: "green", label: "stimmt" },
-  failed: { tone: "red", label: "weicht ab" },
-  skipped: { tone: "gray", label: "nicht prüfbar" },
-};
-
-function ResultTable({ results }: { results: RuleResult[] }) {
-  if (!results.length) return <p className="hint">Keine Ergebnisse — für diese Entität gibt es an dem Beleg keine Datensätze.</p>;
-  return (
-    <div className="overflow-x-auto">
-      <table className="table-ra">
-        <thead><tr><th>Regel</th><th>Datensatz</th><th>Links</th><th>Rechts</th><th>Abweichung</th><th>Ergebnis</th></tr></thead>
-        <tbody>
-          {results.map((r, i) => (
-            <tr key={i}>
-              <td>{r.name}</td>
-              <td>{r.entity}{r.entity !== "beleg" ? ` ${r.position_index + 1}` : ""}</td>
-              <td>{r.left ?? "–"}</td><td>{r.right ?? "–"}</td><td>{r.diff ?? "–"}</td>
-              <td>
-                <Badge tone={STATUS_BADGE[r.status].tone}>{STATUS_BADGE[r.status].label}</Badge>
-                {r.message && r.status !== "ok" && <div className="hint mt-1">{r.message}</div>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 function RuleModal({ rule, meta, onClose, onSaved }: {
   rule: ValidationRule | null; meta: RuleMeta; onClose: () => void; onSaved: () => void;

@@ -18,13 +18,14 @@ import json
 import logging
 from decimal import Decimal
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, defer, joinedload
 
 from app.models.document import Document
 from app.models.import_batch import ImportBatch
 from app.models.invoice_extraction import InvoiceExtraction
 from app.models.order_position import OrderPosition
+from app.models.schema_def import ExtractedRecord
 from app.models.document_token_count import DocumentTokenCount
 
 logger = logging.getLogger(__name__)
@@ -226,7 +227,17 @@ def _filtered_query(db: Session, **f):
     elif g("has_extraction") is False:
         query = query.filter(InvoiceExtraction.id.is_(None))
     if g("validation_statuses"):
-        query = query.filter(InvoiceExtraction.validation_status.in_(g("validation_statuses")))
+        # alte Plausibilitätsprüfung (invoice_extractions) ODER Prüfregeln des Schemas (Wurzel-Datensatz, data._validation.status)
+        rule_match = (
+            db.query(ExtractedRecord.id)
+            .filter(
+                ExtractedRecord.document_id == Document.id,
+                ExtractedRecord.parent_record_id.is_(None),
+                ExtractedRecord.data["_validation"]["status"].as_string().in_(g("validation_statuses")),
+            )
+            .exists()
+        )
+        query = query.filter(or_(InvoiceExtraction.validation_status.in_(g("validation_statuses")), rule_match))
     if g("error_codes"):
         codes = g("error_codes")
         query = query.filter(Document.error_code.isnot(None) if "any" in codes else Document.error_code.in_(codes))
@@ -284,7 +295,27 @@ def get_all_filtered(
         query = query.offset(offset)
     if limit:
         query = query.limit(limit)
-    return query.all()
+    docs = query.all()
+    _attach_rule_status(db, docs)
+    return docs
+
+
+def _attach_rule_status(db: Session, docs: list[Document]) -> None:
+    """Ergebnis der Prüfregeln (Wurzel-Datensatz, data._validation) an die Listenzeilen hängen — nur dieser Teilwert wird gelesen."""
+    for d in docs:
+        d.rule_status = d.rule_failed = d.rule_skipped = None
+    if not docs:
+        return
+    rows = (
+        db.query(ExtractedRecord.document_id, ExtractedRecord.data["_validation"])
+        .filter(ExtractedRecord.document_id.in_([d.id for d in docs]), ExtractedRecord.parent_record_id.is_(None))
+        .all()
+    )
+    by_doc = {doc_id: val for doc_id, val in rows if isinstance(val, dict)}
+    for d in docs:
+        val = by_doc.get(d.id)
+        if val:
+            d.rule_status, d.rule_failed, d.rule_skipped = val.get("status"), val.get("failed"), val.get("skipped")
 
 
 def count_filtered(db: Session, **filters) -> int:

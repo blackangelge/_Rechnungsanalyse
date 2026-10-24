@@ -22,6 +22,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { RuleBadge } from "@/components/belege/RuleChecks";
 import { createPortal } from "react-dom";
 import Pager from "@/components/common/Pager";
 import { Alert, PageHeader } from "@/components/ui";
@@ -136,6 +137,7 @@ function ValidationBadge({ status }: { status: ValidationStatus | null | undefin
 /** Filter-Presets für die Plausibilitätsprüfung → Backend-Statuswerte */
 const VALIDATION_FILTERS: Record<string, { label: string; statuses: ValidationStatus[] }> = {
   needs_review: { label: "Manuell prüfen", statuses: ["needs_review"] },
+  warn: { label: "Mit Hinweis (Prüfregeln)", statuses: ["warn" as ValidationStatus] },
   corrected: { label: "Automatisch korrigiert", statuses: ["corrected", "ai_corrected"] },
   ok: { label: "In Ordnung", statuses: ["ok", "manual_ok"] },
 };
@@ -1214,7 +1216,11 @@ export default function BelegePage() {
                         </td>}
                         <td className="px-3 py-2.5 whitespace-nowrap"><StatusBadge status={doc.status} errorCode={doc.error_code} /></td>
                         {!showPreview && <td className="px-3 py-2.5"><KiBadge hasExtraction={doc.has_extraction ?? false} /></td>}
-                        <td className="px-3 py-2.5 whitespace-nowrap"><ValidationBadge status={doc.validation_status} /></td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          {doc.validation_status || !doc.rule_status
+                            ? <ValidationBadge status={doc.validation_status} />
+                            : <RuleBadge docId={doc.id} status={doc.rule_status} failed={doc.rule_failed} skipped={doc.rule_skipped} />}
+                        </td>
 
                         {!showPreview && (
                           <>

@@ -323,6 +323,10 @@ export interface DocumentItem {
   has_extraction?: boolean;
   /** Ergebnis der Plausibilitätsprüfung (nur bei Eingangsrechnungen) */
   validation_status?: ValidationStatus | null;
+  /** Ergebnis der Prüfregeln (Schema-Extraktion); null = noch nicht geprüft */
+  rule_status?: "ok" | "warn" | "needs_review" | "unchecked" | null;
+  rule_failed?: number | null;
+  rule_skipped?: number | null;
 }
 
 /** Eine gespeicherte PDF-Version (Original = 1, danach manuell/auto/restore) */
