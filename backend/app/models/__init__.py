@@ -22,3 +22,4 @@ from app.models.workflow import Workflow  # noqa: F401
 from app.models.user import User, UserSession  # noqa: F401
 from app.models.data_change import DataChange, DataChangeRun  # noqa: F401
 from app.models.ai_query import AIQuery, DocumentAnswer  # noqa: F401
+from app.models.schema_def import SchemaVersion, SchemaEntity, SchemaField, SchemaRelation, ExtractedRecord  # noqa: F401
