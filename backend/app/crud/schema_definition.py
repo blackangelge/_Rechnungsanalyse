@@ -17,6 +17,7 @@ from app.services import normalizers as normalizer_registry
 from app.models.schema_def import (
     DATA_TYPES,
     FIELD_SOURCES,
+    ROOT_STANDARD_FIELDS,
     RELATION_KINDS,
     STANDARD_FIELDS,
     SchemaEntity,
@@ -26,7 +27,7 @@ from app.models.schema_def import (
 )
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,59}$")
-_RESERVED = {"id", "data", "parent_record_id", "entity_id", "schema_version_id", "position_index"}
+_RESERVED = {"id", "data", "parent_record_id", "entity_id", "schema_version_id", "position_index"} | set(ROOT_STANDARD_FIELDS)
 
 
 class SchemaError(ValueError):
@@ -102,12 +103,32 @@ def create_draft_from(db: Session, base: SchemaVersion, comment: str | None = No
     return draft
 
 
+def ensure_root_standard_fields(db: Session, version: SchemaVersion) -> None:
+    """Die Wurzel-Entität (Beleg) bekommt die gesperrten Standardfelder (Seitenanzahl); idempotent, ohne eindeutige Wurzel passiert nichts."""
+    from app.services.schema_models import SchemaModelError, root_entity
+    try:
+        root = root_entity(version)
+    except SchemaModelError:
+        return
+    have = {f.name for f in root.fields}
+    for name, spec in ROOT_STANDARD_FIELDS.items():
+        if name not in have:
+            db.add(SchemaField(
+                entity_id=root.id, name=name, display_name=spec["display_name"], data_type=spec["data_type"],
+                description=spec["description"], position=len(root.fields), source="system", is_locked=True,
+                system_function=spec["system_function"],
+            ))
+            db.flush()
+    db.refresh(root)
+
+
 def activate(db: Session, version: SchemaVersion) -> SchemaVersion:
     """Macht einen Entwurf zur aktiven Version; die bisherige wird archiviert (bleibt für Altdaten lesbar)."""
     if version.status == "active":
         return version
     if version.status != "draft":
         raise SchemaError("Nur ein Entwurf kann aktiviert werden.")
+    ensure_root_standard_fields(db, version)
     problems = validate_version(version)
     if problems:
         raise SchemaError("Schema ungültig: " + "; ".join(problems))
@@ -132,6 +153,14 @@ def validate_version(version: SchemaVersion) -> list[str]:
     if not version.entities:
         problems.append("keine Entität definiert")
     ids = {e.id for e in version.entities}
+    try:
+        from app.services.schema_models import root_entity
+        root = root_entity(version)
+        row = next((f for f in root.fields if f.name == "seitenanzahl"), None)
+        if row is None or not row.is_locked:
+            problems.append(f"{root.name}: Standardfeld seitenanzahl fehlt")
+    except Exception:  # noqa: BLE001 — ohne eindeutige Wurzel gibt es keine Seitenanzahl-Pflicht
+        pass
     for ent in version.entities:
         names = {f.name for f in ent.fields}
         if not ent.is_master:
@@ -302,4 +331,5 @@ def add_relation(
     db.add(rel)
     db.flush()
     db.refresh(version)
+    ensure_root_standard_fields(db, version)
     return rel

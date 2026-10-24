@@ -1003,6 +1003,14 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
 - Geplant: Phase 6 komplett neues Frontend; später Tools für die KI (Rechnen/Nachschlagen).
 - Tests: `tests/test_schema_definition.py`.
 
+
+### Seitenanzahl im Hintergrund, Nachbearbeitung, Seitenklassifizierung (Migration `0022_pdf_state_pages`)
+
+- **Import liest keine Seiten mehr.** `services/page_count_service.py` (pypdf) läuft parallel als Hintergrundaufgabe (`routers/imports.py::start_import` → `run_for_batch`, dazu Nachholschleife `worker/page_counts.py` im Worker) und trägt `documents.page_count` + `documents.pdf_state` (`ok|encrypted|unreadable`) ein. Geschrieben wird nur, wenn der Beleg noch nicht analysiert ist (`analyzed_pdf_version IS NULL`, Status `pending|done`). `seitenanzahl` ist ein **gesperrtes Standardfeld der Wurzel-Entität** (`ROOT_STANDARD_FIELDS`, `system_function=page_count`; wird per `ensure_root_standard_fields` bei Beziehungen/Aktivierung ergänzt).
+- **Nachbearbeitung nötig** = Beleg im Status `error` mit `documents.error_code` ∈ `too_many_pages | encrypted | unreadable` (Filter `GET /api/documents?error_code=any|<code>`). Zu viele Seiten ergibt sich aus `max_context_tokens` der KI (`services/capacity.py`, 4500 Token/Seite); der Worker setzt dann sofort Fehler + `_mark_failed` statt endlos zu warten – außer der Workflow verkürzt vorher (`trim_pages`/`classify_pages`, `_db_workflow_reduces_pages`). Lösung: PDF kürzen/entsperren (Seiten-Modal), dann erneut mit Workflow analysieren; neue Analyse löscht den Code.
+- **Workflow-Knoten `classify_pages`** (`services/page_classifier.py`): das LLM klassifiziert jede Seite (rechnung, rechnung_folgeseite, lieferschein, bestellung, angebot, mahnung, kontoauszug, vertrag, sonstiges, leer) in Blöcken mit kleinen Bildern („Seite N:“-Beschriftung) per Structured Output; Ergebnis in `document_pages`. Zusammenfassung → Dokumententyp (Rechnung = 1, Rechnung + andere = **15 Mischbeleg**). Optional (`keep_invoice_only`) bleibt per `pdf_edit_service` nur die Rechnungsseiten-Version stehen (Original bleibt erhalten). Verzweigung über Feld `invoice_page_count`. Vorlage `pages_schema`.
+- **Neue Abhängigkeit `cryptography`** (verschlüsselte PDFs): nach dem Update Backend- und Worker-Container neu starten.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:

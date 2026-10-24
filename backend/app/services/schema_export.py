@@ -99,7 +99,7 @@ def entity_columns(entity: SchemaEntity, selected: list[str] | None, mode: str) 
     if selected:
         fields = [by_name[n] for n in selected if n in by_name]
     else:
-        fields = [f for f in entity.fields if not f.is_locked]
+        fields = [f for f in entity.fields if not f.is_locked or f.system_function]
     cols: list[Col] = []
     for f in fields:
         if f.data_type == "quantity":

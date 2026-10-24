@@ -44,6 +44,12 @@ STANDARD_FIELDS = {
 }
 
 
+# Standardfeld der Wurzel-Entität (Beleg): immer vorhanden, gesperrt, vom Hintergrunddienst ermittelt (documents.page_count)
+ROOT_STANDARD_FIELDS = {
+    "seitenanzahl": {"display_name": "Seiten", "data_type": "integer", "description": "Seitenanzahl der PDF", "system_function": "page_count"},
+}
+
+
 class SchemaVersion(Base):
     __tablename__ = "schema_versions"
 

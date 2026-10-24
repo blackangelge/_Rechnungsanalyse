@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.db_wait import wait_for_db
 from app.services.ai_dispatcher_client import AIDispatcherClient
-from app.worker import export_schedule, folder_sync
+from app.worker import export_schedule, folder_sync, page_counts
 from app.worker.worker import Dispatcher
 
 logging.basicConfig(
@@ -95,6 +95,8 @@ async def lifespan(app: FastAPI):
     # das volle Poll-Intervall abzuwarten.
     folder_sync_stop = asyncio.Event()
     folder_sync_task = asyncio.create_task(folder_sync.run(folder_sync_stop))
+    page_counts_stop = asyncio.Event()
+    page_counts_task = asyncio.create_task(page_counts.run(page_counts_stop))
 
     export_schedule_stop = asyncio.Event()
     export_schedule_task = asyncio.create_task(export_schedule.run(export_schedule_stop))
@@ -123,6 +125,12 @@ async def lifespan(app: FastAPI):
         except asyncio.TimeoutError:
             logger.warning("Ordner-Sync-Task antwortet nicht — wird abgebrochen")
             folder_sync_task.cancel()
+
+        page_counts_stop.set()
+        try:
+            await asyncio.wait_for(page_counts_task, timeout=15.0)
+        except asyncio.TimeoutError:
+            page_counts_task.cancel()
 
         export_schedule_stop.set()
         try:

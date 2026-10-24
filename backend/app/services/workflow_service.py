@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 # ─── Knotentypen und ihre Konfiguration ───────────────────────────────────────
 
-NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "validate", "normalize_units", "ai_refine", "end")
+NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "end")
 # Knoten, die Extraktionsdaten bearbeiten (ohne vorherige Extraktion wirkungslos bzw. nur eingeschränkt)
 DATA_NODES = ("validate", "normalize_units")
 MAX_STEPS = 100   # Schutz gegen Endlosschleifen (Zyklen werden zusätzlich beim Speichern verboten)
@@ -58,6 +58,16 @@ class SchemaExtractConfig(BaseModel):
     system_prompt_id: int | None = None      # optionaler Baustein: Zusatzanweisung hinter dem generierten Prompt
 
 
+class ClassifyPagesConfig(BaseModel):
+    """Seitenerkennung: die KI ordnet jede Seite einem Typ zu (Rechnung, Lieferschein …) — auch bei gescannten PDFs."""
+
+    ai_config_id: int | None = None          # None = in der Analyse gewählte KI
+    dpi: int = Field(80, ge=40, le=200)      # niedrige Auflösung genügt zum Erkennen und spart Token
+    chunk_size: int = Field(10, ge=1, le=30) # Seiten je KI-Anfrage
+    action: Literal["classify_only", "keep_invoice_pages"] = "classify_only"   # keep: PDF-Version nur mit den Rechnungsseiten anlegen
+    system_prompt_id: int | None = None      # optionaler Baustein: Zusatzanweisung (z. B. Besonderheiten Ihrer Lieferanten)
+
+
 class ValidateConfig(BaseModel):
     auto_correct: bool = True                # Einheitenfehler automatisch korrigieren
     ai_recheck: bool = True                  # bei Auffälligkeit zweite KI-Abfrage
@@ -76,7 +86,7 @@ class RefineConfig(BaseModel):
     format_prompt_id: int | None = None      # Prompt vom Typ „Antwortformat“ (None = Standardformat)
 
 
-BranchField = Literal["document_type", "supplier_name", "page_count", "validation_status"]
+BranchField = Literal["document_type", "supplier_name", "page_count", "invoice_page_count", "validation_status"]
 BranchOp = Literal["equals", "not_equals", "contains", "gt", "lt", "in"]
 
 # Welche Operatoren je Feld sinnvoll sind
@@ -84,6 +94,7 @@ ALLOWED_OPS: dict[str, tuple[str, ...]] = {
     "document_type": ("equals", "not_equals", "in", "contains"),
     "supplier_name": ("equals", "not_equals", "contains", "in"),
     "page_count": ("equals", "not_equals", "gt", "lt", "in"),
+    "invoice_page_count": ("equals", "not_equals", "gt", "lt", "in"),
     "validation_status": ("equals", "not_equals", "in"),
 }
 
@@ -96,7 +107,7 @@ class BranchConfig(BaseModel):
 
 CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "start": EmptyConfig, "end": EmptyConfig, "trim_pages": TrimConfig,
-    "detect_type": DetectConfig, "extract": ExtractConfig, "schema_extract": SchemaExtractConfig,
+    "detect_type": DetectConfig, "extract": ExtractConfig, "schema_extract": SchemaExtractConfig, "classify_pages": ClassifyPagesConfig,
     "validate": ValidateConfig, "branch": BranchConfig,
     "normalize_units": NormalizeConfig, "ai_refine": RefineConfig,
 }
@@ -132,8 +143,8 @@ def evaluate_condition(cfg: BranchConfig, facts: dict[str, Any]) -> bool:
                       if x is not None and str(x).strip()]
         return _text_op(op, candidates, value)
 
-    if cfg.field == "page_count":
-        actual = facts.get("page_count")
+    if cfg.field in ("page_count", "invoice_page_count"):
+        actual = facts.get(cfg.field)
         if actual is None:
             return op == "not_equals"
         try:
@@ -541,7 +552,26 @@ def templates() -> list[dict]:
         ],
         "edges": [_edge("start", "trim"), _edge("trim", "extract"), _edge("extract", "end")],
     }
+    pages = {
+        "nodes": [
+            _node("start", "start", "Start", 0, 160),
+            _node("pages", "classify_pages", "Seiten erkennen", 220, 160, {"action": "keep_invoice_pages"}),
+            _node("branch", "branch", "Rechnungsseiten gefunden?", 480, 160,
+                  {"field": "invoice_page_count", "op": "gt", "value": "0"}),
+            _node("extract", "schema_extract", "Schema-Extraktion", 740, 60),
+            _node("end", "end", "Fertig", 1000, 60),
+            _node("end-other", "end", "Keine Rechnung — fertig", 740, 260),
+        ],
+        "edges": [
+            _edge("start", "pages"), _edge("pages", "branch"),
+            _edge("branch", "extract", "true"), _edge("branch", "end-other", "false"),
+            _edge("extract", "end"),
+        ],
+    }
     return [
+        {"key": "pages_schema", "name": "Seiten erkennen + Schema-Extraktion",
+         "description": "Erkennt je Seite, ob sie zur Rechnung gehört, behält nur die Rechnungsseiten und extrahiert sie nach dem Schema. Für gescannte Sammel-PDFs.",
+         "graph": pages},
         {"key": "schema", "name": "Schema-Extraktion",
          "description": "Extrahiert nach der aktiven Schema-Definition (Structured Outputs) und speichert die Datensätze.",
          "graph": schema},
@@ -561,6 +591,14 @@ def templates() -> list[dict]:
          "description": "Für lange PDFs, bei denen nur die erste Seite die Rechnung enthält.",
          "graph": trimmed},
     ]
+
+
+def has_page_reduction(graph: dict) -> bool:
+    """True, wenn ein Knoten „Seiten erkennen“ mit Aktion „nur Rechnungsseiten behalten“ im Ablauf liegt."""
+    for node in graph.get("nodes", []):
+        if node.get("type") == "classify_pages" and ((node.get("data") or {}).get("config") or {}).get("action") == "keep_invoice_pages":
+            return True
+    return False
 
 
 def leading_trim_pages(graph: dict) -> int | None:

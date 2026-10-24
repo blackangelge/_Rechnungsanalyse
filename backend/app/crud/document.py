@@ -75,6 +75,7 @@ def update_status(
     doc_id: int,
     status: str,
     error_message: str | None = None,
+    error_code: str | None = None,
 ) -> Document | None:
     """
     Setzt den Dokument-Status (pending/processing/done/error/waiting_capacity).
@@ -91,6 +92,8 @@ def update_status(
     obj.status = status
     if error_message is not None:
         obj.raw_response = error_message
+    # Der Fehlergrund gilt nur, solange der Beleg im Fehlerzustand ist (neue Analyse/Erfolg setzt ihn zurück)
+    obj.error_code = error_code if status == "error" else None
     db.commit()
     db.refresh(obj)
     return obj
@@ -164,7 +167,7 @@ def get_by_id_with_details(db: Session, doc_id: int) -> Document | None:
 _FILTER_KEYS = (
     "company", "year", "status", "total_min", "total_max", "page_min", "page_max", "batch_ids",
     "include_deleted", "has_extraction", "supplier_name_filter", "doc_id", "document_type_ids",
-    "validation_statuses", "include_hidden",
+    "validation_statuses", "include_hidden", "error_codes",
 )
 
 
@@ -212,6 +215,9 @@ def _filtered_query(db: Session, **f):
         query = query.filter(InvoiceExtraction.id.is_(None))
     if g("validation_statuses"):
         query = query.filter(InvoiceExtraction.validation_status.in_(g("validation_statuses")))
+    if g("error_codes"):
+        codes = g("error_codes")
+        query = query.filter(Document.error_code.isnot(None) if "any" in codes else Document.error_code.in_(codes))
     # vendor_id ist der Lieferantenname-String in der Extraktion
     if g("supplier_name_filter"):
         query = query.filter(InvoiceExtraction.vendor_id.ilike(f"%{g('supplier_name_filter')}%"))

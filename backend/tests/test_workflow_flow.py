@@ -307,7 +307,7 @@ def client(sqlite_session_factory):
 
 def test_api_crud_and_templates(client):
     tpls = client.get("/api/workflows/templates").json()
-    assert {t["key"] for t in tpls} == {"schema", "schema_trimmed", "standard", "direct", "trimmed", "tonnes"}
+    assert {t["key"] for t in tpls} == {"pages_schema", "schema", "schema_trimmed", "standard", "direct", "trimmed", "tonnes"}
 
     r = client.post("/api/workflows", json={"name": "Aus Vorlage", "template": "standard"})
     assert r.status_code == 201

@@ -81,18 +81,29 @@ def _parse(raw: str) -> dict | None:
 
 def call_structured(config, system_prompt: str, user_text: str, images_b64: list[str], response_format: dict,
                     tools: list[dict] | None = None) -> StructuredResult:
+    """Text + Bilder (Bilder hinter dem festen Text → Prefix-Caching)."""
+    content: list[dict] = [{"type": "text", "text": user_text}] + [{"type": "image_url", "image_url": {"url": u}} for u in images_b64]
+    return call_chat(config, system_prompt, content, response_format, tools)
+
+
+def call_chat(config, system_prompt: str, user_content: list[dict], response_format: dict,
+              tools: list[dict] | None = None) -> StructuredResult:
+    """Wie call_structured, aber mit fertig aufgebautem User-Inhalt (z. B. Bilder mit Beschriftungen je Seite)."""
     base = config.api_url.rstrip("/")
     endpoint = base + "/v1/chat/completions"        # auch LM Studio versteht diesen Pfad inkl. response_format
     headers = {"Content-Type": "application/json"}
     if getattr(config, "api_key", None):
         headers["Authorization"] = f"Bearer {config.api_key}"
     body = build_request(
-        config.model_name, system_prompt, user_text, images_b64, response_format,
+        config.model_name, system_prompt, "", [], response_format,
         max_tokens=getattr(config, "max_tokens", None), temperature=getattr(config, "temperature", None),
         reasoning=getattr(config, "reasoning", "off") or "off", tools=tools,
     )
+    body["messages"][1]["content"] = user_content
+    n_img = sum(1 for p in user_content if p.get("type") == "image_url")
+    texts = " ".join(p.get("text", "") for p in user_content if p.get("type") == "text")
     preview = {k: v for k, v in body.items() if k != "messages"}
-    preview["messages"] = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text + f" [+{len(images_b64)} Bild(er)]"}]
+    preview["messages"] = [{"role": "system", "content": system_prompt}, {"role": "user", "content": texts[:500] + f" [+{n_img} Bild(er)]"}]
     result = StructuredResult(request_body_preview=preview)
     try:
         payload = json.dumps(body).encode("utf-8")

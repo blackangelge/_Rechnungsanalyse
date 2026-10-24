@@ -46,6 +46,12 @@ class Document(Base):
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0", nullable=False)
     # Seitenanzahl — wird erst bei der KI-Analyse gesetzt (beim Import immer 0).
     page_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # Zustand der PDF-Datei, ermittelt vom Hintergrundjob (services/page_count_service.py):
+    # NULL = noch nicht geprüft · ok · encrypted (Passwortschutz) · unreadable (defekt)
+    pdf_state: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    # Maschinenlesbarer Grund, wenn der Beleg nachbearbeitet werden muss (status = error):
+    # too_many_pages · encrypted · unreadable · NULL = sonstiger/kein Fehler
+    error_code: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     # Dokumententyp-Integer: 0=Unbekannt, 1=Eingangsrechnung, 2=Ausgangsrechnung, …
     # Nur Eingangsrechnungen (1) erhalten eine vollständige InvoiceExtraction.
     document_type: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)

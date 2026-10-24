@@ -51,6 +51,7 @@ _DOCUMENT_TYPES = [
     {"id": 12, "name": "Reisekostenabrechnung"},
     {"id": 13, "name": "Kassenbon / Quittung"},
     {"id": 14, "name": "Sonstiges kaufmännisches Dokument"},
+    {"id": 15, "name": "Mischbeleg (Rechnung + weitere Dokumente)"},   # nur durch die Seitenklassifikation gesetzt
 ]
 
 doc_types_router = APIRouter(prefix="/api", tags=["Dokumententypen"])

@@ -423,6 +423,10 @@ async def start_import(payload: ImportBatchCreate, db: Session = Depends(get_db)
     )
     logger.info("Import-Batch #%d erstellt: %s_%d (%d PDFs)", batch.id, company_name, year, len(pdf_files))
 
+    # Seitenanzahl/PDF-Zustand parallel zum Import im Hintergrund ermitteln (blockiert den Import nie)
+    from app.services import page_count_service
+    asyncio.create_task(page_count_service.run_for_batch(batch.id))
+
     if payload.analyze_after_import:
         asyncio.create_task(_import_then_analyze(
             batch_id=batch.id,

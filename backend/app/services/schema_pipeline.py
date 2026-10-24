@@ -175,7 +175,7 @@ def _system_values(entity: SchemaEntity, ctx: field_functions.DocumentContext) -
     data: dict = {}
     issues: list[dict] = []
     for f in entity.fields:
-        if f.source != "system" or f.is_locked:
+        if f.source != "system" or (f.is_locked and not f.system_function):
             continue
         try:
             value = field_functions.run(f.system_function, f.system_params, ctx)

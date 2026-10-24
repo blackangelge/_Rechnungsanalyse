@@ -29,7 +29,7 @@ from typing import Any
 from app import crud
 from app.database import SessionLocal
 from app.models.document import Document
-from app.services import ai_service, pdf_edit_service, pdf_service, workflow_service
+from app.services import ai_service, capacity, pdf_edit_service, pdf_service, workflow_service
 from app.services.ai_url import build_ai_url
 from app.services.workflow_service import NodeResult, WorkflowError
 
@@ -44,6 +44,14 @@ def _docs():
 
 class AIUnavailable(Exception):
     """KI-Endpunkt nicht erreichbar — der Task soll später erneut versucht werden."""
+
+
+class NeedsRework(Exception):
+    """Der Beleg ist nicht automatisch verarbeitbar (zu viele Seiten, verschlüsselt …) und braucht Nachbearbeitung."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -66,6 +74,9 @@ class RunContext:
     existing_type_id: int | None = None
 
     # Laufzeitzustand
+    invoice_page_count: int | None = None   # Ergebnis der Seitenerkennung (Seiten, die zur Rechnung gehören)
+    page_summary: dict = field(default_factory=dict)
+    max_pages: int | None = None            # Kapazität der gewählten KI in Seiten (None = unbeschränkt)
     schema_done: bool = False             # Schema-Extraktion hat Datensätze gespeichert
     schema_summary: dict = field(default_factory=dict)
     images: list | None = None
@@ -272,11 +283,14 @@ def _db_finish_empty(doc_id: int, page_count: int, batch_id: int | None, filenam
         db.close()
 
 
-def _db_finish_schema(doc_id: int, page_count: int, batch_id: int | None, filename: str, ki_stats: dict | None) -> None:
+def _db_finish_schema(doc_id: int, page_count: int, batch_id: int | None, filename: str, ki_stats: dict | None,
+                      document_type_id: int | None = None) -> None:
     db = SessionLocal()
     try:
         doc = db.get(Document, doc_id)
         if doc is not None:
+            if document_type_id is not None:
+                doc.document_type = document_type_id
             if page_count > 0:
                 doc.page_count = page_count
             doc.status = "done"
@@ -358,13 +372,14 @@ async def _h_branch(cfg, ctx: RunContext):
         "document_type_name": ctx.document_type_name,
         "supplier_name": (ctx.fields.get("supplier_name") if ctx.fields else None) or ctx.known_supplier_name,
         "page_count": ctx.page_count or None,
+        "invoice_page_count": ctx.invoice_page_count,
         "validation_status": (ctx.validation or {}).get("status"),
     }
     ctx.node_io = {"notes": [f"{k} = {v!r}" for k, v in facts.items()]}
     result = workflow_service.evaluate_condition(cfg, facts)
     shown = facts.get(
         {"document_type": "document_type_name", "supplier_name": "supplier_name",
-         "page_count": "page_count", "validation_status": "validation_status"}[cfg.field]
+         "page_count": "page_count", "invoice_page_count": "invoice_page_count", "validation_status": "validation_status"}[cfg.field]
     )
     return NodeResult("true" if result else "false", f"{cfg.field} = {shown!r} → {'Ja' if result else 'Nein'}")
 
@@ -402,6 +417,75 @@ async def _h_extract(cfg, ctx: RunContext):
     return NodeResult(detail=f"{len(positions)} Position(en), Modell {getattr(proxy, 'model_name', '?')}")
 
 
+def _db_save_pages(doc_id: int, pages) -> int:
+    """Ersetzt die Seitenklassifikation des Belegs (bezogen auf die aktuelle PDF-Version). Gibt die PDF-Version zurück."""
+    from app.models.document_page import DocumentPage
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, doc_id)
+        version = doc.pdf_version if doc is not None else 1
+        db.query(DocumentPage).filter(DocumentPage.document_id == doc_id).delete(synchronize_session=False)
+        for p in pages:
+            db.add(DocumentPage(document_id=doc_id, pdf_version=version, page_no=p.seite, kind=p.typ, starts_document=p.beginnt_neues_dokument,
+                                invoice_number=(p.rechnungsnummer or None) and p.rechnungsnummer[:100],
+                                sender=(p.absender or None) and p.absender[:255], note=p.hinweis))
+        db.commit()
+        return version
+    finally:
+        db.close()
+
+
+def _db_keep_pages(doc_id: int, keep: list[int], description: str) -> int:
+    """Neue PDF-Version mit nur diesen Seiten. Gibt die neue Seitenzahl zurück."""
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, doc_id)
+        pdf_edit_service.remove_pages(db, doc, keep=keep, source="auto", description=description)
+        doc.analyzed_pdf_version = doc.pdf_version
+        db.commit()
+        return pdf_service.get_page_count(pdf_edit_service.current_path(doc))
+    finally:
+        db.close()
+
+
+async def _h_classify_pages(cfg, ctx: RunContext):
+    from app.routers.settings import _DOCUMENT_TYPES
+    from app.services import page_classifier
+    proxy = await asyncio.to_thread(_db_ai_proxy, cfg.ai_config_id) if cfg.ai_config_id else ctx.ai_proxy
+    extra = await asyncio.to_thread(_db_prompt_text, cfg.system_prompt_id) if cfg.system_prompt_id else None
+    images = await _docs()._run_ki_io(pdf_service.pdf_to_base64_images, ctx.pdf_path, cfg.dpi, "JPEG", 70)
+    if not images:
+        raise RuntimeError("PDF konnte nicht gerendert werden")
+    total = len(images)
+    out = await asyncio.to_thread(page_classifier.classify, images, proxy, cfg.chunk_size, extra)
+    del images
+    ctx.add_stats(out.stats)
+    if out.error:
+        if _docs()._is_ai_conn_error(out.error):
+            raise AIUnavailable(f"KI nicht erreichbar bei der Seitenerkennung: {out.error[:120]}")
+        raise RuntimeError(out.error)
+    summary = page_classifier.summarize(out.pages)
+    await asyncio.to_thread(_db_save_pages, ctx.doc_id, out.pages)
+    names = {t["id"]: t["name"] for t in _DOCUMENT_TYPES}
+    ctx.document_type_id, ctx.document_type_name = summary.document_type_id, names.get(summary.document_type_id)
+    ctx.type_detected, ctx.invoice_page_count, ctx.page_count = True, len(summary.invoice_pages), total
+    ctx.page_summary = {"total": total, "invoice_pages": summary.invoice_pages, "other_pages": summary.other_pages,
+                        "empty_pages": summary.empty_pages, "mixed": summary.mixed,
+                        "segments": [vars(s) for s in summary.segments]}
+    notes = page_classifier.describe(out.pages) + out.warnings
+    ctx.node_io = {"prompt": _clip(page_classifier.SYSTEM_PROMPT), "response": _clip("\n".join(out.raw_chunks)),
+                   "model": getattr(proxy, "model_name", None), "notes": notes}
+    detail = (f"{total} Seite(n): {len(summary.invoice_pages)} Rechnung, {len(summary.other_pages)} andere, {len(summary.empty_pages)} leer "
+              f"→ {ctx.document_type_name}")
+    if cfg.action == "keep_invoice_pages" and summary.invoice_pages and len(summary.invoice_pages) < total:
+        keep = summary.invoice_pages
+        desc = f"Nur Rechnungsseiten behalten (Seitenerkennung): Seite(n) {page_classifier.ranges_text(keep)} von {total}"
+        ctx.page_count = await asyncio.to_thread(_db_keep_pages, ctx.doc_id, keep, desc)
+        ctx.images = None
+        detail += f"; PDF auf {ctx.page_count} Seite(n) gekürzt"
+    return NodeResult(detail=detail)
+
+
 def _db_schema_prepare(version_id: int | None, extra_instruction: str | None):
     from app.services import schema_extraction
     db = SessionLocal()
@@ -434,6 +518,10 @@ async def _h_schema_extract(cfg, ctx: RunContext):
     except schema_extraction.ExtractionSetupError as exc:
         raise RuntimeError(str(exc)) from exc
     images = await ctx.ensure_images()
+    limit = ctx.max_pages if not cfg.ai_config_id else None
+    if limit is not None and len(images) > limit:
+        raise NeedsRework("too_many_pages", f"{len(images)} Seiten, die KI schafft höchstens {limit} — bitte Seiten entfernen oder "
+                                            "einen Workflow mit Seitenerkennung wählen")
     result = await asyncio.to_thread(
         structured_ai.call_structured, proxy, prepared.system_prompt, prepared.user_text, images, prepared.response_format,
     )
@@ -515,7 +603,7 @@ async def _h_refine(cfg, ctx: RunContext):
 
 HANDLERS = {
     "start": _h_start, "end": _h_end, "trim_pages": _h_trim, "detect_type": _h_detect,
-    "branch": _h_branch, "extract": _h_extract, "schema_extract": _h_schema_extract, "validate": _h_validate,
+    "branch": _h_branch, "extract": _h_extract, "schema_extract": _h_schema_extract, "classify_pages": _h_classify_pages, "validate": _h_validate,
     "normalize_units": _h_normalize, "ai_refine": _h_refine,
 }
 
@@ -556,6 +644,7 @@ async def analyze_with_workflow(
         document_types=data["document_types"],
         known_supplier_name=await asyncio.to_thread(_db_known_supplier, doc_id),
         skip_type_detection=skip_type_detection, existing_type_id=data.get("existing_document_type") or None,
+        max_pages=capacity.max_pages(data.get("ai_max_context_tokens")),
     )
     try:
         ctx.page_count = await asyncio.to_thread(pdf_service.get_page_count, ctx.pdf_path)
@@ -575,8 +664,9 @@ async def analyze_with_workflow(
             logger.warning("Workflow '%s' #%d: %s — wird erneut versucht", workflow["name"], doc_id, exc.__cause__)
             return "ai_unavailable"
         await asyncio.to_thread(_db_save_run, doc_id, workflow, exc.trace)
+        code = exc.__cause__.code if isinstance(exc.__cause__, NeedsRework) else None
         await asyncio.to_thread(
-            docs._set_error, doc_id, f"Workflow '{workflow['name']}' — Knoten '{exc.node_label}': {exc}",
+            docs._set_error, doc_id, f"Workflow '{workflow['name']}' — Knoten '{exc.node_label}': {exc}", code,
         )
         return "ok"
     except AIUnavailable as exc:
@@ -594,7 +684,8 @@ async def analyze_with_workflow(
     ctx.images = None
 
     if ctx.schema_done:
-        await asyncio.to_thread(_db_finish_schema, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename, ctx.ki_stats)
+        await asyncio.to_thread(_db_finish_schema, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename, ctx.ki_stats,
+                                ctx.document_type_id if ctx.type_detected else None)
     elif ctx.extracted:
         await asyncio.to_thread(
             docs._db_analyze_write, doc_id, ctx.original_filename, ctx.batch_id, ctx.ai_model_name,

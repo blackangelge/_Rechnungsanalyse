@@ -111,8 +111,8 @@ def test_schema_crud_validates_pipeline(db):
     sd.update_field(db, ok, normalizers=[{"name": "parse_german_number"}, {"name": "trim"}])
     assert [s["name"] for s in ok.normalizers] == ["parse_german_number", "trim"]
     # Typwechsel auf ein Systemfeld prüft die Funktion mit
-    sys_field = next(f for f in beleg.fields if f.name == "seitenanzahl")
-    with pytest.raises(sd.SchemaError, match="liefert integer"):
+    sys_field = next(f for f in beleg.fields if f.name == "dateiname")
+    with pytest.raises(sd.SchemaError, match="liefert text"):
         sd.update_field(db, sys_field, data_type="date")
     assert sd.validate_version(draft) == []
 

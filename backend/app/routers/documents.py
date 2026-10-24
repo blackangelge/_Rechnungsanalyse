@@ -184,7 +184,7 @@ def _db_set_processing(doc_id: int) -> None:
         logger.error("Konnte Status 'processing' für #%d nicht setzen: %s", doc_id, exc)
 
 
-def _set_error(doc_id: int, message: str) -> None:
+def _set_error(doc_id: int, message: str, code: str | None = None) -> None:
     """
     Setzt den Status eines Dokuments auf 'error' — öffnet dafür eine EIGENE Session.
 
@@ -199,11 +199,13 @@ def _set_error(doc_id: int, message: str) -> None:
         doc_id:  ID des Dokuments, dessen Status geändert werden soll.
         message: Fehlermeldung — wird zusätzlich in raw_response persistiert
                  (sichtbar über den "KI"-Button in der Belege-Übersicht).
+        code:    Optionaler maschinenlesbarer Grund (too_many_pages | encrypted | unreadable):
+                 markiert den Beleg als „Nachbearbeitung nötig" (Filter error_code in der Belegliste).
     """
     try:
         _db = SessionLocal()  # Frische, unbelastete Session öffnen
         try:
-            crud.document.update_status(_db, doc_id, "error", error_message=message)
+            crud.document.update_status(_db, doc_id, "error", error_message=message, error_code=code)
             # Session wird von update_status selbst committed
         finally:
             _db.close()  # Session immer schließen, auch bei Fehler
@@ -401,13 +403,14 @@ def _document_filters(
     doc_id: Optional[int] = None,
     document_type_ids: Optional[list[int]] = Query(default=None),
     validation_status: Optional[list[str]] = Query(default=None),
+    error_code: Optional[list[str]] = Query(default=None, description="Nachbearbeitung nötig: too_many_pages|encrypted|unreadable oder 'any'"),
 ) -> dict:
     """Gemeinsame Filter-Parameter für Liste, Anzahl und ID-Liste."""
     return dict(
         company=company, year=year, status=status, total_min=total_min, total_max=total_max,
         page_min=page_min, page_max=page_max, batch_ids=batch_ids, include_deleted=include_deleted, include_hidden=include_hidden,
         has_extraction=has_extraction, supplier_name_filter=supplier_name, doc_id=doc_id,
-        document_type_ids=document_type_ids, validation_statuses=validation_status,
+        document_type_ids=document_type_ids, validation_statuses=validation_status, error_codes=error_code,
     )
 
 
@@ -724,6 +727,7 @@ def _db_analyze_read(doc_id: int, ai_config_id: int, system_prompt_id: int | Non
             "ai_api_key":            ai_config.api_key,
             "ai_model_name":         ai_config.model_name,
             "ai_max_tokens":         ai_config.max_tokens,
+            "ai_max_context_tokens": ai_config.max_context_tokens,
             "ai_temperature":        ai_config.temperature,
             "ai_reasoning":          ai_config.reasoning or "off",
             "ai_endpoint_type":      ai_config.endpoint_type or "openai",
@@ -1197,6 +1201,49 @@ def _db_prepare_pdf(
     except Exception as exc:
         db.rollback()
         logger.warning("PDF-Vorbereitung für #%d fehlgeschlagen: %s", doc_id, exc)
+    finally:
+        db.close()
+
+
+def _db_precheck_pdf(doc_id: int) -> str | None:
+    """
+    Vorprüfung vor dem KI-Aufruf (sync, für asyncio.to_thread): ist die PDF lesbar und nicht verschlüsselt?
+
+    Der Hintergrunddienst hat das meist schon festgestellt (`documents.pdf_state`); fehlt der Zustand noch, wird er hier sofort ermittelt.
+    Ist die PDF verschlüsselt oder defekt, wird der Beleg als Fehler zur Nachbearbeitung markiert (`error_code`) und die Meldung
+    zurückgegeben — der Aufrufer bricht dann ab, ohne die KI zu belasten. Gibt None zurück, wenn alles in Ordnung ist.
+    """
+    from app.models.document import Document as DocModel
+    from app.services import page_count_service, pdf_edit_service
+    db = SessionLocal()
+    try:
+        doc = db.get(DocModel, doc_id)
+        if doc is None:
+            return None
+        if doc.pdf_state is None:
+            state, pages = page_count_service.inspect_pdf(pdf_edit_service.current_path(doc))
+            doc.pdf_state = state
+            if state == "ok" and pages > 0:
+                doc.page_count = pages
+            db.commit()
+        if doc.pdf_state in ("encrypted", "unreadable"):
+            msg = page_count_service.MESSAGES[doc.pdf_state]
+            crud.document.update_status(db, doc_id, "error", error_message=msg, error_code=doc.pdf_state)
+            return msg
+        return None
+    finally:
+        db.close()
+
+
+def _db_workflow_reduces_pages(workflow_id: int | None) -> bool:
+    """True, wenn der Workflow die Seitenzahl selbst vor der Extraktion verringert (Seiten erkennen → nur Rechnungsseiten behalten)."""
+    from app.services import workflow_service
+    if not workflow_id:
+        return False
+    db = SessionLocal()
+    try:
+        wf = crud.workflow.get_by_id(db, workflow_id)
+        return bool(wf and workflow_service.has_page_reduction(json.loads(wf.graph)))
     finally:
         db.close()
 

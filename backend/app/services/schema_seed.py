@@ -54,7 +54,6 @@ _LIEFERANT = [
 ]
 # Systemfelder des Belegs: Name, Anzeigename, Typ, Funktion
 _BELEG_SYSTEM = [
-    ("seitenanzahl", "Seiten", "integer", "page_count"),
     ("dateiname", "Dateiname", "text", "file_name"),
     ("datei_hash", "Datei-Hash", "text", "file_hash"),
     ("eingangsdatum", "Eingangsdatum", "date", "received_at"),

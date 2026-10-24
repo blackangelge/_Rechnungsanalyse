@@ -28,6 +28,8 @@ class DocumentRead(BaseModel):
     stored_filename: str | None
     file_size_bytes: int
     page_count: int
+    pdf_state: str | None = None          # NULL=ungeprüft · ok · encrypted · unreadable
+    error_code: str | None = None         # too_many_pages · encrypted · unreadable (Nachbearbeitung nötig)
     # Kommen via Model-Properties aus ImportBatch
     company: str | None = None
     year: int | None = None

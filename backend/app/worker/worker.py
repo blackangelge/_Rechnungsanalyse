@@ -62,7 +62,7 @@ SLOT_ACQUIRE_TIMEOUT = 60.0
 #: Grobe Schätzung des Token-Verbrauchs pro gerenderter PDF-Seite (Bild + Anteil
 #: Prompt/Ausgabe). Wird mit AIClients.max_context_tokens verrechnet, um zu
 #: entscheiden, ob ein Dokument auf eine bestimmte KI-Instanz passt.
-TOKENS_PER_PAGE_ESTIMATE = 4500
+from app.services.capacity import TOKENS_PER_PAGE_ESTIMATE  # noqa: E402  (gemeinsam mit den Workflow-Knoten)
 
 
 
@@ -471,7 +471,23 @@ class Worker:
         # Automatisches Kürzen langer PDFs vor der Kapazitätsprüfung (siehe prepare_pdf_for_task)
         await prepare_pdf_for_task(task.payload)
 
+        doc_id = task.payload.get("document_id") if isinstance(task.payload, dict) else None
+        if isinstance(doc_id, int):
+            from app.routers.documents import _db_precheck_pdf, _db_workflow_reduces_pages
+            problem = await asyncio.to_thread(_db_precheck_pdf, doc_id)
+            if problem:                                  # verschlüsselt/defekt → Nachbearbeitung, die KI wird gar nicht belastet
+                log.warning(f"[{self.worker_id}] Task {task.id}: {problem}")
+                await self._mark_failed(task, f"Nachbearbeitung nötig: {problem}")
+                return
+            reduces_pages = await asyncio.to_thread(_db_workflow_reduces_pages, task.payload.get("workflow_id"))
+        else:
+            reduces_pages = False
+
         page_count = await self._get_document_page_count(task)
+        if reduces_pages:
+            # Der Workflow verringert die Seitenzahl selbst (Seiten erkennen → nur Rechnungsseiten behalten): die Prüfung der
+            # verbleibenden Seiten übernimmt der Extraktions-Knoten, hier darf die Gesamtseitenzahl nicht blockieren.
+            page_count = 0
 
         # Kapazitäts-Vorabprüfung: Ist das Dokument für ALLE aktiven KI-Server zu
         # groß, NICHT fehlschlagen (kein 'failed'!) — stattdessen unbegrenzt neu
@@ -488,9 +504,13 @@ class Worker:
                 f"Dokument zu groß für alle konfigurierten KI-Server "
                 f"({page_count} Seiten, max. verfügbar: {max_known if max_known is not None else '?'} Seiten)"
             )
-            log.warning(f"[{self.worker_id}] Task {task.id}: {reason} — wird später erneut versucht")
-            await self._set_document_waiting_capacity(task, reason)
-            await self._release_for_retry_no_penalty(task, reason="Dokument zu groß für alle KI-Server")
+            # Im neuen System ist ein zu großer Beleg ein FEHLER ZUR NACHBEARBEITUNG (Seiten entfernen, Rechnung heraustrennen,
+            # Workflow mit Seitenerkennung wählen) — kein endloses Warten.
+            reason += " — bitte Seiten entfernen oder einen Workflow mit Seitenerkennung wählen"
+            log.warning(f"[{self.worker_id}] Task {task.id}: {reason}")
+            from app.routers.documents import _set_error as _doc_set_error
+            await asyncio.to_thread(_doc_set_error, doc_id, reason, "too_many_pages")
+            await self._mark_failed(task, f"Nachbearbeitung nötig: {reason}")
             return
 
         try:
