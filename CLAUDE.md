@@ -957,6 +957,22 @@ gleiche Spalten wie der Import-Export (`_build_export_excel(..., title=...)`); Z
 ≥ 2 Imports → Spalte „Import“. 404 bei unbekannter ID oder ohne Belege. Frontend `/lieferanten`: Auswahl → „↓ Excel exportieren“. Route steht vor `/{vendor_id}`.
 Referenz zum erwarteten KI-JSON: `docs/KI-Antwortformat.md`.
 
+### Dynamisches Extraktionsschema (Branch `feature/dynamic-extraction-schema`, Migration `0018_dynamic_schema`)
+
+Neue Richtung: Entitäten, Felder und Beziehungen der Extraktion sind **konfigurierbar** statt fest im Code. Kein Laufzeit-DDL — Definitionen liegen in
+festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Dieser Branch ist ein eigenes Vorhaben (keine Datenübernahme, kein Dual-Write).
+
+- Tabellen (`models/schema_def.py`): `schema_versions` (draft/active/archived), `schema_entities`, `schema_fields`, `schema_relations`, `extracted_records`
+  (`document_id`, `entity_id`, `schema_version_id`, `parent_record_id`, `vendor_id`, `position_index`, `data`).
+- **Versionierung:** eine Version ist nach `activate()` unveränderlich; Änderungen = `create_draft_from()` (Kopie) → bearbeiten → aktivieren. Datensätze
+  verweisen auf die Version, mit der sie erzeugt wurden. Höchstens ein Entwurf gleichzeitig.
+- **Standardfelder** `document_id` und `vendor_id` entstehen automatisch mit jeder Nicht-Stammdaten-Entität (`is_locked`, Quelle `system`, nie im LLM-Schema,
+  nicht änderbar/löschbar, Namen reserviert). `extracted_records.vendor_id` ist eine echte Referenz auf `vendor.id` (die alte Textspalte `invoice_extractions.vendor_id` bleibt davon unberührt).
+- **Stammdaten-Entitäten** (`master_table="vendor"`, `match_fields` in Prioritätsreihenfolge, z. B. `["iban","ust_id_nr","name"]`) liegen nicht in `extracted_records`; das Matching selbst folgt in einer späteren Phase.
+- CRUD mit Regelprüfung: `crud/schema_definition.py` (`SchemaError`), Seed des bisherigen Schemas: `services/schema_seed.py` / `python -m app.scripts.seed_schema` (idempotent).
+- Geplant: Phase 2 Feldfunktionen/Normalisierer, 3 Einheiten (unbekannte Einheiten → Prüfliste, Beleg wird trotzdem fertig), 4 Pydantic-Modelle → `response_format: json_schema` (vLLM) + Tool-Erweiterungspunkt, 5 Export, 6 komplett neues Frontend.
+- Tests: `tests/test_schema_definition.py`.
+
 ### Lieferanten-Deduplication (`crud/supplier.py`)
 
 `find_or_create()` sucht in dieser Priorität:
