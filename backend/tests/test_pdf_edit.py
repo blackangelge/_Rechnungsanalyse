@@ -277,9 +277,13 @@ def test_api_versions_fills_in_missing_page_count(db, make_doc, client):
 def test_worker_trims_before_capacity_check(db, make_doc, sqlite_session_factory, storage):
     from app.worker import worker as worker_module
 
+    from app.services import workflow_service
+
     doc = make_doc(10)
-    crud.pdf_settings.update(db, PdfSettingsUpdate(auto_trim_enabled=True, auto_trim_max_pages=2))
-    asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc.id}))
+    tpl = next(t for t in workflow_service.templates() if t["key"] == "trimmed")
+    tpl["graph"]["nodes"][1]["data"]["config"] = {"max_pages": 2}          # führender „PDF kürzen“-Knoten
+    wf = crud.workflow.create(db, "Kürzen", None, tpl["graph"])
+    asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc.id, "workflow_id": wf.id}))
     db.expire_all()
     d = db.get(type(doc), doc.id)
     assert d.page_count == 2 and d.pdf_version == 2     # die Kapazitätsprüfung sieht jetzt 2 statt 10 Seiten

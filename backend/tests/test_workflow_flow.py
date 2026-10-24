@@ -99,10 +99,13 @@ def env(db, monkeypatch, tmp_path):
         return doc
     e.make_doc = make_doc
 
+    e.last_wf = None
+
     def add_workflow(graph, name="WF", default=False):
+        """`default` bleibt aus Kompatibilität ein Parameter: im neuen System gibt es keinen Standard — der zuletzt angelegte
+        Workflow gilt in `analyze()` nur als bequeme Vorgabe der Tests (jede Analyse bekommt trotzdem ausdrücklich eine ID)."""
         wf = crud.workflow.create(db, name, None, graph)
-        if default:
-            crud.workflow.set_default(db, wf.id)
+        e.last_wf = wf.id
         return wf
     e.add_workflow = add_workflow
 
@@ -114,7 +117,7 @@ def env(db, monkeypatch, tmp_path):
             db.add(sp)
             db.commit()
             prompt_id = sp.id
-        asyncio.run(docs_router._analyze_single(doc.id, e.cfg_id, prompt_id, workflow_id))
+        asyncio.run(docs_router._analyze_single(doc.id, e.cfg_id, prompt_id, workflow_id or e.last_wf))
         db.expire_all()
         return db.get(type(doc), doc.id)
     e.analyze = analyze
@@ -248,40 +251,43 @@ def test_workflow_only_trim_finishes_done(env, monkeypatch):
 
 # ─── Auswahl des Workflows ────────────────────────────────────────────────────
 
-def test_resolution_order(env, monkeypatch):
+def test_resolution_is_explicit_only(env, monkeypatch):
+    """Keine automatische Auswahl: kein Standard, kein Lieferanten-Workflow — nur die ausdrücklich genannte ID."""
     FakeAI(monkeypatch)
     doc = env.make_doc()
-    assert docs_router._db_resolve_workflow(doc.id, None) is None            # keiner → klassisch
-    default = env.add_workflow(_tpl("direct"), "Default", default=True)
-    chosen = env.add_workflow(_tpl("standard"), "Gewählt")
-    sup_wf = env.add_workflow(_tpl("trimmed"), "Lieferant")
-    assert docs_router._db_resolve_workflow(doc.id, None)["id"] == default.id
-    assert docs_router._db_resolve_workflow(doc.id, chosen.id)["id"] == chosen.id
-    # Lieferant bekannt (über den extrahierten Namen, ohne Groß/Klein) → dessen Workflow
-    sup = Vendor(name="ACME", workflow_id=sup_wf.id)
-    env.db.add(sup)
+    assert docs_router._db_resolve_workflow(doc.id, None) is None
+    only = env.add_workflow(_tpl("direct"), "Irgendeiner")
+    assert docs_router._db_resolve_workflow(doc.id, None) is None            # auch wenn es genau einen Workflow gibt
+    assert docs_router._db_resolve_workflow(doc.id, only.id)["id"] == only.id
+    assert docs_router._db_resolve_workflow(doc.id, 9999) is None
+    crud.document.save_extraction(env.db, doc.id, {"supplier_name": "ACME"}, [], "{}")
+    env.db.add(Vendor(name="ACME", workflow_id=only.id))
     env.db.commit()
-    crud.document.save_extraction(env.db, doc.id, {"supplier_name": "acme"}, [], "{}")
-    r = docs_router._db_resolve_workflow(doc.id, None)
-    assert r["id"] == sup_wf.id and "ACME" in r["source"]
-    assert docs_router._db_resolve_workflow(doc.id, chosen.id)["id"] == chosen.id    # explizit gewinnt
+    assert docs_router._db_resolve_workflow(doc.id, None) is None            # Lieferanten-Zuordnung wird ignoriert
 
 
-def test_legacy_flow_when_no_workflow_exists(env, monkeypatch):
+def test_analysis_without_workflow_is_an_error_and_never_runs_classic_flow(env, monkeypatch):
     ai = FakeAI(monkeypatch)
-    doc = env.analyze(env.make_doc())
-    assert ai.names() == ["detect", "extract"] and doc.status == "done"     # Typ-Prompt vorhanden → zweistufig
-    assert doc.used_workflow_name is None and doc.workflow_run is None
+    doc = env.make_doc()
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None))
+    env.db.expire_all()
+    doc = env.db.get(type(doc), doc.id)
+    assert ai.calls == [] and doc.status == "error" and "Kein Workflow gewählt" in (doc.raw_response or "")
+    wf = env.add_workflow(_tpl("direct"))
+    crud.workflow.delete(env.db, wf.id)
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, wf.id))
+    env.db.expire_all()
+    assert ai.calls == [] and "existiert nicht mehr" in (env.db.get(type(doc), doc.id).raw_response or "")
 
 
-def test_reanalysis_resets_previous_workflow_info(env, monkeypatch):
+def test_reanalysis_with_other_workflow_replaces_workflow_info(env, monkeypatch):
     FakeAI(monkeypatch)
-    env.add_workflow(_tpl("direct"), default=True)
+    env.add_workflow(_tpl("direct"), "Erster")
     doc = env.analyze(env.make_doc())
-    assert doc.used_workflow_name == "WF"
-    crud.workflow.delete(env.db, crud.workflow.get_default(env.db).id)
-    doc = env.analyze(doc)                         # jetzt klassischer Ablauf
-    assert doc.used_workflow_name is None and doc.workflow_run is None
+    assert doc.used_workflow_name == "Erster"
+    env.add_workflow(_tpl("direct"), "Zweiter")
+    doc = env.analyze(doc)
+    assert doc.used_workflow_name == "Zweiter" and doc.workflow_run
 
 
 # ─── API ──────────────────────────────────────────────────────────────────────
@@ -301,7 +307,7 @@ def client(sqlite_session_factory):
 
 def test_api_crud_and_templates(client):
     tpls = client.get("/api/workflows/templates").json()
-    assert {t["key"] for t in tpls} == {"standard", "direct", "trimmed", "tonnes"}
+    assert {t["key"] for t in tpls} == {"schema", "schema_trimmed", "standard", "direct", "trimmed", "tonnes"}
 
     r = client.post("/api/workflows", json={"name": "Aus Vorlage", "template": "standard"})
     assert r.status_code == 201
@@ -347,30 +353,22 @@ def test_api_validate_endpoint_reports_warnings_and_missing_references(client):
     assert not bad["ok"] and bad["errors"]
 
 
-def test_api_default_is_exclusive_and_clearable(client):
+def test_no_default_workflow_endpoints(client):
     a = client.post("/api/workflows", json={"name": "A", "template": "direct"}).json()
-    b = client.post("/api/workflows", json={"name": "B", "template": "direct"}).json()
-    client.post(f"/api/workflows/{a['id']}/set-default")
-    client.post(f"/api/workflows/{b['id']}/set-default")
-    d = {w["name"]: w["is_default"] for w in client.get("/api/workflows").json()}
-    assert d == {"A": False, "B": True}
-    client.post(f"/api/workflows/{b['id']}/clear-default")
-    assert not any(w["is_default"] for w in client.get("/api/workflows").json())
+    assert client.post(f"/api/workflows/{a['id']}/set-default").status_code in (404, 405)
+    assert client.post(f"/api/workflows/{a['id']}/clear-default").status_code in (404, 405)
 
 
-def test_api_supplier_assignment_and_workflow_delete(client, db):
+def test_vendor_workflow_assignment_is_gone_and_delete_clears_old_links(client, db):
     sup = Vendor(name="ACME")
     db.add(sup)
     db.commit()
     wf = client.post("/api/workflows", json={"name": "A", "template": "direct"}).json()
-    r = client.put(f"/api/vendors/{sup.id}/workflow", json={"workflow_id": wf["id"]})
-    assert r.status_code == 200 and r.json()["workflow_id"] == wf["id"]
-    assert client.get("/api/workflows").json()[0]["supplier_count"] == 1
-    assert client.put(f"/api/vendors/{sup.id}/workflow", json={"workflow_id": 999}).status_code == 404
-    assert client.put("/api/vendors/999/workflow", json={"workflow_id": None}).status_code == 404
+    assert client.put(f"/api/vendors/{sup.id}/workflow", json={"workflow_id": wf["id"]}).status_code in (404, 405)
+    sup.workflow_id = wf["id"]                  # Altbestand
+    db.commit()
     client.delete(f"/api/workflows/{wf['id']}")
     assert client.get(f"/api/vendors/{sup.id}").json()["workflow_id"] is None
-    assert client.get("/api/vendors").json()[0]["workflow_id"] is None
 
 
 def test_api_analyze_unknown_workflow_is_404(client, env):
@@ -416,7 +414,7 @@ def test_ai_unavailable_in_workflow_keeps_document_for_retry(env, monkeypatch):
     env.add_workflow(_tpl("direct"), default=True)
     doc = env.make_doc()
     crud.document.update_status(env.db, doc.id, "processing")
-    result = asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None))
+    result = asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, env.last_wf))
     assert result == "ai_unavailable"
     env.db.expire_all()
     assert env.db.get(type(doc), doc.id).status == "processing"          # unverändert → Worker versucht erneut
@@ -449,7 +447,7 @@ def test_worker_precheck_uses_workflow_trim_not_global_setting(env, monkeypatch)
     crud.pdf_settings.update(env.db, PdfSettingsUpdate(auto_trim_enabled=True, auto_trim_max_pages=1))
     env.add_workflow(_tpl("direct"), default=True)           # Workflow ohne Kürzen-Knoten
     doc = env.make_doc(pages=6)
-    asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc.id}))
+    asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc.id, "workflow_id": env.last_wf}))
     env.db.expire_all()
     assert env.db.get(type(doc), doc.id).page_count == 6     # globale Einstellung gilt im Workflow-Modus nicht
 
@@ -457,7 +455,7 @@ def test_worker_precheck_uses_workflow_trim_not_global_setting(env, monkeypatch)
     limit = workflow_service.leading_trim_pages(wf)
     env.add_workflow(wf, "Mit Kürzen", default=True)
     doc2 = env.make_doc(pages=limit + 5)
-    asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc2.id}))
+    asyncio.run(worker_module.prepare_pdf_for_task({"document_id": doc2.id, "workflow_id": env.last_wf}))
     env.db.expire_all()
     assert env.db.get(type(doc2), doc2.id).page_count == limit
 
@@ -545,21 +543,11 @@ def test_trace_explains_why_normalization_did_nothing(env, monkeypatch):
 
 # ─── Nur neu auslesen (Typ nicht erneut erkennen) ─────────────────────────────
 
-def test_only_reextract_skips_type_detection_in_classic_flow(env, monkeypatch):
-    ai = FakeAI(monkeypatch)
-    doc = env.analyze(env.make_doc())
-    assert ai.names() == ["detect", "extract"] and doc.document_type == 1
-    ai.calls.clear()
-    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None, True))
-    env.db.expire_all()
-    doc = env.db.get(type(doc), doc.id)
-    assert ai.names() == ["extract"] and doc.status == "done" and doc.document_type == 1      # Typ unverändert übernommen
-
-
 def test_only_reextract_detects_type_when_none_is_stored(env, monkeypatch):
     ai = FakeAI(monkeypatch)
+    env.add_workflow(_tpl("standard"))
     doc = env.make_doc()
-    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None, True))
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, env.last_wf, True))
     assert ai.names() == ["detect", "extract"]                       # kein gespeicherter Typ → normal erkennen
 
 
@@ -569,7 +557,7 @@ def test_only_reextract_in_workflow_keeps_stored_type_without_ai_call(env, monke
     doc = env.analyze(env.make_doc())
     assert ai.names() == ["detect", "extract"]
     ai.calls.clear()
-    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, None, True))
+    asyncio.run(docs_router._analyze_single(doc.id, env.cfg_id, None, env.last_wf, True))
     env.db.expire_all()
     doc = env.db.get(type(doc), doc.id)
     assert ai.names() == ["extract"] and doc.status == "done" and doc.document_type == 1
@@ -580,9 +568,17 @@ def test_only_reextract_in_workflow_keeps_stored_type_without_ai_call(env, monke
 def test_enqueue_stores_skip_flag_in_payload(client, env):
     from app.models.workflow_task import WorkflowTask
     doc = env.make_doc()
-    r = client.post("/api/documents/enqueue", json={"document_ids": [doc.id], "skip_type_detection": True})
+    wf = env.add_workflow(_tpl("direct"))
+    r = client.post("/api/documents/enqueue", json={"document_ids": [doc.id], "workflow_id": wf.id, "skip_type_detection": True})
     assert r.status_code == 200
-    assert env.db.query(WorkflowTask).one().payload.get("skip_type_detection") is True
+    payload = env.db.query(WorkflowTask).one().payload
+    assert payload.get("skip_type_detection") is True and payload.get("workflow_id") == wf.id
+
+
+def test_analyze_and_enqueue_require_a_workflow(client, env):
+    doc = env.make_doc()
+    assert client.post("/api/documents/enqueue", json={"document_ids": [doc.id]}).status_code == 422
+    assert client.post("/api/documents/analyze", json={"document_ids": [doc.id]}).status_code == 422
 
 
 # ─── Antwortformat ─────────────────────────────────────────────────────────────

@@ -39,6 +39,7 @@ def _db_load_sync_batches() -> list[dict]:
                 "storage_folder_path": b.storage_folder_path,
                 "company_name": b.company_name,
                 "year": b.year,
+                "workflow_id": b.workflow_id,
             }
             for b in batches
         ]
@@ -113,8 +114,10 @@ async def _sync_one_batch(batch: dict) -> None:
         if doc_id is not None:
             new_doc_ids.append(doc_id)
 
-    if new_doc_ids:
-        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, new_doc_ids, None)
+    if new_doc_ids and not batch.get("workflow_id"):
+        log.warning("Batch #%d: Ordner-Sync ohne Workflow — %d neue(s) Dokument(e) importiert, aber nicht analysiert", batch_id, len(new_doc_ids))
+    elif new_doc_ids:
+        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, new_doc_ids, None, batch["workflow_id"])
         log.info(
             "Batch #%d: %d/%d neu importierte(s) Dokument(e) zur KI-Analyse eingereiht",
             batch_id, enqueued, len(new_doc_ids),

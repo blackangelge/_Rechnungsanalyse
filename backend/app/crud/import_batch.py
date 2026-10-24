@@ -70,6 +70,7 @@ def create(
         company_name=company_name,
         year=year,
         comment=data.comment,
+        workflow_id=data.workflow_id,
         folder_sync=data.folder_sync,
         auto_export=data.auto_export,
         status="pending",

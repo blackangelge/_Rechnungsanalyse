@@ -9,8 +9,7 @@ Endpunkte:
   GET    /api/workflows/{id}             — Workflow mit Graph
   PUT    /api/workflows/{id}             — speichern (Graph wird geprüft)
   DELETE /api/workflows/{id}             — löschen (Lieferanten-Zuordnungen werden aufgehoben)
-  POST   /api/workflows/{id}/set-default — als Standard-Workflow markieren
-  POST   /api/workflows/{id}/clear-default — Standard-Markierung entfernen
+  (Es gibt keinen Standard-Workflow: jede Analyse nennt ihren Workflow ausdrücklich.)
   POST   /api/workflows/{id}/duplicate   — duplizieren
 """
 
@@ -137,22 +136,6 @@ def delete_workflow(workflow_id: int, db: Session = Depends(get_db)):
     if not crud.workflow.delete(db, workflow_id):
         raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
     return Response(status_code=204)
-
-
-@router.post("/{workflow_id}/set-default", response_model=WorkflowRead)
-def set_default_workflow(workflow_id: int, db: Session = Depends(get_db)):
-    obj = crud.workflow.set_default(db, workflow_id, True)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
-    return _read(db, obj)
-
-
-@router.post("/{workflow_id}/clear-default", response_model=WorkflowRead)
-def clear_default_workflow(workflow_id: int, db: Session = Depends(get_db)):
-    obj = crud.workflow.set_default(db, workflow_id, False)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
-    return _read(db, obj)
 
 
 @router.post("/{workflow_id}/duplicate", response_model=WorkflowRead, status_code=201)

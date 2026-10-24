@@ -231,21 +231,32 @@ def test_assistant_reanalysis_query_needs_single_column(client, db, data, monkey
     assert any("EINE Spalte" in m["content"] for m in seen[1] if m["role"] == "user")
 
 
+def _workflow(db):
+    from app import crud
+    from app.services import workflow_service
+    tpl = next(t for t in workflow_service.templates() if t["key"] == "direct")
+    return crud.workflow.create(db, "WF", None, tpl["graph"])
+
+
 def test_apply_reanalysis_enqueues_only_eligible(client, db, data):
     from app.models.workflow_task import WorkflowTask
     docs = _more_docs(db, data)
     docs[2].status = "processing"
     docs[1].soft_deleted = True
     db.commit()
+    wf = _workflow(db)
     r = client.post("/api/db-assistant/apply-reanalysis",
-                    json={"document_ids": [docs[0].id, docs[1].id, docs[2].id, 99999], "reason": "Test"})
+                    json={"document_ids": [docs[0].id, docs[1].id, docs[2].id, 99999], "workflow_id": wf.id, "reason": "Test"})
     assert r.status_code == 200, r.text
     assert r.json()["eligible"] == 1 and r.json()["enqueued"] == 1
     assert [t.payload["document_id"] for t in db.query(WorkflowTask).all()] == [docs[0].id]
+    assert db.query(WorkflowTask).one().payload["workflow_id"] == wf.id
     # (Doppel-Einreihung verhindert enqueue_documents per PostgreSQL-JSONB-Abfrage — in SQLite nicht prüfbar)
 
 
 def test_apply_reanalysis_rejects_nothing_eligible_and_too_many(client, db, data):
-    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": [99999]}).status_code == 400
+    wf = _workflow(db)
+    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": [99999], "workflow_id": wf.id}).status_code == 400
     too_many = list(range(1, db_assistant_service.MAX_REANALYSIS + 2))
-    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": too_many}).status_code == 400
+    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": too_many, "workflow_id": wf.id}).status_code == 400
+    assert client.post("/api/db-assistant/apply-reanalysis", json={"document_ids": [1]}).status_code == 422      # Workflow ist Pflicht

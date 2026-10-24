@@ -10,7 +10,7 @@ Status-Flow: pending → running → done | error
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import ForeignKey, Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -38,6 +38,8 @@ class ImportBatch(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)                # Optionaler Kommentar
     # pending | running | done | error
     status: Mapped[str] = mapped_column(String(50), default="pending", server_default="pending", nullable=False)
+    # Workflow dieses Imports (Pflicht für Analyse nach Import und Ordner-Sync — es gibt keinen Standard-Workflow)
+    workflow_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True)
     folder_sync: Mapped[bool | None] = mapped_column(Boolean, default=False, server_default="false", nullable=True)  # Ordner-Sync aktiv
     # Zeitstempel der letzten Ordner-Sync-Prüfung (app/worker/folder_sync.py). None = noch nie geprüft.
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

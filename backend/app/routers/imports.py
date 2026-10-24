@@ -108,7 +108,7 @@ def _db_get_analyze_setup(
         db.close()
 
 
-def _db_enqueue_for_analysis(doc_ids: list[int], system_prompt_id: int | None) -> int:
+def _db_enqueue_for_analysis(doc_ids: list[int], system_prompt_id: int | None, workflow_id: int) -> int:
     """
     Reiht Dokumente zur KI-Analyse in die Worker-Queue ein.
     Verhindert Duplikate: Dokumente mit bereits laufendem/wartendem Task werden übersprungen.
@@ -141,6 +141,7 @@ def _db_enqueue_for_analysis(doc_ids: list[int], system_prompt_id: int | None) -
                     "kind": "process_document",
                     "document_id": doc_id,
                     "system_prompt_id": system_prompt_id,
+                    "workflow_id": workflow_id,
                 },
                 status="pending",
             )
@@ -246,6 +247,7 @@ async def _import_then_analyze(
     ai_config_id: int | None = None,
     system_prompt_id: int | None = None,
     delete_source_files: bool = False,
+    workflow_id: int | None = None,
 ) -> None:
     """
     Führt zuerst den Import durch, reiht danach alle importierten Dokumente
@@ -275,7 +277,10 @@ async def _import_then_analyze(
 
         # 4. Dokumente in Worker-Queue einreihen (statt direkter Analyse)
         #    Verhindert Duplikate falls Dokumente bereits in der Queue sind.
-        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, doc_ids, system_prompt_id)
+        if not workflow_id:
+            logger.error("Batch #%d: kein Workflow angegeben — Analyse nicht eingereiht", batch_id)
+            return
+        enqueued = await asyncio.to_thread(_db_enqueue_for_analysis, doc_ids, system_prompt_id, workflow_id)
         logger.info(
             "Batch #%d: %d/%d Dokument(e) zur KI-Analyse in Worker-Queue eingereiht",
             batch_id, enqueued, len(doc_ids),
@@ -381,6 +386,10 @@ async def start_import(payload: ImportBatchCreate, db: Session = Depends(get_db)
     # ── Firma + Jahr bestimmen ─────────────────────────────────────────────
     if not payload.company_name or not payload.year:
         raise HTTPException(status_code=400, detail="Firmenname und Jahr sind erforderlich.")
+    if (payload.analyze_after_import or payload.folder_sync) and not payload.workflow_id:
+        raise HTTPException(status_code=400, detail="Für Analyse nach dem Import und Ordner-Sync muss ein Workflow gewählt werden.")
+    if payload.workflow_id is not None and crud.workflow.get_by_id(db, payload.workflow_id) is None:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
     company_name = payload.company_name
     year = payload.year
 
@@ -421,6 +430,7 @@ async def start_import(payload: ImportBatchCreate, db: Session = Depends(get_db)
             ai_config_id=payload.ai_config_id,
             system_prompt_id=payload.system_prompt_id,
             delete_source_files=payload.delete_source_files,
+            workflow_id=payload.workflow_id,
         ))
     elif payload.delete_source_files:
         asyncio.create_task(_import_and_delete(batch.id, folder_path))
@@ -470,6 +480,12 @@ def update_import_automation(
     if batch is None:
         raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
 
+    if payload.workflow_id is not None:
+        if crud.workflow.get_by_id(db, payload.workflow_id) is None:
+            raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+        batch.workflow_id = payload.workflow_id
+    if payload.folder_sync and not batch.workflow_id:
+        raise HTTPException(status_code=400, detail="Ordner-Sync braucht einen Workflow — bitte zuerst einen wählen.")
     if payload.folder_sync is not None:
         batch.folder_sync = payload.folder_sync
     if payload.auto_export is not None:
@@ -550,6 +566,7 @@ def get_batch_queue_status(batch_id: int, db: Session = Depends(get_db)):
 def requeue_batch(
     batch_id: int,
     system_prompt_id: int | None = Query(None, description="Systemprompt für die erneute Analyse (None = Standard)"),
+    workflow_id: int | None = Query(None, description="Workflow; ohne Angabe der des Imports"),
     db: Session = Depends(get_db),
 ):
     """
@@ -563,8 +580,13 @@ def requeue_batch(
     if batch is None:
         raise HTTPException(status_code=404, detail="Import-Batch nicht gefunden")
 
+    wf_id = workflow_id or batch.workflow_id
+    if not wf_id:
+        raise HTTPException(status_code=400, detail="Kein Workflow gewählt — dieser Import hat keinen, bitte einen angeben.")
+    if crud.workflow.get_by_id(db, wf_id) is None:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
     doc_ids = [doc.id for doc in batch.documents if doc.stored_filename]
-    enqueued = _db_enqueue_for_analysis(doc_ids, system_prompt_id)
+    enqueued = _db_enqueue_for_analysis(doc_ids, system_prompt_id, wf_id)
     logger.info("Batch #%d: %d/%d Dokument(e) erneut in Worker-Queue eingereiht", batch_id, enqueued, len(doc_ids))
     return {"batch_id": batch_id, "total_documents": len(doc_ids), "enqueued": enqueued}
 

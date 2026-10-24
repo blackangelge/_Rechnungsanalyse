@@ -250,8 +250,8 @@ class AnalyzeRequest(BaseModel):
     document_ids: list[int]
     ai_config_id: Optional[int] = None
     system_prompt_id: Optional[int] = None
-    # Optional: Workflow für diese Analyse (sonst automatisch: Lieferant → Standard → klassisch)
-    workflow_id: Optional[int] = None
+    # Pflicht: Workflow für diese Analyse (es gibt keinen Standard und keine automatische Auswahl)
+    workflow_id: int
     # True = Dokumententyp NICHT neu erkennen, nur die Rechnungsdaten neu auslesen (nutzt den gespeicherten Typ)
     skip_type_detection: bool = False
 
@@ -267,8 +267,8 @@ class EnqueueRequest(BaseModel):
     """Request-Body für POST /api/documents/enqueue."""
 
     document_ids: list[int]  # Liste der Dokument-IDs, die in die Warteschlange eingereiht werden sollen
-    # Optional: Workflow, der für diese Analyse gelten soll (sonst automatisch: Lieferant → Standard → klassisch)
-    workflow_id: int | None = None
+    # Pflicht: Workflow, der für diese Analyse gilt (es gibt keinen Standard und keine automatische Auswahl)
+    workflow_id: int
     # True = Dokumententyp NICHT neu erkennen, nur die Rechnungsdaten neu auslesen (Belege ohne gespeicherten Typ werden normal erkannt)
     skip_type_detection: bool = False
 
@@ -321,7 +321,7 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
     # Mindestens eine ID muss angegeben sein
     if not payload.document_ids:
         raise HTTPException(status_code=400, detail="Keine Dokument-IDs angegeben.")
-    if payload.workflow_id is not None and crud.workflow.get_by_id(db, payload.workflow_id) is None:
+    if crud.workflow.get_by_id(db, payload.workflow_id) is None:
         raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
 
     count = 0    # Anzahl neu angelegter Tasks
@@ -361,9 +361,7 @@ def enqueue_documents(payload: EnqueueRequest, db: Session = Depends(get_db)):
         # ── Schritt 2: Neuen WorkflowTask anlegen ────────────────────────────
         # workflow_id: UUID zur Gruppierung zusammengehöriger Tasks
         # (hier jeder Task einzeln, da direkt vom Nutzer ausgelöst)
-        task_payload: dict = {"kind": "process_document", "document_id": doc_id}
-        if payload.workflow_id:
-            task_payload["workflow_id"] = payload.workflow_id
+        task_payload: dict = {"kind": "process_document", "document_id": doc_id, "workflow_id": payload.workflow_id}
         if payload.skip_type_detection:
             task_payload["skip_type_detection"] = True
         task = WorkflowTask(
@@ -494,7 +492,7 @@ async def analyze_documents(
     # ── Schritt 1: Eingabe prüfen ────────────────────────────────────────────
     if not payload.document_ids:
         raise HTTPException(status_code=400, detail="Keine Dokument-IDs angegeben")
-    if payload.workflow_id is not None and crud.workflow.get_by_id(db, payload.workflow_id) is None:
+    if crud.workflow.get_by_id(db, payload.workflow_id) is None:
         raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
 
     # ── Schritt 2: KI-Konfiguration bestimmen ────────────────────────────────
@@ -1218,7 +1216,6 @@ def _db_prepare_for_capacity(doc_id: int, explicit_workflow_id: int | None) -> N
     try:
         workflow = _db_resolve_workflow(doc_id, explicit_workflow_id)
         if workflow is None:
-            _db_prepare_pdf(doc_id, "", None, True)
             return
         limit = workflow_service.leading_trim_pages(workflow["graph"])
         if not limit:
@@ -1348,38 +1345,18 @@ async def _plausibility_pass_inner(
 
 def _db_resolve_workflow(doc_id: int, explicit_id: int | None) -> dict | None:
     """
-    Wählt den Workflow für ein Dokument (sync, für asyncio.to_thread):
-      1. explizit gewählter Workflow (Payload der Warteschlange)
-      2. Workflow des (bereits bekannten) Lieferanten — greift bei erneuter Analyse; der Lieferant wird
-         über den extrahierten Namen (`invoice_extractions.vendor_id`, ohne Groß/Klein) in der Lieferantentabelle gesucht
-      3. Standard-Workflow
-    Gibt None zurück, wenn keiner existiert → klassischer Ablauf.
+    Lädt den ausdrücklich gewählten Workflow (sync, für asyncio.to_thread).
+
+    Im neuen System gibt es KEINE automatische Auswahl: keinen Standard-Workflow, keinen Lieferanten-Workflow, keinen
+    klassischen Ablauf. Jede Analyse nennt ihren Workflow (API, Import, Ordner-Sync). Gibt None zurück, wenn keiner
+    angegeben ist oder er nicht (mehr) existiert — der Aufrufer meldet das als Fehler am Beleg.
     """
-    from sqlalchemy import func as _func
-    from app.models.document import Document as _DocModel
-    from app.models.vendor import Vendor as _Vendor
     db = SessionLocal()
     try:
         wf = crud.workflow.get_by_id(db, explicit_id) if explicit_id else None
-        source = "gewählt"
-        if wf is None:
-            doc = db.get(_DocModel, doc_id)
-            name = (doc.supplier_name or "").strip() if doc is not None else ""
-            vendor = (
-                db.query(_Vendor)
-                .filter(_func.lower(_Vendor.name) == name.lower(), _Vendor.workflow_id.isnot(None))
-                .first()
-                if name else None
-            )
-            if vendor is not None:
-                wf = crud.workflow.get_by_id(db, vendor.workflow_id)
-                source = f"Lieferant {vendor.name}"
-        if wf is None:
-            wf = crud.workflow.get_default(db)
-            source = "Standard"
         if wf is None:
             return None
-        return {"id": wf.id, "name": wf.name, "graph": json.loads(wf.graph), "source": source}
+        return {"id": wf.id, "name": wf.name, "graph": json.loads(wf.graph), "source": "gewählt"}
     finally:
         db.close()
 
@@ -1469,11 +1446,19 @@ async def _analyze_single_inner(
     # WORKFLOW-AUSWAHL: gewählter → Lieferanten- → Standard-Workflow, sonst klassischer Ablauf
     # ═══════════════════════════════════════════════════════════════════════════
     workflow = await asyncio.to_thread(_db_resolve_workflow, doc_id, workflow_id)
-    if workflow is not None:
-        from app.services import workflow_runner
-        return await workflow_runner.analyze_with_workflow(
-            doc_id, ai_config_id, system_prompt_id, workflow, skip_type_detection
+    if workflow is None:
+        msg = (
+            "Kein Workflow gewählt — jede Analyse braucht einen ausdrücklich gewählten Workflow"
+            if not workflow_id else f"Workflow #{workflow_id} existiert nicht mehr"
         )
+        logger.error("Dokument #%d: %s", doc_id, msg)
+        await asyncio.to_thread(_set_error, doc_id, msg)
+        return "ok"
+    from app.services import workflow_runner
+    return await workflow_runner.analyze_with_workflow(
+        doc_id, ai_config_id, system_prompt_id, workflow, skip_type_detection
+    )
+    # ── Klassischer Ablauf (ohne Workflow): im neuen System nicht mehr erreichbar, wird mit dem Altbestand entfernt ──
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANALYSE-SCHRITT 1: DB-Daten lesen

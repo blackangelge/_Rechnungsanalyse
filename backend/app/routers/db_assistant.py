@@ -39,7 +39,7 @@ class ApplyRequest(BaseModel):
 
 class ReanalysisRequest(BaseModel):
     document_ids: list[int] = Field(..., min_length=1)
-    workflow_id: int | None = None
+    workflow_id: int                       # Pflicht — es gibt keinen Standard-Workflow
     skip_type_detection: bool = False     # Dokumententyp nicht neu erkennen, nur neu auslesen
     reason: str = ""
 

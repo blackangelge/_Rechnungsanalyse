@@ -982,9 +982,19 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
   Konflikt → `UnitError`/HTTP 409 mit Hinweis auf die belegende Einheit. Mengenfelder im JSONB: `{original_value, original_unit, value, unit, unit_id, group_id, status}` (`status`: ok · no_unit · unknown_unit · wrong_group · invalid · no_value).
   **Unbekannte Einheiten werden nie stillschweigend übernommen:** Originalwert/-einheit bleiben, `value`/`unit` leer, ein Eintrag in `unit_review_items` (je Datensatz+Feld). Zuordnung (`POST /api/units/review/assign`) legt den Alias an und rechnet alle offenen Vorkommen neu.
   Seed: `services/units_seed.py` (über `python -m app.scripts.seed_schema`). Basen wie bisher: t, l, m, m², Stk.
-- **Entscheidung: nur Workflows, kein „Standard“.** Im neuen System läuft jede Analyse über einen ausdrücklich gewählten Workflow — kein Standard-Workflow, kein klassischer Ablauf,
-  keine automatische Auswahl (Phase 4 baut die Einstiegspunkte entsprechend um: Workflow ist bei jeder Abfrage Pflicht).
-- Geplant: Phase 3 Einheiten (unbekannte Einheiten → Prüfliste, Beleg wird trotzdem fertig), 4 Pydantic-Modelle → `response_format: json_schema` (vLLM 0.32) + Tool-Erweiterungspunkt, 5 Export, 6 komplett neues Frontend.
+- **Schemagesteuerte Extraktion (Phase 4)** — `services/schema_models.py` (Pydantic-Modelle per `create_model` aus der Version → `model_json_schema()`, Referenzen inline aufgelöst, alle Schlüssel Pflicht aber nullable, Zahlen als Zahl oder Text,
+  Mengen als `{value, unit}`; Cache je Versions-ID), `schema_prompt.py` (deterministischer Systemprompt: Regeln + Feldbeschreibung, Zusatzanweisung ganz hinten), `structured_ai.py` (`call_structured`: `response_format` vom Typ `json_schema`,
+  strict; Fehler als Text im gewohnten Wortlaut → `_is_ai_conn_error` greift; Erweiterungspunkt `tools` wird nur gesendet, wenn nicht leer), `schema_pipeline.py` (validieren → Kette → Typ-Umwandlung → Mengen/Einheiten → Systemfelder → Lieferant zuordnen → speichern),
+  `schema_extraction.py` (prepare / call / finish, `run_sync`). **Prefix-Caching:** System (Regeln+Felder+Zusatz) und die feste User-Anweisung stehen vor den Bildern.
+  Probleme je Datensatz stehen in `data["_issues"]`, die gelesenen Stammdaten in `data["_master"]` (Schlüssel mit „_“ sind reserviert). Eine KI-Antwort, die das Schema verletzt, ändert nichts (alter Stand bleibt, Beleg → `error`).
+  Lieferanten-Matching: `match_fields` der Stammdaten-Entität in Reihenfolge (iban → ust_id_nr → name), Schreibweise egal; nur leere Felder werden ergänzt; bei keinem Treffer neuer Lieferant.
+  Workflow-Knoten **`schema_extract`** (`ai_config_id?`, `schema_version_id?` = aktive, `system_prompt_id?` = Zusatzanweisung); Vorlagen „Schema-Extraktion“ und „… erst kürzen“. Der Beleg wird `done`, KI-Statistik als `DocumentTokenCount`; die alten Tabellen bleiben leer.
+  Messung Altpfad ↔ Schemapfad: `python -m app.scripts.bench_extraction --pdf-dir … --api-url … --model … --legacy-prompt-file …` (2 Runden, damit das Prefix-Caching sichtbar wird).
+- **Entscheidung: nur Workflows, kein „Standard“** (Migration `0020_batch_workflow`): jede Analyse nennt ihren Workflow ausdrücklich. `POST /api/documents/analyze|enqueue` und `/api/db-assistant/apply-reanalysis` verlangen `workflow_id` (422),
+  `import_batches.workflow_id` ist Pflicht bei „Analyse nach Import“ und Ordner-Sync (400), `POST /{id}/requeue` nimmt den Workflow des Imports, `PATCH …/automation` setzt ihn; Ordner-Sync ohne Workflow importiert, analysiert aber nicht (Log-Warnung).
+  `_db_resolve_workflow` lädt nur noch die genannte ID — kein Standard-Workflow, keine Lieferanten-Zuordnung, kein klassischer Ablauf (ohne Workflow → Beleg `error` „Kein Workflow gewählt“). Entfernt: `set-default`/`clear-default`, `PUT /api/vendors/{id}/workflow`.
+  Der klassische Code in `_analyze_single_inner` bleibt unerreichbar stehen und wird mit dem Altbestand entfernt; die Spalten `workflows.is_default` und `vendor.workflow_id` bleiben vorerst.
+- Geplant: Phase 5 Export, 6 komplett neues Frontend; später Tools für die KI (Rechnen/Nachschlagen).
 - Tests: `tests/test_schema_definition.py`.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)

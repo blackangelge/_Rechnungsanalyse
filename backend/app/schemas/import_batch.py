@@ -30,6 +30,7 @@ class ImportBatchCreate(BaseModel):
     year: int | None = None
     ai_config_id: int | None = None       # KI-Konfiguration für analyze_after_import (None = Standard)
     system_prompt_id: int | None = None   # Systemprompt für analyze_after_import (None = Standard)
+    workflow_id: int | None = None        # Pflicht bei analyze_after_import oder folder_sync (kein Standard-Workflow)
     analyze_after_import: bool = False
     delete_source_files: bool = False
     folder_sync: bool = False    # Ordner-Sync aktivieren (nicht mit delete_source_files kombinierbar)
@@ -44,6 +45,7 @@ class ImportBatchAutomationUpdate(BaseModel):
 
     folder_sync: bool | None = None
     auto_export: bool | None = None
+    workflow_id: int | None = None        # Workflow für Ordner-Sync / Neuanalyse; Ordner-Sync braucht einen
 
 
 class ImportVisibilityUpdate(BaseModel):
@@ -63,6 +65,7 @@ class ImportBatchRead(BaseModel):
     year: int
     comment: str | None
     status: str           # pending | running | done | error
+    workflow_id: int | None = None
     folder_sync: bool | None = False
     last_synced_at: datetime | None = None    # Letzte Ordner-Sync-Prüfung
     auto_export: bool = False

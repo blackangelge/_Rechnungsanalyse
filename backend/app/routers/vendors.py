@@ -10,7 +10,6 @@ Endpunkte:
   POST   /api/vendors/reassign-names   — bestätigte Zuordnungen umschreiben (protokolliert, rückgängig machbar)
   GET    /api/vendors/{id}     — einzelnen Lieferanten abrufen
   PUT    /api/vendors/{id}     — Lieferantendaten aktualisieren
-  PUT    /api/vendors/{id}/workflow — Analyse-Workflow des Lieferanten festlegen (null = Standard)
   DELETE /api/vendors/{id}     — Lieferanten löschen (inkl. aller Bankkonten)
 
 Lieferanten werden beim Anlegen automatisch dedupliziert (find_or_create in crud/vendor.py).
@@ -237,20 +236,6 @@ def get_vendor(vendor_id: int, db: Session = Depends(get_db)):
 def update_vendor(vendor_id: int, payload: VendorUpdate, db: Session = Depends(get_db)):
     """Aktualisiert Felder eines Lieferanten. 404 wenn nicht gefunden."""
     obj = crud.vendor.update(db, vendor_id, payload.model_dump())
-    if obj is None:
-        raise HTTPException(status_code=404, detail="Lieferant nicht gefunden")
-    return obj
-
-
-@router.put("/{vendor_id}/workflow", response_model=VendorRead)
-def set_vendor_workflow(vendor_id: int, payload: SupplierWorkflowUpdate, db: Session = Depends(get_db)):
-    """
-    Legt den Analyse-Workflow dieses Lieferanten fest (null = Standard). Er greift bei einer
-    erneuten Analyse, sobald der Lieferant (über den extrahierten Namen) bekannt ist.
-    """
-    if payload.workflow_id is not None and crud.workflow.get_by_id(db, payload.workflow_id) is None:
-        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
-    obj = crud.workflow.set_supplier_workflow(db, vendor_id, payload.workflow_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Lieferant nicht gefunden")
     return obj
