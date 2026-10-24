@@ -887,14 +887,6 @@ export default function BelegePage() {
                 placeholder="z.B. 42" min="1"
                 className="input py-1.5 w-28" />
             </div>
-            <label className="flex items-end gap-1.5 pb-2 text-xs font-medium text-gray-700" title="Zu große, verschlüsselte oder nicht lesbare PDFs">
-              <input type="checkbox" checked={filterRework} onChange={(e) => setFilterRework(e.target.checked)} data-testid="filter-rework" />
-              Nur „Nachbearbeitung nötig“
-            </label>
-            <label className="flex items-end gap-1.5 pb-2 text-xs font-medium text-gray-700" title="Lieferscheine, Angebote, Mahnungen … — alles, was nicht als Eingangsrechnung erkannt wurde">
-              <input type="checkbox" checked={filterNotInvoice} onChange={(e) => setFilterNotInvoice(e.target.checked)} data-testid="filter-not-invoice" />
-              Nur Nicht-Eingangsrechnungen{nonInvoices && nonInvoices.total > 0 ? ` (${nonInvoices.total.toLocaleString("de-DE")})` : ""}
-            </label>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Plausibilität</label>
               <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
@@ -933,27 +925,28 @@ export default function BelegePage() {
                 placeholder="∞" min="1"
                 className="input py-1.5 w-24" />
             </div>
-            <label className="flex cursor-pointer items-center gap-2 mt-auto pb-1.5">
-              <input type="checkbox" checked={includeDeleted} onChange={(e) => setIncludeDeleted(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600" />
-              <span className="text-sm text-gray-600">Gelöschte anzeigen</span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-gray-100 pt-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700" title="Zu große, verschlüsselte, nicht lesbare PDFs oder unsichere Seitenerkennung">
+              <input type="checkbox" checked={filterRework} onChange={(e) => setFilterRework(e.target.checked)} data-testid="filter-rework" className="rounded border-gray-300 text-blue-600" />
+              Nur „Nachbearbeitung nötig“
             </label>
-            {/* Belege ausgeblendeter Imports */}
-            <label className="flex cursor-pointer items-center gap-2 mt-auto pb-1.5"
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700" title="Lieferscheine, Angebote, Mahnungen … — alles, was nicht als Eingangsrechnung erkannt wurde">
+              <input type="checkbox" checked={filterNotInvoice} onChange={(e) => setFilterNotInvoice(e.target.checked)} data-testid="filter-not-invoice" className="rounded border-gray-300 text-blue-600" />
+              Nur Nicht-Eingangsrechnungen{nonInvoices && nonInvoices.total > 0 ? ` (${nonInvoices.total.toLocaleString("de-DE")})` : ""}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={includeDeleted} onChange={(e) => setIncludeDeleted(e.target.checked)} className="rounded border-gray-300 text-blue-600" />
+              Gelöschte anzeigen
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700"
               title="Belege von Imports, die auf dem Dashboard ausgeblendet wurden. Ein ausdrücklich gewählter Import wird immer angezeigt.">
-              <input type="checkbox" checked={includeHidden} onChange={(e) => setIncludeHidden(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600" />
-              <span className="text-sm text-gray-600">Ausgeblendete Imports einbeziehen</span>
+              <input type="checkbox" checked={includeHidden} onChange={(e) => setIncludeHidden(e.target.checked)} className="rounded border-gray-300 text-blue-600" />
+              Ausgeblendete Imports einbeziehen
             </label>
-            <div className="flex gap-2 mt-auto">
-              <button onClick={applyFilters}
-                className="btn btn-primary transition-colors">
-                Filter anwenden
-              </button>
-              <button onClick={resetFilters}
-                className="rounded border border-gray-300 px-4 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors">
-                Zurücksetzen
-              </button>
+            <div className="ml-auto flex gap-2">
+              <button onClick={applyFilters} className="btn btn-primary">Filter anwenden</button>
+              <button onClick={resetFilters} className="btn btn-secondary">Zurücksetzen</button>
             </div>
           </div>
         </div>

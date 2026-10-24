@@ -1083,6 +1083,7 @@ Für dieses Projekt zählen nur Eingangsrechnungen. Alles andere wird **geprüft
    Typ, Seitenzahl und KI-Statistik bleiben am verworfenen Beleg erhalten (Prüfung im Papierkorb).
 2. **Prüfen und endgültig löschen:** Seite **/papierkorb** (Menü „Arbeiten“): Liste mit Grund, Typ, Datum, PDF ansehen; „Zurückholen“ (`POST /bulk-restore`) und „Endgültig löschen“ (`POST /api/documents/purge`). `purge` wirkt **nur auf Belege im Papierkorb** (andere werden übersprungen) und entfernt Belegzeile samt
    Extraktion/Positionen/Datensätzen/Historie (Cascade), wartende Worker-Tasks, `{id}.pdf` und `versions/{id}/` — nicht umkehrbar. Logik in `services/document_trash.py`; `GET /api/documents/non-invoices/summary` liefert die Zähler (Kennzahl in der Belege-Filterzeile). Filter `only_deleted=true` für Liste/IDs.
+- **KI-Assistent:** Lesewerkzeug `non_invoice_summary`, Schreibwerkzeuge `trash_documents` (`not_invoice: true` oder `document_ids`) und `restore_documents` — als Vorschläge mit Freigabe. **Endgültig löschen gibt es für den Assistenten bewusst nicht** (nur der Nutzer auf /papierkorb).
 - Tests: `tests/test_trash.py`.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)

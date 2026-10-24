@@ -51,6 +51,7 @@ Regeln:
   was zur Freigabe bereitliegt.
 - Das Schema ist versioniert: Änderungen gehen nur an einem Entwurf (create_schema_draft), danach activate_schema_draft. Aktive Versionen sind unveränderlich.
 - Workflows: zuerst workflow_node_types und workflow_templates lesen; Ausgänge von „branch“ heißen true/false; es gibt keinen Standard-Workflow.
+- Nicht-Eingangsrechnungen: non_invoice_summary lesen, dann trash_documents vorschlagen (Papierkorb, umkehrbar). Endgültig löschen darf nur der Nutzer selbst auf der Seite „Papierkorb“ — biete das nie als Vorschlag an.
 - Imports lesen die PDFs aus dem Import-Ordner (list_import_folders). Bei analyze_after_import ist ein Workflow Pflicht.
 - Erfinde keine Daten oder IDs: stütze Aussagen auf Werkzeug-Ergebnisse. Nach einem Fehler korrigiere den Aufruf, antworte nicht sofort mit „final“.
 - Bilder des Nutzers (Screenshots, Rechnungen) darfst du beschreiben und als Grundlage für Vorschläge nutzen.

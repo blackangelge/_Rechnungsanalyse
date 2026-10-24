@@ -8,7 +8,7 @@ const TOOL_LABEL: Record<string, string> = {
   sql: "Datenbank-Abfrage", list_units: "Einheiten lesen", list_unit_review: "Prüfliste lesen", get_schema: "Schema lesen",
   list_export_templates: "Export-Vorlagen lesen", export_template_columns: "Vorlagen-Spalten lesen", list_workflows: "Workflows lesen",
   get_workflow: "Workflow lesen", workflow_node_types: "Knotentypen lesen", workflow_templates: "Workflow-Vorlagen lesen",
-  list_prompts: "Systemprompts lesen", list_ai_clients: "KI-Konfigurationen lesen", list_imports: "Imports lesen", list_import_folders: "Import-Ordner lesen",
+  list_prompts: "Systemprompts lesen", list_ai_clients: "KI-Konfigurationen lesen", list_imports: "Imports lesen", non_invoice_summary: "Nicht-Rechnungen zählen", list_import_folders: "Import-Ordner lesen",
 };
 
 /** Aufgeklappte Werkzeug-Aufrufe einer Antwort (was hat die KI nachgeschlagen?). */

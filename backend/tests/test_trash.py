@@ -138,3 +138,21 @@ def test_discard_without_type_detection_does_nothing(pages_env):
     wf = crud.workflow.create(env.db, "Nur verwerfen", None, g)
     doc = _analyze(env, wf.id)
     assert doc.soft_deleted is False and "nicht verworfen" in doc.workflow_run[1]["detail"]
+
+
+# ─── Assistent ───────────────────────────────────────────────────────────────
+
+def test_assistant_trash_tools(db, docs):
+    import asyncio
+    from app.services import assistant_tools as at
+    s = at.run_read(db, "non_invoice_summary", {})
+    assert s["total"] == 2
+    res = asyncio.run(at.execute_write(db, "trash_documents", {"not_invoice": True, "reason": "Keine Eingangsrechnung"}))
+    assert res["in_papierkorb"] == 2
+    db.expire_all()
+    assert db.get(Document, docs["lieferschein"].id).soft_deleted and not db.get(Document, docs["rechnung"].id).soft_deleted
+    assert at.run_read(db, "non_invoice_summary", {})["trash"] == 2
+    assert asyncio.run(at.execute_write(db, "restore_documents", {"all": True}))["zurueckgeholt"] == 2
+    with pytest.raises(at.ToolError):
+        asyncio.run(at.execute_write(db, "trash_documents", {}))
+    assert "purge" not in at.tools_prompt().lower() and "endgültig" in at.tools_prompt().lower()

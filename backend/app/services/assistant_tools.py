@@ -298,6 +298,12 @@ def t_folders(db: Session, a: dict):
     return {"import_base_path": base, "folders": out[:MAX_LIST]}
 
 
+@_register("non_invoice_summary", "read", "{}", "Wie viele erkannte Nicht-Eingangsrechnungen (je Dokumententyp) es gibt und wie viele Belege im Papierkorb liegen.")
+def t_non_invoices(db: Session, a: dict):
+    from app.services import document_trash
+    return document_trash.non_invoice_summary(db)
+
+
 # ═══ SCHREIBEN (nur als Vorschlag) ═══════════════════════════════════════════
 
 # ── Einheiten ──
@@ -577,6 +583,42 @@ def w_delete_wf(db: Session, a: dict):
     from app.routers import workflows as r
     _http(r.delete_workflow, int(a["id"]), db)
     return {"deleted": int(a["id"])}
+
+
+# ── Papierkorb ──
+def _trash_ids(db: Session, a: dict) -> list[int]:
+    from app import crud
+    if a.get("not_invoice"):
+        return crud.document.get_ids_filtered(db, not_invoice=True, include_hidden=True)
+    ids = a.get("document_ids")
+    if not isinstance(ids, list) or not ids:
+        raise ToolError("Angabe fehlt: 'not_invoice': true (alle erkannten Nicht-Eingangsrechnungen) ODER 'document_ids': [...]")
+    try:
+        return [int(i) for i in ids][:20000]
+    except (TypeError, ValueError):
+        raise ToolError("document_ids muss eine Liste von Beleg-IDs sein") from None
+
+
+@_register("trash_documents", "write", '{"not_invoice": true, "reason": "Keine Eingangsrechnung"} ODER {"document_ids": [1, 2], "reason": "…"}',
+           "Belege in den Papierkorb legen (umkehrbar). not_invoice=true = alle erkannten Nicht-Eingangsrechnungen (Mischbelege und noch nicht erkannte Belege nie). "
+           "Endgültig löschen kann nur der Nutzer auf der Seite „Papierkorb“.",
+           lambda a: ("Alle erkannten Nicht-Eingangsrechnungen" if a.get("not_invoice") else f"{len(a.get('document_ids') or [])} Beleg(e)") + " in den Papierkorb legen")
+def w_trash(db: Session, a: dict):
+    from app.services import document_trash
+    ids = _trash_ids(db, a)
+    if not ids:
+        raise ToolError("Keine passenden Belege gefunden.")
+    res = document_trash.trash(db, ids, str(a.get("reason") or "Vom Assistenten aussortiert")[:300])
+    return {"in_papierkorb": res.changed, "uebersprungen": res.skipped}
+
+
+@_register("restore_documents", "write", '{"document_ids": [1, 2]} ODER {"all": true}', "Belege aus dem Papierkorb zurückholen.",
+           lambda a: ("Alle Belege" if a.get("all") else f"{len(a.get('document_ids') or [])} Beleg(e)") + " aus dem Papierkorb zurückholen")
+def w_restore(db: Session, a: dict):
+    from app import crud
+    from app.services import document_trash
+    ids = crud.document.get_ids_filtered(db, only_deleted=True, include_hidden=True) if a.get("all") else _trash_ids(db, {"document_ids": a.get("document_ids")})
+    return {"zurueckgeholt": document_trash.restore(db, ids).changed}
 
 
 # ── Import ──
