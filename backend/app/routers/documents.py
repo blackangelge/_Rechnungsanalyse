@@ -1813,7 +1813,7 @@ def revalidate_document(doc_id: int, db: Session = Depends(get_db)):
     positions = [
         {
             "quantity": p.quantity, "unit": p.unit, "unit_price": p.unit_price_netto,
-            "total_price": p.total_price, "discount": p.discount,
+            "total_price": p.total_price, "discount": p.discount, "price_quantity": p.price_quantity,
         }
         for p in doc.order_positions
     ]

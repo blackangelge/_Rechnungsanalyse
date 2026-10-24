@@ -34,6 +34,7 @@ import {
   DocumentType,
   DOCUMENT_TYPES,
   ImportBatch,
+  UNIT_TYPE_LABELS,
   ValidationStatus,
   WorkflowListItem,
   WorkflowTraceEntry,
@@ -1640,6 +1641,11 @@ function InfosView({
                             const stP = st?.unit_price_netto != null ? Number(st.unit_price_netto) : null;
                             const qChanged = stQ != null && rawQ != null && (Math.abs(stQ - rawQ) > 1e-9 || (stU && stU.toLowerCase() !== rawU.toLowerCase()));
                             const pChanged = stP != null && rawP != null && Math.abs(stP - rawP) > 0.00005;
+                            // Preisbasis/Verpackung: gespeicherte Werte, sonst die Angaben der KI-Auslesung
+                            const basis = st?.price_quantity != null ? Number(st.price_quantity) : num2(pos.preis_je_menge);
+                            const packN = st?.pack_size != null ? Number(st.pack_size) : num2(pos.verpackungsinhalt);
+                            const packU = st?.pack_unit ?? (pos.verpackungsinhalt_einheit ? String(pos.verpackungsinhalt_einheit) : "");
+                            const uType = st?.unit_type ?? (pos.mengeneinheit_typ ? String(pos.mengeneinheit_typ) : null);
                             const orig = `lt. Rechnung: ${rawQ != null ? rawQ.toLocaleString("de-DE") : "–"} ${rawU}${rawP != null ? ` · ${fmt(rawP)}` : ""}`;
                             return (
                               <>
@@ -1648,13 +1654,24 @@ function InfosView({
                                     <span className="font-medium text-emerald-700" title={orig}>{stQ!.toLocaleString("de-DE", { maximumFractionDigits: 6 })}</span>
                                   ) : (pos.menge != null ? String(pos.menge) : "–")}
                                   {qChanged && <div className="text-[10px] font-normal text-gray-400">{orig}</div>}
+                                  {packN != null && packN > 0 && (
+                                    <div className="text-[10px] font-normal text-violet-600" title="Inhalt je Verpackungseinheit">
+                                      à {packN.toLocaleString("de-DE")} {packU}
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="px-3 py-2 text-gray-500">
                                   {qChanged && stU ? <span className="font-medium text-emerald-700">{stU}</span> : String(pos.mengeneinheit ?? "–")}
+                                  {uType && <div className="text-[10px] uppercase tracking-wide text-gray-300" title="Art der Mengeneinheit">{UNIT_TYPE_LABELS[uType] ?? uType}</div>}
                                 </td>
                                 <td className="px-3 py-2 text-right tabular-nums">
                                   {pChanged ? <span className="font-medium text-emerald-700" title={`lt. Rechnung: ${fmt(rawP)}`}>{fmt(stP)}</span>
                                     : (pos.einzelpreis != null ? fmt(pos.einzelpreis) : "–")}
+                                  {basis != null && basis > 1 && (
+                                    <div className="text-[10px] font-normal text-violet-600" title="Der Einzelpreis gilt für mehrere Einheiten">
+                                      je {basis.toLocaleString("de-DE")} {rawU}
+                                    </div>
+                                  )}
                                 </td>
                               </>
                             );
@@ -1687,9 +1704,15 @@ function InfosView({
                         <td className="px-3 py-2 text-gray-500">{i + 1}</td>
                         <td className="px-3 py-2">{pos.product_name ?? pos.product_description ?? "–"}</td>
                         <td className="px-3 py-2 text-gray-500 text-xs">{pos.article_number ?? "–"}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{pos.quantity != null ? String(pos.quantity) : "–"}</td>
-                        <td className="px-3 py-2 text-gray-500">{pos.unit ?? "–"}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{pos.unit_price_netto != null ? fmt(pos.unit_price_netto) : "–"}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{pos.quantity != null ? String(pos.quantity) : "–"}
+                          {pos.pack_size != null && Number(pos.pack_size) > 0 && <div className="text-[10px] text-violet-600">à {Number(pos.pack_size).toLocaleString("de-DE")} {pos.pack_unit ?? ""}</div>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-500">{pos.unit ?? "–"}
+                          {pos.unit_type && <div className="text-[10px] uppercase tracking-wide text-gray-300">{UNIT_TYPE_LABELS[pos.unit_type] ?? pos.unit_type}</div>}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{pos.unit_price_netto != null ? fmt(pos.unit_price_netto) : "–"}
+                          {pos.price_quantity != null && Number(pos.price_quantity) > 1 && <div className="text-[10px] text-violet-600">je {Number(pos.price_quantity).toLocaleString("de-DE")} {pos.unit ?? ""}</div>}
+                        </td>
                         <td className="px-3 py-2 text-right tabular-nums">{pos.total_price != null ? fmt(pos.total_price) : "–"}</td>
                         <td className="px-3 py-2 text-right">{pos.tax != null ? `${pos.tax} %` : "–"}</td>
                         <td className="px-3 py-2 text-xs text-gray-500">{pos.discount ?? "–"}</td>

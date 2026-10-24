@@ -219,6 +219,21 @@ def _raw_positions(raw: dict | None) -> list[dict]:
 
 # ─── Hauptfunktion ────────────────────────────────────────────────────────────
 
+def price_basis(pos: dict, raw_pos_i: dict | None = None) -> float:
+    """
+    Preisbasis einer Position: der Einzelpreis gilt je N Einheiten der Mengeneinheit (Standard 1).
+    Quelle: gespeichertes `price_quantity`, sonst `preis_je_menge` bzw. eine reine Zählangabe in `preiseinheit` der KI-Antwort („100 Stück“, „je 100“).
+    """
+    n = _f(pos.get("price_quantity"))
+    if n is None and raw_pos_i:
+        n = _f(raw_pos_i.get("preis_je_menge"))
+        if n is None:
+            m = re.match(r"^\s*(?:je|pro|per|/)?\s*(\d+(?:[.,]\d+)?)\s*(?:st\.?|stk\.?|stück|stueck|pcs\.?|einheiten|ve|vpe)?\s*$",
+                         str(raw_pos_i.get("preiseinheit") or ""), re.IGNORECASE)
+            n = _f(m.group(1)) if m else None
+    return n if n is not None and n > 0 else 1.0
+
+
 def validate_invoice(
     fields: dict,
     positions: list[dict],
@@ -248,7 +263,7 @@ def validate_invoice(
         if qty is None or price is None or total is None:
             continue
         result.checks_run += 1
-        expected = qty * price
+        expected = qty * price / price_basis(pos, raw_pos[idx] if idx < len(raw_pos) else None)
         if _close(expected, total):
             _check_unit_vs_price_unit(result, idx, pos, raw_pos, auto_correct)
             continue
@@ -668,9 +683,13 @@ def _build_position_calcs(
             steps.append(f"Nicht prüfbar — es fehlt: {', '.join(missing)}.")
             status = "skip"
         else:
-            expected = qty * price
+            basis = price_basis(o, raw_pos[idx] if idx < len(raw_pos) else None)
+            expected = qty * price / basis
             per = f" je {pu_raw}" if pu_raw else ""
-            steps.append(f"Menge × Einzelpreis = {_n(qty)} {unit} × {_n(price)} €{per} = {_fmt(expected)} €".replace("  ", " "))
+            if basis != 1.0:
+                steps.append(f"Menge ÷ Preisbasis × Einzelpreis = {_n(qty)} {unit} ÷ {_n(basis)} × {_n(price)} € (Preis je {_n(basis)} {unit}) = {_fmt(expected)} €".replace("  ", " "))
+            else:
+                steps.append(f"Menge × Einzelpreis = {_n(qty)} {unit} × {_n(price)} €{per} = {_fmt(expected)} €".replace("  ", " "))
             result_value, explained = expected, False
             if _close(expected, total):
                 explained = True

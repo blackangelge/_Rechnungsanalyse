@@ -171,7 +171,7 @@ def _db_saved_snapshot(doc_id: int) -> dict:
             "positions": [_position_row({
                 "product_description": p.product_description, "product_name": p.product_name,
                 "article_number": p.article_number, "quantity": p.quantity, "unit": p.unit,
-                "unit_price": p.unit_price_netto, "total_price": p.total_price, "discount": p.discount,
+                "unit_price": p.unit_price_netto, "total_price": p.total_price, "discount": p.discount, "price_quantity": p.price_quantity,
             }) for p in positions],
         }
     finally:

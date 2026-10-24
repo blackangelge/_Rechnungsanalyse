@@ -675,6 +675,19 @@ nach (125.000 Belege à 300/h KI-Analyse wären > 2 Wochen; die Nachrüstung sch
 - Endpunkte: `GET /api/validation-backfill` (Stand + Anzahl offener Belege), `POST` `{dry_run, auto_correct, batch_ids?}`, `POST /cancel`.
 - Frontend: Karte „Prüfung für den Altbestand nachrüsten" in Einstellungen → Automatisierung (Vorschau, Start, Fortschrittsbalken, Ergebnis je Status).
 
+### Preisbasis, Verpackung, Einheitentyp (`order_positions.price_quantity/pack_size/pack_unit/unit_type`, Migration `0016_price_basis_pack`)
+
+Beispiel: 4.400 Schrauben, „90 € je 100“ (Preisbasis steht in der Spalte oder nur im Artikeltext) — gespeichert wird **wie gedruckt** (Menge 4400, Stück, Einzelpreis 90) plus `price_quantity = 100`; der Positionspreis ist Menge ÷ Preisbasis × Einzelpreis = 3.960 €.
+
+- **KI-JSON je Position** (`positionen[]`): `preis_je_menge` (Zahl, Preis gilt je N Einheiten), `verpackungsinhalt` (Zahl) + `verpackungsinhalt_einheit` (Text) für VPE/VE/Pack/Karton,
+  `mengeneinheit_typ` (`stueck|verpackung|gewicht|volumen|laenge|flaeche|pauschal|dienstleistung|sonstige`). Abgebildet in `_map_new_format` (`_price_basis`, `_unit_type`); eine reine Zählangabe in `preiseinheit` („je 100“, „100 Stück“) wird ebenfalls als Preisbasis gelesen.
+- **Prompt:** `ai_service.UNIT_RULES` (wird von `with_unit_rules` an jeden Extraktionsprompt gehängt, außer er enthält `preis_je_menge` schon) beschreibt diese Felder und verlangt **Nebenkosten (Versand, Fracht, Pfand …) als eigene Position**, wenn sie nur in der Summe stehen (`artikelbezeichnung` „Versandkosten“, Menge 1, `pauschal`, Betrag netto).
+- **Prüfung:** `plausibility_service.price_basis(pos, raw_pos_i)` (gespeichertes `price_quantity` → `preis_je_menge` → Zählangabe in `preiseinheit`) fließt in Positionsprüfung und Einzelrechnung ein. Die Positions-Dicts enthalten `price_quantity`.
+- **Auswertung (Artikelsuche, zur Abfragezeit, nichts gespeichert):** hat die Position einen Verpackungsinhalt, rechnet `base_*` mit Menge × Inhalt in der Inhaltseinheit (44 Sack à 25 kg → 1 t); `content_quantity/content_unit/content_unit_price` erscheinen nur bei Verpackung oder Preisbasis > 1 (Preis je Stück = Positionspreis ÷ Inhaltsmenge). Ohne diese Angaben unverändert.
+- **Excel:** ganz hinten (Spaltenpositionen bleiben stabil) „Preis je (Einheiten)“, „Inhalt je Verpackung“, „Einheit des Inhalts“, „Einheitentyp“ — gespeicherte Werte, keine Berechnung. Die Migration trägt die Felder in eine bereits gespeicherte Export-Konfiguration ein.
+- **Altbestand ohne KI:** Nachrüstung „Preisbasis & Verpackung erkennen“ (`validation_backfill.price_basis_extraction`): aus der KI-Antwort, aus den Beträgen (Menge × Preis ÷ 10/100/1000 = Positionspreis, nur bei genau einem passenden Faktor und ohne Nachlass-Erklärung), Verpackungsinhalt aus dem Artikeltext nur bei Verpackungseinheiten, Einheitentyp aus der Einheit. Überschreibt nichts, im Änderungsprotokoll rückgängig.
+- Anzeige: Belege-Infos („je 100 Stück“, „à 100 Stück“, Einheitentyp), Artikelsuche (zusätzlich „= 4.400 Stück · 0,90 € / Stück“).
+
 ### Analyse-Historie (`crud/analysis_history.py`, `routers/document_history.py`)
 
 Wird ein Beleg erneut analysiert, ersetzt `save_extraction` Extraktion und Positionen (frühere Fehlanalysen haben so schon gute Daten

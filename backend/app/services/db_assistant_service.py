@@ -44,6 +44,8 @@ Fachliches zur Datenbank (Rechnungsanalyse):
 - documents.soft_deleted = true → Beleg gilt als gelöscht (nicht mitzählen, außer ausdrücklich gewünscht). import_batches.hidden_at != NULL → ausgeblendeter Import.
 - Gewichte: Menge/Einheit stehen teils in kg, teils in t (Tonnen). Preis je t = Gesamtpreis / (Menge in t). Umrechnung 1 t = 1000 kg.
 - documents.status: pending, processing, done, error, waiting_capacity. invoice_extractions.validation_status: ok, corrected, ai_corrected, needs_review, manual_ok.
+- Preisbasis/Verpackung (order_positions): price_quantity = Einzelpreis gilt je N Einheiten (NULL = je 1); pack_size/pack_unit = Inhalt je Verpackungseinheit (z.B. 100 Stück je VPE);
+  unit_type = Art der Mengeneinheit (stueck, verpackung, gewicht, volumen, laenge, flaeche, pauschal, dienstleistung, sonstige). Positionspreis = quantity ÷ COALESCE(price_quantity,1) × unit_price_netto.
 - Beträge: total_amount_brutto/-netto, order_positions.total_price (Positionspreis), unit_price_netto (Einzelpreis).
 """
 

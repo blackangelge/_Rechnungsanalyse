@@ -291,22 +291,69 @@ def extract_invoice_data(
 
 
 UNIT_RULES = (
-    "\n\nZUSATZREGELN ZU MENGEN UND EINHEITEN (immer beachten):\n"
+    "\n\nZUSATZREGELN ZU MENGEN, EINHEITEN, PREISBASIS UND NEBENKOSTEN (immer beachten):\n"
     "- Übernimm `menge` und `mengeneinheit` EXAKT so, wie sie in der Mengenspalte der Rechnung stehen. "
     "Rechne nichts um (z.B. Spalte \"Menge / kg\" mit \"25.880,00\" → menge 25880, mengeneinheit \"kg\"; "
     "nicht 25,88 und nicht \"t\").\n"
     "- Beachte deutsche Zahlen: \"25.880,00\" = 25880 (Punkt = Tausender, Komma = Dezimal).\n"
     "- Gib je Position zusätzlich `preiseinheit` an: die Einheit, auf die sich der Einzelpreis bezieht "
-    "(z.B. \"t\" bei \"407,60 /t\", \"kg\" bei \"0,41 €/kg\", \"100 Stück\" bei \"Preis je 100\"). "
-    "Steht keine Preiseinheit da, lass sie leer.\n"
-    "- `einzelpreis` ist der Preis wie gedruckt (bezogen auf die Preiseinheit), `gesamtpreis` der gedruckte Positionsbetrag."
+    "(z.B. \"t\" bei \"407,60 /t\", \"kg\" bei \"0,41 €/kg\"). Steht keine Preiseinheit da, lass sie leer.\n"
+    "- `einzelpreis` ist der Preis wie gedruckt (bezogen auf die Preiseinheit), `gesamtpreis` der gedruckte Positionsbetrag.\n"
+    "- PREISBASIS `preis_je_menge` (Zahl): Gilt der Einzelpreis nicht für 1 Einheit, sondern für mehrere, trage hier diese Zahl ein "
+    "(\"90,00 € je 100 Stück\", \"Preis pro 1000\", \"€/100 St.\" → 100 bzw. 1000). Das steht manchmal in einer eigenen Spalte, "
+    "manchmal nur im Artikeltext (\"Verkaufseinheit = 100 Stück\", \"VE 100\", \"VPE: 250\") oder in der Kopfzeile — suche an allen drei Stellen. "
+    "Prüfe es mit der Rechnung: menge ÷ preis_je_menge × einzelpreis muss den Positionsbetrag ergeben "
+    "(4400 Stück, 90,00 €, je 100 → 4400 ÷ 100 × 90 = 3960). Gilt der Preis je einzelne Einheit, lass `preis_je_menge` leer (oder 1).\n"
+    "- VERPACKUNG `verpackungsinhalt` (Zahl) und `verpackungsinhalt_einheit` (Text): Wird in Verpackungs-/Verkaufseinheiten verkauft "
+    "(VPE, VE, Pack, Karton, Gebinde, Sack, Palette …) und ist der Inhalt je Einheit erkennbar, trage ihn ein "
+    "(\"44 VPE à 100 Stück\" → menge 44, mengeneinheit \"VPE\", verpackungsinhalt 100, verpackungsinhalt_einheit \"Stück\"). "
+    "Sonst leer lassen. Rechne `menge` nie mit dem Inhalt um.\n"
+    "- EINHEITENTYP `mengeneinheit_typ`: genau einer von stueck, verpackung, gewicht, volumen, laenge, flaeche, pauschal, dienstleistung, sonstige "
+    "(Schrauben in Stück = stueck; VPE/Karton/Pack = verpackung; kg/t = gewicht; l/hl = volumen; m = laenge; m² = flaeche; "
+    "Pauschalbeträge wie Fracht = pauschal; Arbeitszeit/Stunden = dienstleistung).\n"
+    "- NEBENKOSTEN ALS POSITION: Stehen Versand-, Fracht-, Verpackungs-, Pfand-, Mindermengen- oder Energiezuschläge nur in der Summenzeile "
+    "(nicht als eigene Zeile in der Positionstabelle), lege dafür eine eigene Position an: `artikelbezeichnung` z.B. \"Versandkosten\", "
+    "`menge` 1, `mengeneinheit` \"pauschal\", `mengeneinheit_typ` \"pauschal\", `einzelpreis` = `gesamtpreis` = der Betrag (netto, ohne Steuer), "
+    "`steuersatz` des Zuschlags. So stimmt die Summe der Positionen mit dem Nettobetrag überein. Erfinde nichts: nur Beträge, die auf der Rechnung stehen."
 )
+
+# Einheitentypen, die gespeichert werden (`order_positions.unit_type`); Synonyme der KI werden darauf abgebildet
+UNIT_TYPES = ("stueck", "verpackung", "gewicht", "volumen", "laenge", "flaeche", "pauschal", "dienstleistung", "sonstige")
+_UNIT_TYPE_ALIASES = {
+    "stück": "stueck", "stuck": "stueck", "piece": "stueck", "pieces": "stueck", "stk": "stueck",
+    "packung": "verpackung", "vpe": "verpackung", "ve": "verpackung", "pack": "verpackung", "verpackungseinheit": "verpackung",
+    "gewichtseinheit": "gewicht", "masse": "gewicht", "weight": "gewicht",
+    "volume": "volumen", "länge": "laenge", "length": "laenge", "fläche": "flaeche", "area": "flaeche",
+    "pauschale": "pauschal", "lump_sum": "pauschal", "service": "dienstleistung", "leistung": "dienstleistung",
+    "other": "sonstige", "sonstiges": "sonstige",
+}
+
+
+def _unit_type(val) -> str | None:
+    text = _str(val)
+    if not text:
+        return None
+    key = text.strip().lower()
+    key = _UNIT_TYPE_ALIASES.get(key, key)
+    return key if key in UNIT_TYPES else None
+
+
+_BASIS_TEXT_RE = re.compile(r"^\s*(?:je|pro|per|/|€\s*/)?\s*(\d+(?:[.,]\d+)?)\s*(?:st\.?|stk\.?|stück|stueck|stuck|pcs\.?|einheiten|ve|vpe)?\s*$", re.IGNORECASE)
+
+
+def _price_basis(pos: dict) -> float | None:
+    """Preisbasis einer Position: `preis_je_menge`, sonst eine reine Zählangabe in `preiseinheit` („100 Stück“, „je 100“). >1 oder None."""
+    n = _num(pos.get("preis_je_menge"))
+    if n is None:
+        m = _BASIS_TEXT_RE.match(str(pos.get("preiseinheit") or ""))
+        n = _num(m.group(1)) if m else None
+    return n if n is not None and n > 0 and n != 1 else None
 
 
 def with_unit_rules(prompt: str | None) -> str:
-    """Hängt die Einheiten-Zusatzregeln an den Extraktionsprompt (einmalig; nicht, wenn der Prompt `preiseinheit` schon behandelt)."""
+    """Hängt die Zusatzregeln (Einheiten, Preisbasis, Verpackung, Nebenkosten) einmalig an den Extraktionsprompt — nicht, wenn der Prompt `preis_je_menge` schon behandelt."""
     base = prompt or ""
-    return base if "preiseinheit" in base.lower() else base + UNIT_RULES
+    return base if "preis_je_menge" in base.lower() else base + UNIT_RULES
 
 
 def build_recheck_prompt(
@@ -716,6 +763,10 @@ def _map_new_format(data: dict) -> tuple[dict, list[dict]]:
             "unit_price":          _num(pos.get("einzelpreis")),
             "total_price":         _num(pos.get("gesamtpreis")),
             "discount":            discount_str,
+            "price_quantity":      _price_basis(pos),
+            "pack_size":           (lambda n: n if n is not None and n > 0 else None)(_num(pos.get("verpackungsinhalt"))),
+            "pack_unit":           _str(pos.get("verpackungsinhalt_einheit")),
+            "unit_type":           _unit_type(pos.get("mengeneinheit_typ")),
         })
 
     return extracted_fields, order_positions

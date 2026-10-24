@@ -30,6 +30,7 @@ POSITION_FIELDS_DEFAULT: list[str] = [
     "beleg_nr", "rechnungsnr", "lieferant", "pos_nr",
     "artikelbezeichnung", "artikelnummer", "menge", "einheit",
     "einzelpreis", "gesamtpreis", "steuersatz", "nachlass",
+    "preis_je_menge", "verpackungsinhalt", "verpackungsinhalt_einheit", "einheitentyp",
 ]
 
 INVOICE_FIELD_LABELS: dict[str, str] = {
@@ -75,6 +76,10 @@ POSITION_FIELD_LABELS: dict[str, str] = {
     "gesamtpreis":        "Gesamtpreis (€)",
     "steuersatz":         "Steuersatz (%)",
     "nachlass":           "Nachlass",
+    "preis_je_menge":     "Preis je (Einheiten)",
+    "verpackungsinhalt":  "Inhalt je Verpackung",
+    "verpackungsinhalt_einheit": "Einheit des Inhalts",
+    "einheitentyp":       "Einheitentyp",
 }
 
 

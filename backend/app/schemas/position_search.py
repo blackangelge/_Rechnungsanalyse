@@ -26,6 +26,15 @@ class PositionSearchRead(BaseModel):
     base_unit_price: Decimal | None = None
     total_price: Decimal | None = None
     discount: str | None = None
+    # Preisbasis/Verpackung wie gespeichert (Einzelpreis gilt je N Einheiten; Inhalt je Verpackungseinheit; Art der Einheit)
+    price_quantity: Decimal | None = None
+    pack_size: Decimal | None = None
+    pack_unit: str | None = None
+    unit_type: str | None = None
+    # Auswertung über den Inhalt (Menge × Inhalt, Preis je Inhaltseinheit) — nur bei Verpackung/Preisbasis gefüllt
+    content_quantity: Decimal | None = None
+    content_unit: str | None = None
+    content_unit_price: Decimal | None = None
     invoice_number: str | None = None
     invoice_date: date | None = None
     supplier_name: str | None = None

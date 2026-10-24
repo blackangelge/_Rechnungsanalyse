@@ -411,6 +411,13 @@ export interface OrderPosition {
   quantity: number | null;
   unit: string | null;
   discount: string | null;
+  /** Einzelpreis gilt je N Einheiten (z. B. 100 = „Preis je 100 Stück“) */
+  price_quantity?: number | string | null;
+  /** Inhalt einer Verpackungs-/Verkaufseinheit (z. B. 100) und dessen Einheit */
+  pack_size?: number | string | null;
+  pack_unit?: string | null;
+  /** stueck | verpackung | gewicht | volumen | laenge | flaeche | pauschal | dienstleistung | sonstige */
+  unit_type?: string | null;
 }
 
 export interface InvoiceExtraction {
@@ -1194,8 +1201,19 @@ export interface PositionHit {
   base_quantity?: number | string | null;
   base_unit?: string | null;
   base_unit_price?: number | string | null;
+  /** Auswertung über den Inhalt (Menge × Verpackungsinhalt, Preis je Inhaltseinheit) — nur bei Verpackung/Preisbasis */
+  content_quantity?: number | string | null;
+  content_unit?: string | null;
+  content_unit_price?: number | string | null;
   total_price: number | string | null;
   discount: string | null;
+  /** Einzelpreis gilt je N Einheiten (z. B. 100 = „Preis je 100 Stück“) */
+  price_quantity?: number | string | null;
+  /** Inhalt einer Verpackungs-/Verkaufseinheit (z. B. 100) und dessen Einheit */
+  pack_size?: number | string | null;
+  pack_unit?: string | null;
+  /** stueck | verpackung | gewicht | volumen | laenge | flaeche | pauschal | dienstleistung | sonstige */
+  unit_type?: string | null;
   invoice_number: string | null;
   invoice_date: string | null;
   supplier_name: string | null;
@@ -1300,6 +1318,7 @@ export interface ValidationBackfillState {
   normalize_units?: boolean;
   restore_originals?: boolean;
   fill_prices?: boolean;
+  price_basis?: boolean;
   run_id?: number;
   changed_rows?: number;
   changed_fields?: number;
@@ -1317,11 +1336,11 @@ export interface ValidationBackfillState {
 }
 
 export const validationBackfillApi = {
-  status: (normalizeUnits = false, restoreOriginals = false, fillPrices = false) =>
+  status: (normalizeUnits = false, restoreOriginals = false, fillPrices = false, priceBasis = false) =>
     apiClient
-      .get<ValidationBackfillState>("/api/validation-backfill/", { params: { normalize_units: normalizeUnits, restore_originals: restoreOriginals, fill_prices: fillPrices } })
+      .get<ValidationBackfillState>("/api/validation-backfill/", { params: { normalize_units: normalizeUnits, restore_originals: restoreOriginals, fill_prices: fillPrices, price_basis: priceBasis } })
       .then((r) => r.data),
-  start: (opts: { dry_run: boolean; auto_correct: boolean; normalize_units?: boolean; restore_originals?: boolean; fill_prices?: boolean }) =>
+  start: (opts: { dry_run: boolean; auto_correct: boolean; normalize_units?: boolean; restore_originals?: boolean; fill_prices?: boolean; price_basis?: boolean }) =>
     apiClient.post<ValidationBackfillState>("/api/validation-backfill/", opts).then((r) => r.data),
   cancel: () =>
     apiClient.post<{ cancelled: boolean }>("/api/validation-backfill/cancel").then((r) => r.data),
@@ -1548,4 +1567,10 @@ export const dataBackupApi = {
     fd.append("file", file);
     return apiClient.post("/api/data-backup/upload/", fd, { headers: { "Content-Type": undefined }, timeout: 0 }).then((r) => r.data);
   },
+};
+
+/** Anzeige-Hilfen für Einheitentyp und Preisbasis (Belege-Infos, Artikelsuche) */
+export const UNIT_TYPE_LABELS: Record<string, string> = {
+  stueck: "Stück", verpackung: "Verpackung", gewicht: "Gewicht", volumen: "Volumen", laenge: "Länge",
+  flaeche: "Fläche", pauschal: "Pauschal", dienstleistung: "Dienstleistung", sonstige: "Sonstige",
 };

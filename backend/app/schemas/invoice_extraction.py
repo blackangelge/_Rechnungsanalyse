@@ -35,6 +35,10 @@ class OrderPositionRead(BaseModel):
     quantity: Decimal | None
     unit: str | None             # Mengeneinheit (z.B. "Stück", "kg")
     discount: str | None         # Nachlass-Angabe (Freitext)
+    price_quantity: Decimal | None = None   # Einzelpreis gilt je N Einheiten (z.B. 100)
+    pack_size: Decimal | None = None        # Inhalt einer Verpackungseinheit (z.B. 100)
+    pack_unit: str | None = None            # Einheit des Inhalts (z.B. „Stück“)
+    unit_type: str | None = None            # stueck | verpackung | gewicht | volumen | laenge | flaeche | pauschal | dienstleistung | sonstige
 
     model_config = ConfigDict(from_attributes=True)
 

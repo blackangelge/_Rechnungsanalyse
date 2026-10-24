@@ -122,6 +122,7 @@ _LIST_COLUMNS = [
     OrderPosition.product_name, OrderPosition.product_description, OrderPosition.article_number,
     OrderPosition.quantity, OrderPosition.unit, OrderPosition.unit_price_netto.label("unit_price"),
     OrderPosition.total_price, OrderPosition.discount,
+    OrderPosition.price_quantity, OrderPosition.pack_size, OrderPosition.pack_unit, OrderPosition.unit_type,
     InvoiceExtraction.invoice_number, InvoiceExtraction.invoice_date,
     InvoiceExtraction.vendor_id.label("supplier_name"), InvoiceExtraction.validation_status,
     ImportBatch.company_name.label("company"), ImportBatch.year, Document.batch_id, Document.original_filename,
@@ -129,19 +130,38 @@ _LIST_COLUMNS = [
 
 # Umgerechnete Werte (Gewicht → kg, Volumen → l …): Menge × Faktor; Preis je Basiseinheit = Positionspreis ÷ Basismenge
 _FACTOR = unit_conversion.factor_expr(OrderPosition.unit)
-_BASE_QTY = (OrderPosition.quantity * _FACTOR).label("base_quantity")
-_BASE_UNIT = unit_conversion.base_unit_expr(OrderPosition.unit).label("base_unit")
+
+# Verpackung/Preisbasis: Hat die Position einen Verpackungsinhalt (z.B. 44 VPE à 100 Stück), rechnet die Auswertung mit dem Inhalt
+# (Menge × Inhalt, Einheit des Inhalts); ohne Verpackungsangabe bleibt alles wie die gedruckte Menge/Einheit.
+_PACK = (OrderPosition.pack_size.isnot(None)) & (OrderPosition.pack_size > 0)
+_CUNIT = case((_PACK & (func.trim(func.coalesce(OrderPosition.pack_unit, "")) != ""), OrderPosition.pack_unit), else_=OrderPosition.unit)
+_CQTY = case((_PACK, OrderPosition.quantity * OrderPosition.pack_size), else_=OrderPosition.quantity)
+_CFACTOR = unit_conversion.factor_expr(_CUNIT)
+_HAS_BASIS = _PACK | (OrderPosition.price_quantity > 1)
+
+# Umgerechnete Werte (Gewicht → t, Volumen → l …): Inhaltsmenge × Faktor; Preis je Basiseinheit = Positionspreis ÷ Basismenge
+_BASE_QTY = (_CQTY * _CFACTOR).label("base_quantity")
+_BASE_UNIT = unit_conversion.base_unit_expr(_CUNIT).label("base_unit")
 _BASE_PRICE = case(
-    ((_FACTOR.isnot(None)) & (OrderPosition.quantity != 0) & (OrderPosition.total_price.isnot(None)),
-     OrderPosition.total_price / (OrderPosition.quantity * _FACTOR)),
+    ((_CFACTOR.isnot(None)) & (_CQTY != 0) & (OrderPosition.total_price.isnot(None)),
+     OrderPosition.total_price / (_CQTY * _CFACTOR)),
     else_=None,
 ).label("base_unit_price")
+# Inhalts-/Stückwerte nur, wenn Verpackung oder Preisbasis angegeben sind (sonst identisch zu Menge/Einzelpreis)
+_CONTENT_QTY = case((_HAS_BASIS, _CQTY), else_=None).label("content_quantity")
+_CONTENT_UNIT = case((_HAS_BASIS, _CUNIT), else_=None).label("content_unit")
+_CONTENT_PRICE = case(
+    (_HAS_BASIS & (_CQTY != 0),
+     func.coalesce(OrderPosition.total_price / _CQTY,
+                   OrderPosition.unit_price_netto / (func.coalesce(OrderPosition.price_quantity, 1) * func.coalesce(OrderPosition.pack_size, 1)))),
+    else_=None,
+).label("content_unit_price")
 
 
 def search(db: Session, limit: int, offset: int = 0, sort: str | None = None,
            descending: bool = True, **filters) -> list:
     """Eine Seite Treffer. Standard: neueste Belege zuerst, innerhalb eines Belegs in Positionsreihenfolge."""
-    query = _filtered(db, _LIST_COLUMNS + [_BASE_QTY, _BASE_UNIT, _BASE_PRICE], **filters)
+    query = _filtered(db, _LIST_COLUMNS + [_BASE_QTY, _BASE_UNIT, _BASE_PRICE, _CONTENT_QTY, _CONTENT_UNIT, _CONTENT_PRICE], **filters)
     column = SORT_COLUMNS.get(sort or "")
     if column is None:
         query = query.order_by(Document.id.desc(), OrderPosition.position_index.asc())

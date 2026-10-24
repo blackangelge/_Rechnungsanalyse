@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Pager from "@/components/common/Pager";
 import { fetchAllPages, matchesWords } from "@/lib/loadAll";
 import {
-  ImportBatch, PositionFilter, PositionHit, PositionSort, PositionSummary,
+  ImportBatch, PositionFilter, PositionHit, PositionSort, PositionSummary, UNIT_TYPE_LABELS,
   documentsApi, extractApiError, importsApi, positionsApi,
 } from "@/lib/api";
 
@@ -561,6 +561,13 @@ export default function ArtikelPage() {
                   <Highlight text={p.article_number} query={applied.q} />
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{num(p.quantity)} {p.unit ?? ""}
+                  {p.pack_size != null && Number(p.pack_size) > 0 && (
+                    <div className="text-xs text-violet-600" title="Inhalt je Verpackungseinheit">
+                      à {num(p.pack_size)} {p.pack_unit ?? ""}
+                      {p.content_quantity != null && <> · = {num(p.content_quantity)} {p.content_unit ?? ""}</>}
+                    </div>
+                  )}
+                  {p.unit_type && <div className="text-[10px] uppercase tracking-wide text-gray-300">{UNIT_TYPE_LABELS[p.unit_type] ?? p.unit_type}</div>}
                   {showBase && p.base_unit && (p.unit ?? "").trim().toLowerCase() !== p.base_unit && (
                     <div className="text-xs text-gray-400" title="Umgerechnet in die Basiseinheit">
                       = {num(p.base_quantity ?? null)} {p.base_unit}
@@ -568,6 +575,14 @@ export default function ArtikelPage() {
                   )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-700">{eur(p.unit_price, 4)}
+                  {p.price_quantity != null && Number(p.price_quantity) > 1 && (
+                    <div className="text-xs text-violet-600" title="Der Einzelpreis gilt für mehrere Einheiten">je {num(p.price_quantity)} {p.unit ?? ""}</div>
+                  )}
+                  {p.content_unit_price != null && (
+                    <div className="text-xs text-gray-400" title="Positionspreis ÷ Inhaltsmenge">
+                      = {eur(p.content_unit_price, 4)} / {p.content_unit ?? "Einheit"}
+                    </div>
+                  )}
                   {showBase && p.base_unit && p.base_unit_price != null && (
                     <div className="text-xs text-gray-400" title="Positionspreis ÷ umgerechnete Menge">
                       = {eur(p.base_unit_price, 4)} / {p.base_unit}

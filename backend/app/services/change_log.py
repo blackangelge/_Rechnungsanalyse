@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Felder, die Nachrüst-Läufe verändern können
 EXTRACTION_FIELDS = ("total_amount_netto", "total_amount_brutto", "total_tax_value", "validation_status", "validation_details")
-POSITION_FIELDS = ("quantity", "unit", "unit_price_netto", "total_price")
+POSITION_FIELDS = ("quantity", "unit", "unit_price_netto", "total_price", "price_quantity", "pack_size", "pack_unit", "unit_type")
 UNDO_CHUNK = 1000
 
 

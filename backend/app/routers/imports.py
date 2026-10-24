@@ -1057,6 +1057,11 @@ def _build_export_excel(
         ("gesamtpreis",         "Gesamtpreis (€)",        lambda d, e, p, tm: _f(p.total_price),                            "eur",     17),
         ("steuersatz",          "Steuersatz (%)",         lambda d, e, p, tm: tm.get(p.position_index),                     "pct",     14),
         ("nachlass",            "Nachlass",               lambda d, e, p, tm: p.discount,                                   None,      22),
+        # Preisbasis/Verpackung: gespeicherte Angaben der Rechnung (ganz hinten, damit bestehende Spaltenpositionen stabil bleiben)
+        ("preis_je_menge",      "Preis je (Einheiten)",   lambda d, e, p, tm: _f(p.price_quantity),                         None,      16),
+        ("verpackungsinhalt",   "Inhalt je Verpackung",   lambda d, e, p, tm: _f(p.pack_size),                              None,      16),
+        ("verpackungsinhalt_einheit", "Einheit des Inhalts", lambda d, e, p, tm: p.pack_unit,                               None,      16),
+        ("einheitentyp",        "Einheitentyp",           lambda d, e, p, tm: p.unit_type,                                  None,      14),
     ]
 
     # Nur aktive Felder in der konfigurierten Reihenfolge
