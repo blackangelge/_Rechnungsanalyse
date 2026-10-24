@@ -56,14 +56,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  if (state !== "authed") {
+    return <div className="py-16 text-center text-sm text-gray-400">Lade…</div>;
+  }
+
   return (
-    <>
-      {state === "authed" && <Nav username={info?.username ?? null} onLogout={info?.username ? logout : undefined} />}
-      <main className="overflow-x-hidden">
-        <div className="mx-auto max-w-7xl p-6">
-          {state === "authed" ? children : <div className="py-8 text-center text-sm text-gray-400">Lade…</div>}
-        </div>
-      </main>
-    </>
+    <Nav username={info?.username ?? null} onLogout={info?.username ? logout : undefined}>
+      {children}
+    </Nav>
   );
 }

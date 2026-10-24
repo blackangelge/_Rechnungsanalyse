@@ -1,11 +1,120 @@
 @import "tailwindcss";
 
-/* Wiederverwendbare Eingabefeld-Klasse */
+/*
+ * Design-System „Rechnungsanalyse“
+ *
+ * Drei Ebenen:  Primitive (Farbskalen) → Semantik (--ra-*) → Komponenten (.btn, .card, .badge, .input …).
+ * Die Tailwind-Paletten `blue` (Markenfarbe) und `gray` (Neutralton) sind hier überschrieben:
+ * alle bestehenden Seiten, die bg-blue-600 / text-gray-500 usw. nutzen, übernehmen dadurch
+ * automatisch das neue Erscheinungsbild.
+ */
+@theme {
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* Markenfarbe (Indigo-Blau) */
+  --color-blue-50:  #eef2ff;
+  --color-blue-100: #e0e7ff;
+  --color-blue-200: #c7d2fe;
+  --color-blue-300: #a5b4fc;
+  --color-blue-400: #818cf8;
+  --color-blue-500: #6366f1;
+  --color-blue-600: #4f46e5;
+  --color-blue-700: #4338ca;
+  --color-blue-800: #3730a3;
+  --color-blue-900: #312e81;
+
+  /* Neutrale Töne (kühles Schiefer) */
+  --color-gray-50:  #f8fafc;
+  --color-gray-100: #f1f5f9;
+  --color-gray-200: #e2e8f0;
+  --color-gray-300: #cbd5e1;
+  --color-gray-400: #94a3b8;
+  --color-gray-500: #64748b;
+  --color-gray-600: #475569;
+  --color-gray-700: #334155;
+  --color-gray-800: #1e293b;
+  --color-gray-900: #0f172a;
+
+  --radius-ra: 0.625rem;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.05), 0 1px 3px rgb(15 23 42 / 0.06);
+  --shadow-pop: 0 10px 30px -8px rgb(15 23 42 / 0.25);
+}
+
+:root {
+  --ra-bg: #f6f7fb;
+  --ra-surface: #ffffff;
+  --ra-border: #e2e8f0;
+  --ra-text: #0f172a;
+  --ra-muted: #64748b;
+  --ra-brand: #4f46e5;
+  --ra-focus: #6366f1;
+  --ra-sidebar: #111827;
+  --ra-sidebar-text: #cbd5e1;
+  --ra-sidebar-active: #4f46e5;
+}
+
+html { color-scheme: light; }
+body {
+  background: var(--ra-bg);
+  color: var(--ra-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Sichtbarer Tastaturfokus überall */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ra-focus);
+  outline-offset: 2px;
+}
+:where(button, a, summary, select, [role="button"]) { cursor: pointer; }
+:where(button:disabled) { cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
 @layer components {
   .input {
-    @apply w-full rounded border border-gray-300 px-3 py-2 text-sm shadow-sm
-      focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500;
+    @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm
+      placeholder:text-gray-400 transition-colors
+      focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200
+      disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500;
   }
+
+  /* Schaltflächen */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-3.5 py-2 text-sm font-medium
+      transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-sm { @apply px-2.5 py-1.5 text-xs; }
+  .btn-primary   { @apply border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:border-blue-700; }
+  .btn-secondary { @apply border-gray-300 bg-white text-gray-700 hover:bg-gray-50; }
+  .btn-ghost     { @apply border-transparent bg-transparent text-gray-600 hover:bg-gray-100; }
+  .btn-danger    { @apply border-red-600 bg-red-600 text-white hover:bg-red-700 hover:border-red-700; }
+  .btn-danger-outline { @apply border-red-300 bg-white text-red-700 hover:bg-red-50; }
+
+  /* Flächen */
+  .card { @apply rounded-xl border border-gray-200 bg-white shadow-card; }
+  .card-pad { @apply p-5; }
+
+  /* Kennzeichen */
+  .badge { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
+  .badge-gray   { @apply bg-gray-100 text-gray-700; }
+  .badge-blue   { @apply bg-blue-50 text-blue-700; }
+  .badge-green  { @apply bg-emerald-50 text-emerald-700; }
+  .badge-amber  { @apply bg-amber-50 text-amber-800; }
+  .badge-red    { @apply bg-red-50 text-red-700; }
+  .badge-violet { @apply bg-violet-50 text-violet-700; }
+
+  /* Tabellen */
+  .table-ra { @apply w-full text-sm; }
+  .table-ra thead th { @apply bg-gray-50 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500; }
+  .table-ra tbody td { @apply border-t border-gray-100 px-4 py-2.5 align-middle; }
+  .table-ra tbody tr:hover { @apply bg-gray-50/60; }
+
+  .label { @apply mb-1 block text-xs font-medium text-gray-600; }
+  .hint  { @apply mt-1 text-xs text-gray-500; }
 }
 
 @keyframes slide {

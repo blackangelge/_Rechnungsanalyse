@@ -1613,3 +1613,161 @@ export const aiQuestionsApi = {
   answers: (documentId: number) =>
     apiClient.get<AiAnswer[]>("/api/ai-questions/answers/", { params: { document_id: documentId } }).then((r) => r.data),
 };
+
+// ─── Dynamisches Schema ───────────────────────────────────────────────────────
+
+export type SchemaDataType = "text" | "integer" | "decimal" | "date" | "boolean" | "enum" | "quantity";
+
+export interface NormalizerStep { name: string; params: Record<string, unknown> }
+
+export interface SchemaField {
+  id: number;
+  name: string;
+  display_name: string;
+  data_type: SchemaDataType;
+  required: boolean;
+  output_format: string | null;
+  description: string | null;
+  position: number;
+  source: "llm" | "system";
+  is_locked: boolean;
+  enum_values: string[] | null;
+  unit_group_id: number | null;
+  system_function: string | null;
+  system_params: Record<string, unknown> | null;
+  normalizers: NormalizerStep[];
+}
+
+export interface SchemaEntity {
+  id: number;
+  name: string;
+  display_name: string;
+  description: string | null;
+  master_table: string | null;
+  match_fields: string[] | null;
+  fields: SchemaField[];
+}
+
+export interface SchemaRelation {
+  id: number;
+  name: string;
+  kind: "parent_child" | "reference";
+  source_entity_id: number;
+  target_entity_id: number;
+  description: string | null;
+}
+
+export interface SchemaVersionSummary {
+  id: number;
+  version_number: number;
+  status: "draft" | "active" | "archived";
+  comment: string | null;
+  created_at: string;
+  activated_at: string | null;
+  entity_count: number;
+  relation_count: number;
+}
+
+export interface SchemaVersionFull extends SchemaVersionSummary {
+  entities: SchemaEntity[];
+  relations: SchemaRelation[];
+  problems: string[];
+}
+
+/** Beschreibung eines Bausteins (Normalisierer / Systemfunktion) samt JSON-Schema der Parameter */
+export interface RegistryItem {
+  name: string;
+  label?: string;
+  description?: string;
+  params_schema?: { properties?: Record<string, { type?: string; title?: string; description?: string; default?: unknown; enum?: unknown[] }>; required?: string[] };
+  [key: string]: unknown;
+}
+
+export type SchemaFieldInput = Partial<Omit<SchemaField, "id" | "position" | "is_locked">> & { name: string; display_name: string; data_type: SchemaDataType };
+
+export const schemaApi = {
+  normalizers: () => apiClient.get<RegistryItem[]>("/api/schema/normalizers").then((r) => r.data),
+  functions: () => apiClient.get<RegistryItem[]>("/api/schema/functions").then((r) => r.data),
+  preview: (value: unknown, chain: NormalizerStep[]) =>
+    apiClient.post<{ ok: boolean; value: unknown; errors: string[]; issues: unknown[] }>("/api/schema/normalizers/preview", { value, chain }).then((r) => r.data),
+  versions: () => apiClient.get<SchemaVersionSummary[]>("/api/schema/versions").then((r) => r.data),
+  version: (id: number) => apiClient.get<SchemaVersionFull>(`/api/schema/versions/${id}`).then((r) => r.data),
+  createDraft: (baseVersionId?: number, comment?: string) =>
+    apiClient.post<SchemaVersionFull>("/api/schema/versions/draft", { base_version_id: baseVersionId ?? null, comment: comment ?? null }).then((r) => r.data),
+  activate: (id: number) => apiClient.post<SchemaVersionFull>(`/api/schema/versions/${id}/activate`).then((r) => r.data),
+  discard: (id: number) => apiClient.delete(`/api/schema/versions/${id}`),
+  addEntity: (versionId: number, data: { name: string; display_name: string; description?: string | null; master_table?: string | null; match_fields?: string[] | null }) =>
+    apiClient.post<SchemaVersionFull>(`/api/schema/versions/${versionId}/entities`, data).then((r) => r.data),
+  deleteEntity: (id: number) => apiClient.delete<SchemaVersionFull>(`/api/schema/entities/${id}`).then((r) => r.data),
+  addField: (entityId: number, data: SchemaFieldInput) =>
+    apiClient.post<SchemaVersionFull>(`/api/schema/entities/${entityId}/fields`, data).then((r) => r.data),
+  patchField: (id: number, data: Partial<SchemaFieldInput>) =>
+    apiClient.patch<SchemaVersionFull>(`/api/schema/fields/${id}`, data).then((r) => r.data),
+  deleteField: (id: number) => apiClient.delete<SchemaVersionFull>(`/api/schema/fields/${id}`).then((r) => r.data),
+  addRelation: (versionId: number, data: { name: string; kind: "parent_child" | "reference"; source_entity_id: number; target_entity_id: number; description?: string | null }) =>
+    apiClient.post<SchemaVersionFull>(`/api/schema/versions/${versionId}/relations`, data).then((r) => r.data),
+  deleteRelation: (id: number) => apiClient.delete<SchemaVersionFull>(`/api/schema/relations/${id}`).then((r) => r.data),
+};
+
+// ─── Einheiten ────────────────────────────────────────────────────────────────
+
+export interface UnitAliasItem { id: number; alias: string }
+export interface UnitItem {
+  id: number; name: string; symbol: string; factor: number; is_base: boolean; case_insensitive: boolean; aliases: UnitAliasItem[];
+}
+export interface UnitGroupItem { id: number; name: string; description: string | null; units: UnitItem[] }
+export interface UnitReviewGroup {
+  alias: string; count: number; documents: number;
+  examples: { record_id: number; document_id: number; field: string }[];
+}
+
+export const unitsApi = {
+  list: () => apiClient.get<UnitGroupItem[]>("/api/units").then((r) => r.data),
+  createGroup: (name: string, description?: string) => apiClient.post("/api/units/groups", { name, description: description ?? null }).then((r) => r.data),
+  deleteGroup: (id: number) => apiClient.delete(`/api/units/groups/${id}`),
+  createUnit: (groupId: number, data: { name: string; symbol: string; factor: number; is_base?: boolean; case_insensitive?: boolean; aliases?: string[] }) =>
+    apiClient.post<UnitItem>(`/api/units/groups/${groupId}/units`, data).then((r) => r.data),
+  patchUnit: (id: number, data: Partial<{ name: string; symbol: string; factor: number; case_insensitive: boolean }>) =>
+    apiClient.patch<UnitItem>(`/api/units/${id}`, data).then((r) => r.data),
+  deleteUnit: (id: number) => apiClient.delete(`/api/units/${id}`),
+  addAlias: (unitId: number, alias: string) => apiClient.post<UnitAliasItem>(`/api/units/${unitId}/aliases`, { alias }).then((r) => r.data),
+  deleteAlias: (aliasId: number) => apiClient.delete(`/api/units/aliases/${aliasId}`),
+  review: () => apiClient.get<UnitReviewGroup[]>("/api/units/review").then((r) => r.data),
+  assign: (alias: string, unitId: number) => apiClient.post("/api/units/review/assign", { alias, unit_id: unitId }).then((r) => r.data),
+  ignore: (alias: string) => apiClient.post("/api/units/review/ignore", { alias }).then((r) => r.data),
+  convert: (value: number, unit: string | null, groupId?: number | null) =>
+    apiClient.post<{ quantity: Record<string, unknown>; issues: unknown[] }>("/api/units/convert", { value, unit, group_id: groupId ?? null }).then((r) => r.data),
+};
+
+// ─── Export-Vorlagen ──────────────────────────────────────────────────────────
+
+export interface ExportTemplateConfig {
+  entities?: { entity: string; fields?: string[] | null }[];
+  vendor?: string[];
+  flat?: { root?: string; child?: string };
+  [key: string]: unknown;
+}
+export interface ExportTemplate {
+  id: number; name: string; description: string | null;
+  layout: "sheet_per_entity" | "flat"; quantity_mode: "original" | "normalized";
+  config: ExportTemplateConfig; created_at: string; updated_at: string;
+}
+export type ExportTemplateInput = Pick<ExportTemplate, "name" | "description" | "layout" | "quantity_mode" | "config">;
+export interface ExportColumnsPreview { entity: string; display_name: string; columns: { header: string; kind: string; format: string | null }[] }
+
+export const exportTemplatesApi = {
+  list: () => apiClient.get<ExportTemplate[]>("/api/export-templates").then((r) => r.data),
+  create: (data: ExportTemplateInput) => apiClient.post<ExportTemplate>("/api/export-templates", data).then((r) => r.data),
+  update: (id: number, data: ExportTemplateInput) => apiClient.put<ExportTemplate>(`/api/export-templates/${id}`, data).then((r) => r.data),
+  delete: (id: number) => apiClient.delete(`/api/export-templates/${id}`),
+  columns: (id: number) => apiClient.get<ExportColumnsPreview[]>(`/api/export-templates/${id}/columns`).then((r) => r.data),
+  /** Download-Adresse (Browser lädt die Datei direkt) */
+  exportUrl: (id: number, p: { batch_ids?: number[]; vendor_ids?: number[]; include_hidden?: boolean }) => {
+    const q = new URLSearchParams();
+    p.batch_ids?.forEach((b) => q.append("batch_ids", String(b)));
+    p.vendor_ids?.forEach((v) => q.append("vendor_ids", String(v)));
+    if (p.include_hidden) q.set("include_hidden", "true");
+    const qs = q.toString();
+    return `/api/export-templates/${id}/export${qs ? `?${qs}` : ""}`;
+  },
+};
