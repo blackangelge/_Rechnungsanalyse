@@ -994,7 +994,13 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
   `import_batches.workflow_id` ist Pflicht bei „Analyse nach Import“ und Ordner-Sync (400), `POST /{id}/requeue` nimmt den Workflow des Imports, `PATCH …/automation` setzt ihn; Ordner-Sync ohne Workflow importiert, analysiert aber nicht (Log-Warnung).
   `_db_resolve_workflow` lädt nur noch die genannte ID — kein Standard-Workflow, keine Lieferanten-Zuordnung, kein klassischer Ablauf (ohne Workflow → Beleg `error` „Kein Workflow gewählt“). Entfernt: `set-default`/`clear-default`, `PUT /api/vendors/{id}/workflow`.
   Der klassische Code in `_analyze_single_inner` bleibt unerreichbar stehen und wird mit dem Altbestand entfernt; die Spalten `workflows.is_default` und `vendor.workflow_id` bleiben vorerst.
-- Geplant: Phase 5 Export, 6 komplett neues Frontend; später Tools für die KI (Rechnen/Nachschlagen).
+- **Schemagesteuerter Excel-Export (Phase 5, Migration `0021_export_templates`)** — `services/schema_export.py`, `models/export_template.py`, `routers/export_templates.py`, Seed `services/export_seed.py`. Spalten, Reihenfolge, Überschriften (`display_name`) und Zellformate
+  (`output_format`, sonst Standard je Typ) kommen aus der Schema-Definition; Auswahl und Layout aus der Vorlage (`config`: `entities[{entity, fields}]`, `vendor[...]` Lieferantenspalten, `flat{root, child}`). Echte Excel-Typen (Datum, Zahl mit Format, Boolean).
+  Layouts: `sheet_per_entity` (Blatt je Entität, verbunden über Datensatz-/Eltern-/Beleg-/Lieferant-ID; Stammdaten-Blatt mit den vorkommenden Lieferanten) und `flat` (eine Zeile je Position mit wiederholtem Belegkopf; Belege ohne Positionen bekommen eine Zeile).
+  **Mengenfelder** = zwei Spalten (Wert + Einheit), je Vorlage `quantity_mode`: `original` (wie gedruckt) oder `normalized` (Basiseinheit; bei unbekannter Einheit leer — nichts wird erfunden). Datensätze älterer Schema-Versionen bleiben exportierbar (fehlende Felder leer).
+  Filter: `batch_ids` (gewählte Imports zeigen immer), `document_ids`, `vendor_ids`, `include_hidden` (Standard: ausgeblendete Imports draußen); gelöschte Belege nie. Streaming (`write_only`, Blöcke à 300 Belege). `GET /api/export-templates/{id}/export` → xlsx, 404 ohne Datensätze, `/columns` = Vorschau der Spalten.
+  Der alte Export (`/api/imports/.../export`, `ExportConfig`) liest die alten Tabellen und bleibt für Altdaten bestehen; im neuen System wird ausschließlich dieser Export verwendet.
+- Geplant: Phase 6 komplett neues Frontend; später Tools für die KI (Rechnen/Nachschlagen).
 - Tests: `tests/test_schema_definition.py`.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)
