@@ -320,3 +320,14 @@ def test_vendor_export_excludes_deleted_documents(client, world):
     world.db.commit()
     ws, _, _ = _export(client, world.a.id)
     assert len([row for row in ws.iter_rows(min_row=3, values_only=True) if any(row)]) == 1
+
+
+def test_vendor_export_skips_hidden_imports(client, world):
+    from datetime import datetime, timezone
+    world.docs["a2"].batch.hidden_at = datetime.now(timezone.utc)
+    world.db.commit()
+    r = client.get("/api/vendors/export", params={"ids": [world.a.id]})
+    if world.docs["a1"].batch_id == world.docs["a2"].batch_id:      # alle Belege im ausgeblendeten Import
+        assert r.status_code == 404
+    else:
+        assert r.status_code == 200
