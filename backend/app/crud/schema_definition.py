@@ -12,6 +12,8 @@ import re
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.services import field_functions
+from app.services import normalizers as normalizer_registry
 from app.models.schema_def import (
     DATA_TYPES,
     FIELD_SOURCES,
@@ -29,6 +31,17 @@ _RESERVED = {"id", "data", "parent_record_id", "entity_id", "schema_version_id",
 
 class SchemaError(ValueError):
     """Verstoß gegen eine Schema-Regel (wird vom Router als HTTP 400/409 gemeldet)."""
+
+
+def _check_pipeline(data_type: str, source: str, system_function: str | None, system_params: dict | None, chain: list[dict] | None) -> None:
+    """Systemfunktion (inkl. Typ-Passung) und Normalisierer-Kette prüfen; wirft SchemaError."""
+    if source == "system":
+        errors = field_functions.validate_function(system_function, system_params, data_type)
+        if errors:
+            raise SchemaError("; ".join(errors))
+    errors = normalizer_registry.validate_chain(chain)
+    if errors:
+        raise SchemaError("Normalisierer: " + "; ".join(errors))
 
 
 # ─── Versionen ───────────────────────────────────────────────────────────────
@@ -132,8 +145,11 @@ def validate_version(version: SchemaVersion) -> list[str]:
         for f in ent.fields:
             if f.data_type == "enum" and not f.enum_values:
                 problems.append(f"{ent.name}.{f.name}: Enum ohne Werte")
-            if f.source == "system" and not f.is_locked and not f.system_function:
-                problems.append(f"{ent.name}.{f.name}: Systemfeld ohne Funktion")
+            if f.source == "system" and not f.is_locked:
+                for err in field_functions.validate_function(f.system_function, f.system_params, f.data_type):
+                    problems.append(f"{ent.name}.{f.name}: {err}")
+            for err in normalizer_registry.validate_chain(f.normalizers):
+                problems.append(f"{ent.name}.{f.name}: {err}")
     for rel in version.relations:
         if rel.source_entity_id not in ids or rel.target_entity_id not in ids:
             problems.append(f"Beziehung {rel.name}: Entität gehört zu einer anderen Version")
@@ -211,6 +227,7 @@ def add_field(
         raise SchemaError("Enum-Felder brauchen Werte")
     if any(f.name == name for f in entity.fields):
         raise SchemaError(f"Feld {name} existiert bereits in {entity.name}")
+    _check_pipeline(data_type, source, system_function, system_params, normalizers)
     field = SchemaField(
         entity_id=entity.id, name=name, display_name=display_name, data_type=data_type, required=required,
         output_format=output_format, description=description, position=len(entity.fields), source=source,
@@ -246,6 +263,10 @@ def update_field(db: Session, field: SchemaField, **changes) -> SchemaField:
         raise SchemaError(f"Unbekannter Datentyp: {changes['data_type']}")
     if changes.get("source") and changes["source"] not in FIELD_SOURCES:
         raise SchemaError(f"Unbekannte Quelle: {changes['source']}")
+    merged = {k: changes.get(k, getattr(field, k)) for k in ("data_type", "source", "system_function", "system_params", "normalizers")}
+    if merged["source"] == "system" and not merged["system_function"]:
+        raise SchemaError("Systemfelder brauchen eine Funktion")
+    _check_pipeline(merged["data_type"], merged["source"], merged["system_function"], merged["system_params"], merged["normalizers"])
     for key, value in changes.items():
         setattr(field, key, value)
     db.flush()

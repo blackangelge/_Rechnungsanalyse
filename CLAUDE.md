@@ -970,7 +970,16 @@ festen Meta-Tabellen, extrahierte Daten in `extracted_records.data` (JSONB). Die
   nicht änderbar/löschbar, Namen reserviert). `extracted_records.vendor_id` ist eine echte Referenz auf `vendor.id` (die alte Textspalte `invoice_extractions.vendor_id` bleibt davon unberührt).
 - **Stammdaten-Entitäten** (`master_table="vendor"`, `match_fields` in Prioritätsreihenfolge, z. B. `["iban","ust_id_nr","name"]`) liegen nicht in `extracted_records`; das Matching selbst folgt in einer späteren Phase.
 - CRUD mit Regelprüfung: `crud/schema_definition.py` (`SchemaError`), Seed des bisherigen Schemas: `services/schema_seed.py` / `python -m app.scripts.seed_schema` (idempotent).
-- Geplant: Phase 2 Feldfunktionen/Normalisierer, 3 Einheiten (unbekannte Einheiten → Prüfliste, Beleg wird trotzdem fertig), 4 Pydantic-Modelle → `response_format: json_schema` (vLLM) + Tool-Erweiterungspunkt, 5 Export, 6 komplett neues Frontend.
+- **Normalisierer** (`services/normalizers.py`): benannte Bausteine mit Pydantic-Parametern (`trim`, `collapse_whitespace`, `case`, `remove_chars`, `remove_thousands`, `comma_to_point`,
+  `regex_replace`, `empty_to_null`, `parse_german_number`, `round`, `to_integer`, `parse_date`), gespeichert als geordnete Liste `[{"name","params"}]` in `schema_fields.normalizers`
+  (Reihenfolge zählt). `apply_chain` wirft nie: bei Fehler Wert `None` + `issues` (der Beleg wird später zur Prüfung markiert). `to_jsonable` macht Decimal/Datum JSONB-tauglich.
+  `parse_german_number`: beide Trenner → der letzte ist dezimal; nur Punkte → Tausender (`1.234` = 1234, `12.5` = 12,5, `0.500` = 0,5); `(12,50)`/`12,50-` negativ.
+- **Systemfunktionen** (`services/field_functions.py`, Quelle `system`): `page_count`, `file_name`, `file_hash` (SHA-256 der aktuellen PDF), `received_at`, `document_type_id`, `batch_company`, `batch_year`, `constant`.
+  `DocumentContext` (kein DB-Zugriff in den Funktionen) wird mit `build_context(document)` gebaut. Ergebnistyp muss zum Feldtyp passen (`validate_function`); Kette und Funktion werden beim Speichern und beim Aktivieren geprüft.
+- API (nur lesend): `GET /api/schema/normalizers|functions` (inkl. Parameter-Schema für Formulare), `POST /api/schema/normalizers/preview` (Kette auf Beispielwert, nichts gespeichert).
+- **Entscheidung: nur Workflows, kein „Standard“.** Im neuen System läuft jede Analyse über einen ausdrücklich gewählten Workflow — kein Standard-Workflow, kein klassischer Ablauf,
+  keine automatische Auswahl (Phase 4 baut die Einstiegspunkte entsprechend um: Workflow ist bei jeder Abfrage Pflicht).
+- Geplant: Phase 3 Einheiten (unbekannte Einheiten → Prüfliste, Beleg wird trotzdem fertig), 4 Pydantic-Modelle → `response_format: json_schema` (vLLM 0.32) + Tool-Erweiterungspunkt, 5 Export, 6 komplett neues Frontend.
 - Tests: `tests/test_schema_definition.py`.
 
 ### Lieferanten-Deduplication (`crud/supplier.py`)

@@ -278,6 +278,7 @@ from app.routers import ai_clients, auth, batch, document_history, document_pdf,
 from app.routers import settings as settings_router
 from app.routers import imports as imports_router  # 'imports' ist ein Python-Keyword
 from app.routers import tasks
+from app.routers import schema_registry as schema_registry_router
 from app.routers import positions as positions_router
 from app.routers import validation_backfill as validation_backfill_router
 from app.routers import export_settings as export_settings_router
@@ -299,6 +300,7 @@ app.include_router(settings_router.doc_types_router, dependencies=_protected)   
 app.include_router(logs.router, dependencies=_protected)                         # /api/logs/*
 app.include_router(vendors.router, dependencies=_protected)                      # /api/vendors/*
 app.include_router(workflows.router, dependencies=_protected)                    # /api/workflows/*
+app.include_router(schema_registry_router.router, dependencies=_protected)       # /api/schema/* (Normalisierer, Systemfunktionen)
 app.include_router(batch.router, dependencies=_protected)                        # /api/batch/*
 app.include_router(tasks.router, dependencies=_protected)                        # /api/tasks/*
 app.include_router(validation_backfill_router.router, dependencies=_protected)  # /api/validation-backfill
