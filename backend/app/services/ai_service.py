@@ -311,10 +311,12 @@ UNIT_RULES = (
     "- EINHEITENTYP `mengeneinheit_typ`: genau einer von stueck, verpackung, gewicht, volumen, laenge, flaeche, pauschal, dienstleistung, sonstige "
     "(Schrauben in Stück = stueck; VPE/Karton/Pack = verpackung; kg/t = gewicht; l/hl = volumen; m = laenge; m² = flaeche; "
     "Pauschalbeträge wie Fracht = pauschal; Arbeitszeit/Stunden = dienstleistung).\n"
-    "- NEBENKOSTEN ALS POSITION: Stehen Versand-, Fracht-, Verpackungs-, Pfand-, Mindermengen- oder Energiezuschläge nur in der Summenzeile "
-    "(nicht als eigene Zeile in der Positionstabelle), lege dafür eine eigene Position an: `artikelbezeichnung` z.B. \"Versandkosten\", "
-    "`menge` 1, `mengeneinheit` \"pauschal\", `mengeneinheit_typ` \"pauschal\", `einzelpreis` = `gesamtpreis` = der Betrag (netto, ohne Steuer), "
-    "`steuersatz` des Zuschlags. So stimmt die Summe der Positionen mit dem Nettobetrag überein. Erfinde nichts: nur Beträge, die auf der Rechnung stehen."
+    "- NEBENKOSTEN (nur wenn vorhanden): Steht auf der Rechnung eine Kostenzeile MIT BETRAG, die nicht in der Positionstabelle steht, sondern z.B. "
+    "im Fußbereich oder bei den Summen (etwa Versand, Fracht, Verpackung, Pfand, Mindermengen- oder Energiezuschlag), lege dafür eine eigene Position an. "
+    "`artikelbezeichnung` ist die Bezeichnung GENAU SO, wie sie gedruckt steht (nicht umbenennen, nicht zusammenfassen, keine Art annehmen). "
+    "`gesamtpreis` (und `einzelpreis`) ist der gedruckte Betrag. `menge`, `mengeneinheit` und `mengeneinheit_typ` nur, wenn sie gedruckt sind, sonst null. "
+    "`steuersatz` nur, wenn er für diese Zeile gedruckt ist oder die Rechnung insgesamt genau einen Steuersatz ausweist, sonst null. "
+    "Gibt es auf der Rechnung keine solche Zeile, lege KEINE zusätzliche Position an. Erfinde nichts und errechne keine Position aus einer Differenz der Summen."
 )
 
 # Einheitentypen, die gespeichert werden (`order_positions.unit_type`); Synonyme der KI werden darauf abgebildet

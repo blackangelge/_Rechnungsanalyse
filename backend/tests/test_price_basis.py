@@ -62,7 +62,9 @@ def test_ai_mapping_reads_basis_pack_and_type():
 
 def test_prompt_rules_are_appended_once_and_mention_json_keys():
     out = ai_service.with_unit_rules("Basisprompt")
-    for key in ("preis_je_menge", "verpackungsinhalt", "verpackungsinhalt_einheit", "mengeneinheit_typ", "Versandkosten"):
+    for key in ("preis_je_menge", "verpackungsinhalt", "verpackungsinhalt_einheit", "mengeneinheit_typ", "NEBENKOSTEN"):
+        assert key in out
+    for key in ("KEINE zusätzliche Position", "GENAU SO", "nur, wenn sie gedruckt sind"):
         assert key in out
     assert ai_service.with_unit_rules(out) == out
 
