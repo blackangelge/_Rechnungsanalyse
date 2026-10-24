@@ -110,6 +110,27 @@ def entity_columns(entity: SchemaEntity, selected: list[str] | None, mode: str) 
     return cols
 
 
+_RULE_STATUS_LABELS = {"ok": "in Ordnung", "warn": "Hinweis", "needs_review": "Prüfen!", "unchecked": "nicht prüfbar"}
+
+
+def rule_text(data: dict) -> str | None:
+    """Prüfregel-Ergebnis eines Datensatzes als Text: „OK“, „weicht ab: <Regel>; …“ (+ „nicht prüfbar“), leer = nicht geprüft."""
+    checks = data.get("_checks") or []
+    if not checks:
+        return None
+    failed = [c.get("name") for c in checks if c.get("status") == "failed"]
+    skipped = sum(1 for c in checks if c.get("status") == "skipped")
+    parts = ["weicht ab: " + "; ".join(str(n) for n in failed)] if failed else ["OK"]
+    if skipped:
+        parts.append(f"{skipped} nicht prüfbar")
+    return _text(", ".join(parts))
+
+
+def rule_status_text(data: dict) -> str | None:
+    v = data.get("_validation")
+    return _RULE_STATUS_LABELS.get(v.get("status")) if isinstance(v, dict) else None
+
+
 def _vendor_cols(keys: list[str]) -> list[Col]:
     labels = {"name": "Lieferant", "strasse": "Lieferant Straße", "plz": "Lieferant PLZ", "ort": "Lieferant Ort", "land": "Lieferant Land",
               "hrb_nummer": "Lieferant HRB-Nr.", "steuernummer": "Lieferant Steuernr.", "ust_id_nr": "Lieferant USt-IdNr.", "iban": "Lieferant IBAN"}
@@ -263,6 +284,7 @@ def build_workbook(db: Session, version: SchemaVersion, template: ExportTemplate
     entity_name_by_id = {e.id: e.name for e in db.query(SchemaEntity).all()}      # auch Entitäten älterer Versionen
     selection = cfg.get("entities") or [{"entity": e.name} for e in version.entities]
     vendor_keys = list(cfg.get("vendor") or [])
+    rule_check = bool(cfg.get("rule_check"))             # Spalten mit dem Ergebnis der Prüfregeln
 
     wb = Workbook(write_only=True)
     used: set[str] = set()
@@ -285,8 +307,10 @@ def build_workbook(db: Session, version: SchemaVersion, template: ExportTemplate
             extra = _vendor_cols(vendor_keys) if not is_child and ent.name == _root_name(version) else []
             ids = ["Datensatz-ID"] + (["Eltern-ID"] if is_child else []) + ["Beleg-ID", "Lieferant-ID"]
             ws = wb.create_sheet(_sheet_title(ent.display_name, used))
-            _write_sheet_header(ws, ids + [c.header for c in cols] + [c.header for c in extra])
-            sheets[ent.name] = {"ws": ws, "cols": cols, "extra": extra, "child": is_child}
+            is_root = not is_child and ent.name == _root_name(version)
+            rule_headers = (["Prüfregel-Status", "Prüfregeln"] if is_root else ["Prüfregeln"]) if rule_check else []
+            _write_sheet_header(ws, ids + [c.header for c in cols] + [c.header for c in extra] + rule_headers)
+            sheets[ent.name] = {"ws": ws, "cols": cols, "extra": extra, "child": is_child, "rules": rule_headers, "root": is_root}
         vendor_cache: dict[int, Vendor] = {}
         for recs in iter_chunks(db, filters):
             n_docs += len({r.document_id for r in recs})
@@ -303,6 +327,8 @@ def build_workbook(db: Session, version: SchemaVersion, template: ExportTemplate
                 ids = [r.id] + ([r.parent_record_id] if s["child"] else []) + [r.document_id, r.vendor_id]
                 vals = [cell_value(c, r.data or {}, mode) for c in s["cols"]]
                 extra_vals = _vendor_values(vendor_cache.get(r.vendor_id), vendor_keys) if s["extra"] else []
+                if s["rules"]:
+                    extra_vals = extra_vals + ([rule_status_text(r.data or {})] if s["root"] else []) + [rule_text(r.data or {})]
                 s["ws"].append(_row(s["ws"], ids + vals + extra_vals, [None] * len(ids) + s["cols"] + [None] * len(extra_vals)))
         for m in master_sheets.values():
             keys = [c.key.split(":", 1)[1] for c in m["cols"]]
@@ -314,7 +340,8 @@ def build_workbook(db: Session, version: SchemaVersion, template: ExportTemplate
         root_cols = entity_columns(root, (sel_by.get(root.name) or {}).get("fields"), mode)
         child_cols = entity_columns(child, (sel_by.get(child.name) or {}).get("fields"), mode)
         v_cols = _vendor_cols(vendor_keys)
-        headers = ["Beleg-ID", "Datensatz-ID", "Lieferant-ID"] + [c.header for c in root_cols] + [c.header for c in v_cols] + [f"{child.display_name}-ID"]
+        root_rules = ["Prüfregel-Status", "Prüfregeln (Beleg)"] if rule_check else []
+        headers = ["Beleg-ID", "Datensatz-ID", "Lieferant-ID"] + [c.header for c in root_cols] + [c.header for c in v_cols] + root_rules + [f"{child.display_name}-ID"]
         seen = set(headers)
         child_headers = []
         for c in child_cols:
@@ -322,9 +349,9 @@ def build_workbook(db: Session, version: SchemaVersion, template: ExportTemplate
             seen.add(h)
             child_headers.append(h)
         ws = wb.create_sheet(_sheet_title(root.display_name + " + " + child.display_name, used))
-        _write_sheet_header(ws, headers + child_headers)
+        _write_sheet_header(ws, headers + child_headers + ([f"Prüfregeln ({child.display_name})"] if rule_check else []))
         vendor_cache = {}
-        fmts = [None] * 3 + root_cols + [None] * len(v_cols) + [None] + child_cols
+        fmts = [None] * 3 + root_cols + [None] * (len(v_cols) + len(root_rules)) + [None] + child_cols
         for recs in iter_chunks(db, filters):
             n_docs += len({r.document_id for r in recs})
             if vendor_keys:
@@ -339,9 +366,12 @@ def build_workbook(db: Session, version: SchemaVersion, template: ExportTemplate
                 if r.parent_record_id is not None or entity_name_by_id.get(r.entity_id) != root.name:
                     continue
                 head = [r.document_id, r.id, r.vendor_id] + [cell_value(c, r.data or {}, mode) for c in root_cols] \
-                    + _vendor_values(vendor_cache.get(r.vendor_id), vendor_keys)
+                    + _vendor_values(vendor_cache.get(r.vendor_id), vendor_keys) \
+                    + ([rule_status_text(r.data or {}), rule_text(r.data or {})] if rule_check else [])
                 for k in kids.get(r.id) or [None]:
                     tail = [k.id] + [cell_value(c, k.data or {}, mode) for c in child_cols] if k is not None else [None] * (1 + len(child_cols))
+                    if rule_check:
+                        tail = tail + [rule_text(k.data or {}) if k is not None else None]
                     ws.append(_row(ws, head + tail, fmts))
 
     if n_docs == 0:

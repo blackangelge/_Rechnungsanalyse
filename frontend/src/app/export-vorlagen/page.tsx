@@ -63,7 +63,7 @@ export default function ExportTemplatesPage() {
         {templates.map((t) => (
           <Card key={t.id} title={t.name} actions={<Badge tone="blue">{LAYOUTS[t.layout]}</Badge>}>
             <p className="min-h-[2.5rem] text-sm text-gray-600">{t.description || <span className="text-gray-400">Keine Beschreibung</span>}</p>
-            <p className="mt-2 text-xs text-gray-500">Mengen: {QTY[t.quantity_mode]}</p>
+            <p className="mt-2 text-xs text-gray-500">Mengen: {QTY[t.quantity_mode]}{t.config.rule_check ? " · mit Prüfregeln" : ""}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <button className="btn btn-primary btn-sm" onClick={() => setExportFor(t)}><Icon name="download" /> Exportieren</button>
               <button className="btn btn-secondary btn-sm" onClick={() => showColumns(t)}>Spalten</button>
@@ -111,6 +111,7 @@ function TemplateModal({ schema, template, onClose, onSave }: {
     else schema.entities.forEach((e) => { init[e.name] = new Set(); });
     return init;
   });
+  const [ruleCheck, setRuleCheck] = useState<boolean>(template?.config.rule_check ?? false);
   const [error, setError] = useState<string | null>(null);
 
   function toggleEntity(n: string) {
@@ -129,7 +130,7 @@ function TemplateModal({ schema, template, onClose, onSave }: {
     const entities = schema.entities.filter((e) => e.name in sel).map((e) => ({ entity: e.name, fields: sel[e.name].size ? [...sel[e.name]] : null }));
     if (entities.length === 0) { setError("Mindestens eine Entität wählen."); return; }
     try {
-      await onSave({ name: name.trim(), description: description || null, layout, quantity_mode: qty, config: { ...(template?.config ?? {}), entities } });
+      await onSave({ name: name.trim(), description: description || null, layout, quantity_mode: qty, config: { ...(template?.config ?? {}), entities, rule_check: ruleCheck } });
     } catch (err) { setError(extractApiError(err, "Vorlage konnte nicht gespeichert werden")); }
   }
 
@@ -145,6 +146,10 @@ function TemplateModal({ schema, template, onClose, onSave }: {
             <select id="t-layout" className="input" value={layout} onChange={(e) => setLayout(e.target.value as ExportTemplate["layout"])}>{Object.entries(LAYOUTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
           <div><label className="label" htmlFor="t-qty">Mengenfelder</label>
             <select id="t-qty" className="input" value={qty} onChange={(e) => setQty(e.target.value as ExportTemplate["quantity_mode"])}>{Object.entries(QTY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+            <input type="checkbox" checked={ruleCheck} onChange={(e) => setRuleCheck(e.target.checked)} />
+            Ergebnis der Prüfregeln mitexportieren <span className="hint">(Spalten „Prüfregel-Status“ und „Prüfregeln“ je Beleg und Position)</span>
+          </label>
         </div>
         <div>
           <p className="label">Entitäten und Felder (nichts angehakt = alle Felder)</p>

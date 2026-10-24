@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from app.crud import schema_definition as sd
 from app.database import get_db
 from app.main import app
 from app.models.schema_def import ExtractedRecord
@@ -284,3 +285,35 @@ def test_workflow_node_check_rules_and_branch_on_rule_status(world):
                           {"id": "e", "type": "end", "position": {"x": 0, "y": 0}, "data": {"label": "Ende", "config": {}}}],
                  "edges": [{"id": "1", "source": "s", "target": "c", "sourceHandle": "out"}, {"id": "2", "source": "c", "target": "e", "sourceHandle": "out"}]}
     assert not ws.validate_graph(ok_graph).errors
+
+
+def test_excel_export_can_include_rule_results(world):
+    """Vorlage mit rule_check: Spalten „Prüfregel-Status“/„Prüfregeln“ (Beleg) und „Prüfregeln“ je Position, in beiden Layouts."""
+    import io
+    from openpyxl import load_workbook
+    from app.models.export_template import ExportTemplate
+    from app.services import schema_export
+    seed_default_rules(world.db)
+    world.db.commit()
+    bad = deepcopy(SAMPLE)
+    bad["gesamtbetrag_brutto"] = "5.000,00"
+    world.add_doc(bad)
+    for layout in ("sheet_per_entity", "flat"):
+        t = ExportTemplate(name=f"R-{layout}", layout=layout, quantity_mode="original",
+                           config={"rule_check": True, "flat": {"root": "beleg", "child": "position"}})
+        wb = load_workbook(io.BytesIO(schema_export.build_workbook(world.db, sd.get_active(world.db), t, schema_export.Filters())))
+        if layout == "flat":
+            rows = [[c.value for c in r] for r in wb.active.iter_rows()]
+            head = rows[0]
+            assert rows[1][head.index("Prüfregel-Status")] == "Prüfen!"
+            assert "Netto + Steuer = Brutto" in rows[1][head.index("Prüfregeln (Beleg)")]
+            assert any(h and h.startswith("Prüfregeln (Position)") for h in head)
+        else:
+            beleg = [[c.value for c in r] for r in wb["Beleg"].iter_rows()]
+            assert beleg[1][beleg[0].index("Prüfregel-Status")] == "Prüfen!"
+            pos = [[c.value for c in r] for r in wb["Position"].iter_rows()]
+            col = pos[0].index("Prüfregeln")
+            assert pos[1][col].startswith("OK") and "nicht prüfbar" in pos[2][col]       # Position 1 stimmt, Position 2 ohne Positionspreis
+    plain = ExportTemplate(name="ohne", layout="flat", quantity_mode="original", config={"flat": {"root": "beleg", "child": "position"}})
+    wb = load_workbook(io.BytesIO(schema_export.build_workbook(world.db, sd.get_active(world.db), plain, schema_export.Filters())))
+    assert "Prüfregel-Status" not in [c.value for c in next(wb.active.iter_rows())]

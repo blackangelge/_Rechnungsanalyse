@@ -1896,6 +1896,7 @@ export interface ExportTemplateConfig {
   entities?: { entity: string; fields?: string[] | null }[];
   vendor?: string[];
   flat?: { root?: string; child?: string };
+  rule_check?: boolean;                    // Spalten mit dem Ergebnis der Prüfregeln
   [key: string]: unknown;
 }
 export interface ExportTemplate {
