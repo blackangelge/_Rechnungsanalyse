@@ -25,4 +25,5 @@ from app.models.ai_query import AIQuery, DocumentAnswer  # noqa: F401
 from app.models.schema_def import SchemaVersion, SchemaEntity, SchemaField, SchemaRelation, ExtractedRecord  # noqa: F401
 from app.models.units import UnitGroup, Unit, UnitAlias, UnitReviewItem  # noqa: F401
 from app.models.export_template import ExportTemplate  # noqa: F401
+from app.models.assistant_chat import AssistantChat, AssistantMessage  # noqa: F401
 from app.models.document_page import DocumentPage  # noqa: F401

@@ -299,6 +299,7 @@ from app.routers import tasks
 from app.routers import schema_registry as schema_registry_router
 from app.routers import units as units_router
 from app.routers import export_templates as export_templates_router
+from app.routers import assistant as assistant_router
 from app.routers import positions as positions_router
 from app.routers import validation_backfill as validation_backfill_router
 from app.routers import export_settings as export_settings_router
@@ -322,6 +323,7 @@ app.include_router(vendors.router, dependencies=_protected)                     
 app.include_router(workflows.router, dependencies=_protected)                    # /api/workflows/*
 app.include_router(schema_registry_router.router, dependencies=_protected)       # /api/schema/* (Normalisierer, Systemfunktionen)
 app.include_router(units_router.router, dependencies=_protected)                 # /api/units/* (Einheiten, Prüfliste)
+app.include_router(assistant_router.router, dependencies=_protected)           # /api/assistant/* (KI-Assistent mit Chats)
 app.include_router(export_templates_router.router, dependencies=_protected)      # /api/export-templates/* (schemagesteuerter Export)
 app.include_router(batch.router, dependencies=_protected)                        # /api/batch/*
 app.include_router(tasks.router, dependencies=_protected)                        # /api/tasks/*
