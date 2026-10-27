@@ -528,6 +528,8 @@ export interface DocumentFilter {
   doc_id?: number;
   document_type_ids?: number[];
   validation_status?: ValidationStatus[];
+  /** Prüfregeln: mismatch = Rechnung stimmt nicht, notcalc = nicht berechenbar (Wert fehlt) */
+  rule_issue?: ("mismatch" | "notcalc")[];
   /** "any" = alle Belege, die nachbearbeitet werden müssen, oder konkrete Codes */
   error_code?: string[];
   /** Nur erkannte Nicht-Eingangsrechnungen (Lieferschein, Angebot, …) */

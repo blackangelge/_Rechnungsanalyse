@@ -403,6 +403,7 @@ def _document_filters(
     doc_id: Optional[int] = None,
     document_type_ids: Optional[list[int]] = Query(default=None),
     validation_status: Optional[list[str]] = Query(default=None),
+    rule_issue: Optional[list[str]] = Query(default=None, description="Prüfregeln: mismatch (Rechnung stimmt nicht) | notcalc (nicht berechenbar, Wert fehlt)"),
     error_code: Optional[list[str]] = Query(default=None, description="Nachbearbeitung nötig: too_many_pages|encrypted|unreadable oder 'any'"),
     not_invoice: bool = Query(default=False, description="Nur erkannte Nicht-Eingangsrechnungen (Lieferschein, Angebot, …)"),
     only_deleted: bool = Query(default=False, description="Nur Belege im Papierkorb"),
@@ -412,7 +413,7 @@ def _document_filters(
         company=company, year=year, status=status, total_min=total_min, total_max=total_max,
         page_min=page_min, page_max=page_max, batch_ids=batch_ids, include_deleted=include_deleted, include_hidden=include_hidden,
         has_extraction=has_extraction, supplier_name_filter=supplier_name, doc_id=doc_id,
-        document_type_ids=document_type_ids, validation_statuses=validation_status, error_codes=error_code,
+        document_type_ids=document_type_ids, validation_statuses=validation_status, rule_issues=rule_issue, error_codes=error_code,
         not_invoice=not_invoice, only_deleted=only_deleted,
     )
 

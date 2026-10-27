@@ -135,7 +135,10 @@ function ValidationBadge({ status }: { status: ValidationStatus | null | undefin
 }
 
 /** Filter-Presets für die Plausibilitätsprüfung → Backend-Statuswerte */
-const VALIDATION_FILTERS: Record<string, { label: string; statuses: ValidationStatus[] }> = {
+const VALIDATION_FILTERS: Record<string, { label: string; statuses?: ValidationStatus[]; ruleIssue?: ("mismatch" | "notcalc")[] }> = {
+  rechnet_nicht: { label: "Stimmt nicht / nicht berechenbar", ruleIssue: ["mismatch", "notcalc"] },
+  mismatch: { label: "Summen / Rechnung stimmen nicht", ruleIssue: ["mismatch"] },
+  notcalc: { label: "Nicht berechenbar (Wert fehlt)", ruleIssue: ["notcalc"] },
   needs_review: { label: "Manuell prüfen", statuses: ["needs_review"] },
   warn: { label: "Mit Hinweis (Prüfregeln)", statuses: ["warn" as ValidationStatus] },
   corrected: { label: "Automatisch korrigiert", statuses: ["corrected", "ai_corrected"] },
@@ -493,7 +496,9 @@ export default function BelegePage() {
     if (filterRework) f.error_code = ["any"];
     if (filterNotInvoice) f.not_invoice = true;
     if (filterValidation && VALIDATION_FILTERS[filterValidation]) {
-      f.validation_status = VALIDATION_FILTERS[filterValidation].statuses;
+      const vf = VALIDATION_FILTERS[filterValidation];
+      if (vf.statuses) f.validation_status = vf.statuses;
+      if (vf.ruleIssue) f.rule_issue = vf.ruleIssue;
     }
     return f;
   }
@@ -892,7 +897,7 @@ export default function BelegePage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-600">Plausibilität</label>
               <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
-                className="input py-1.5 w-44">
+                className="input py-1.5 w-60">
                 <option value="">Alle</option>
                 {Object.entries(VALIDATION_FILTERS).map(([key, v]) => (
                   <option key={key} value={key}>{v.label}</option>

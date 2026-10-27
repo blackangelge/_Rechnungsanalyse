@@ -172,7 +172,7 @@ def get_by_id_with_details(db: Session, doc_id: int) -> Document | None:
 _FILTER_KEYS = (
     "company", "year", "status", "total_min", "total_max", "page_min", "page_max", "batch_ids",
     "include_deleted", "has_extraction", "supplier_name_filter", "doc_id", "document_type_ids",
-    "validation_statuses", "include_hidden", "error_codes", "not_invoice", "only_deleted",
+    "validation_statuses", "rule_issues", "include_hidden", "error_codes", "not_invoice", "only_deleted",
 )
 
 # Dokumententypen, die KEINE Eingangsrechnung sind. 0 = noch nicht erkannt, 1 = Eingangsrechnung, 17 = Mischbeleg (enthält eine Rechnung)
@@ -238,6 +238,19 @@ def _filtered_query(db: Session, **f):
             .exists()
         )
         query = query.filter(or_(InvoiceExtraction.validation_status.in_(g("validation_statuses")), rule_match))
+    if g("rule_issues"):
+        v = ExtractedRecord.data["_validation"]
+        conds = []
+        if "mismatch" in g("rule_issues"):                                    # mindestens eine Regel weicht ab
+            conds.append(v["failed"].as_integer() > 0)
+        if "notcalc" in g("rule_issues"):                                     # Regel(n) nicht auswertbar (Wert fehlt) bzw. gar nichts prüfbar
+            conds.append(or_(v["skipped"].as_integer() > 0, v["status"].as_string() == "unchecked"))
+        if conds:
+            query = query.filter(
+                db.query(ExtractedRecord.id)
+                .filter(ExtractedRecord.document_id == Document.id, ExtractedRecord.parent_record_id.is_(None), or_(*conds))
+                .exists()
+            )
     if g("error_codes"):
         codes = g("error_codes")
         query = query.filter(Document.error_code.isnot(None) if "any" in codes else Document.error_code.in_(codes))

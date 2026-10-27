@@ -386,3 +386,23 @@ def test_enable_price_unit_on_existing_schema(client, world):
     first = client.get("/api/validation-rules").json()[0]
     assert first["alt_left_exprs"] == [] and "@preiseinheit" in first["left_expr"] and first["problems"] == []
     assert client.post("/api/validation-rules/enable-price-unit").json()["changed"] is False          # idempotent
+
+
+def test_filter_rule_issues_mismatch_and_not_calculable(world):
+    from app.crud.document import get_ids_filtered
+    seed_default_rules(world.db)
+    world.db.commit()
+    bad = deepcopy(SAMPLE)
+    bad["gesamtbetrag_brutto"] = "5.000,00"                     # Summe stimmt nicht
+    d_bad = world.add_doc(bad)
+    d_skip = world.add_doc()                                    # Position ohne Positionspreis → nicht prüfbar
+    clean = deepcopy(SAMPLE)
+    clean["positionen"] = clean["positionen"][:1]
+    d_ok = world.add_doc(clean)
+    world.db.commit()
+    mismatch = get_ids_filtered(world.db, rule_issues=["mismatch"])
+    notcalc = get_ids_filtered(world.db, rule_issues=["notcalc"])
+    both = get_ids_filtered(world.db, rule_issues=["mismatch", "notcalc"])
+    assert d_bad.id in mismatch and d_skip.id not in mismatch and d_ok.id not in mismatch
+    assert d_skip.id in notcalc and d_ok.id not in notcalc
+    assert {d_bad.id, d_skip.id} <= set(both) and d_ok.id not in both

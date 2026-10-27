@@ -1651,3 +1651,6 @@ getestet → `waiting_capacity` gesetzt, Task alle 20s (Poll-Intervall) neu vers
   Die MAIN-Standardübersetzung füllt sie (Liste `_CHILD_LISTS`: Unter-Entitäten außer `position` lesen ihre Zeilen aus einer Liste der KI-Antwort, Felder über `rawpos.`).
 - **Mitgelieferte Prompts** (`services/prompt_seed.py`, Typ 2 = Workflow-Baustein, legt nur Fehlendes an): „Eingangsrechnung – Auslese-Regeln (Zusatzanweisung)“ (Regeln 1–16 ohne JSON-Struktur — die kommt aus dem Schema; im Knoten „Schema-Extraktion“ als Zusatzanweisung wählen)
   und „Dokumententyp – Klassifikator …“ (im Knoten „Dokumententyp erkennen“ wählen). Eingespielt über „Einspielen“ und „Standardfelder ergänzen“.
+
+- **Belege-Filter „Rechenprüfung“** (Dropdown „Plausibilität“ auf der Belege-Seite; `GET /api/documents?rule_issue=mismatch|notcalc`, in `_filtered_query`/`_FILTER_KEYS` als `rule_issues`): `mismatch` = mindestens eine Prüfregel weicht ab
+  (`data._validation.failed > 0`), `notcalc` = Regeln nicht auswertbar, weil Werte fehlen (`skipped > 0` oder Status `unchecked`). Beide zusammen = „Stimmt nicht / nicht berechenbar“. Grundlage ist das gespeicherte Regel-Ergebnis — nach Regeländerungen vorher „Alle Belege neu prüfen“.
