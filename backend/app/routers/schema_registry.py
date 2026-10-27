@@ -299,8 +299,9 @@ def seed_defaults(db: Session = Depends(get_db)):
 @router.get("/standard-parts")
 def standard_parts_status(db: Session = Depends(get_db)):
     """Welche Standardfelder (Bestellnummer, Währung/Nachlass-Text je Position, Umsatzsteuer-Zeilen) dem aktiven Schema fehlen."""
+    from app.services.prompt_seed import prompts_outdated
     from app.services.schema_seed import missing_standard_parts
-    return {"missing": missing_standard_parts(sd.get_active(db))}
+    return {"missing": missing_standard_parts(sd.get_active(db)) + [f"Prompt „{n}“ (neue Fassung)" for n in prompts_outdated(db)]}
 
 
 @router.post("/standard-parts")

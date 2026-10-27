@@ -77,3 +77,18 @@ def test_main_type_names_are_translated(tmp_path):
     m = mm.load_type_map(eng)
     assert m == {1: 1, 2: 1, 3: 4, 6: 3, 11: 15, 13: 9, 14: 15, 15: 0}
     assert mm._map_type(2, m) == 1 and mm._map_type(99, m) == 15 and mm._map_type(0, m) == 0 and mm._map_type(7, {}) == 7
+
+
+def test_unchanged_old_extraction_prompt_is_upgraded_but_edited_one_is_kept(db):
+    db.add(SystemPrompt(name=prompt_seed.EXTRACTION_NAME, content=prompt_seed._EXTRACTION_BASE, type=2))
+    db.flush()
+    assert prompt_seed.prompts_outdated(db) == [prompt_seed.EXTRACTION_NAME]
+    done = prompt_seed.seed_prompts(db)
+    assert any("neue Fassung" in n for n in done)
+    p = db.query(SystemPrompt).filter_by(name=prompt_seed.EXTRACTION_NAME).one()
+    assert "17. Lieferant und Empfänger NIEMALS verwechseln" in p.content and "18. Menge je Position" in p.content
+    assert prompt_seed.prompts_outdated(db) == []
+    p.content = prompt_seed._EXTRACTION_BASE + "\n99. eigene Regel"
+    db.flush()
+    assert prompt_seed.prompts_outdated(db) == [] and prompt_seed.seed_prompts(db) == []
+    assert "99. eigene Regel" in db.query(SystemPrompt).filter_by(name=prompt_seed.EXTRACTION_NAME).one().content
