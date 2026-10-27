@@ -1945,6 +1945,10 @@ export interface RuleResult {
 }
 export interface RuleCheckSummary { status: "ok" | "warn" | "needs_review" | "unchecked"; ok: number; failed: number; skipped: number }
 
+export interface RuleRunState {
+  running: boolean; total?: number; processed?: number; counts?: Record<string, number>; flagged?: number[]; errors?: string[];
+  error_count?: number; cancelled?: boolean; started_at?: string; finished_at?: string | null; workers?: number; rules?: number;
+}
 export const validationRulesApi = {
   list: () => apiClient.get<ValidationRule[]>("/api/validation-rules").then((r) => r.data),
   meta: () => apiClient.get<RuleMeta>("/api/validation-rules/meta").then((r) => r.data),
@@ -1956,6 +1960,10 @@ export const validationRulesApi = {
   test: (d: ValidationRuleInput, documentId: number) =>
     apiClient.post<{ problems: string[]; results: RuleResult[] }>("/api/validation-rules/test", { ...d, document_id: documentId }).then((r) => r.data),
   document: (id: number) => apiClient.get<{ summary: RuleCheckSummary; results: RuleResult[] }>(`/api/validation-rules/document/${id}`).then((r) => r.data),
+  runBackground: (documentIds?: number[], workers = 4) =>
+    apiClient.post<RuleRunState>("/api/validation-rules/run-background", { document_ids: documentIds ?? null, workers }).then((r) => r.data),
+  runState: () => apiClient.get<RuleRunState>("/api/validation-rules/run-state").then((r) => r.data),
+  runCancel: () => apiClient.post<{ cancelling: boolean }>("/api/validation-rules/run-cancel").then((r) => r.data),
   run: (documentIds?: number[]) =>
     apiClient.post<{ documents: number; rules: number; counts: Record<string, number>; flagged_sample: number[] }>(
       "/api/validation-rules/run", { document_ids: documentIds ?? null }).then((r) => r.data),

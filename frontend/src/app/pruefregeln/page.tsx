@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Badge, Card, EmptyState, Icon, Modal, PageHeader, Spinner } from "@/components/ui";
 import { ResultTable } from "@/components/belege/RuleChecks";
 import {
+  type RuleRunState,
   RuleMeta, RuleResult, ValidationRule, ValidationRuleInput, extractApiError, validationRulesApi,
 } from "@/lib/api";
 
@@ -210,14 +211,35 @@ export default function RulesPage() {
     try { await fn(); await load(); } catch (err) { setError(extractApiError(err, "Aktion fehlgeschlagen")); }
   }
 
-  async function runAll() {
-    if (!confirm("Alle Belege mit den aktiven Regeln neu prüfen und das Ergebnis speichern?")) return;
-    setRunning(true); setError(null); setInfo(null);
+  const [runState, setRunState] = useState<RuleRunState | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const poll = useCallback(async () => {
     try {
-      const r = await validationRulesApi.run();
-      setInfo(`${r.documents} Belege mit ${r.rules} Regeln geprüft: ${r.counts.ok} in Ordnung, ${r.counts.warn} mit Hinweis, ${r.counts.needs_review} „Prüfen!“, ${r.counts.unchecked} nicht prüfbar.` +
-        (r.flagged_sample.length ? ` Auffällig (Beleg-IDs, Auszug): ${r.flagged_sample.join(", ")}` : ""));
-    } catch (err) { setError(extractApiError(err, "Prüfung fehlgeschlagen")); } finally { setRunning(false); }
+      const st = await validationRulesApi.runState();
+      setRunState(st);
+      setRunning(!!st.running);
+      if (st.running) pollRef.current = setTimeout(poll, 1500);
+    } catch { pollRef.current = setTimeout(poll, 4000); }
+  }, []);
+
+  useEffect(() => {      // läuft schon eine Prüfung (z. B. nach Neuladen), Anzeige wieder aufnehmen
+    validationRulesApi.runState().then((st) => { if (st.running) { setRunState(st); setRunning(true); pollRef.current = setTimeout(poll, 1500); } else if (st.total) setRunState(st); }).catch(() => undefined);
+    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+  }, [poll]);
+
+  async function runAll() {
+    if (!confirm("Alle Belege mit den aktiven Regeln neu prüfen und das Ergebnis speichern? Die Prüfung läuft im Hintergrund.")) return;
+    setError(null); setInfo(null);
+    try {
+      setRunState(await validationRulesApi.runBackground());
+      setRunning(true);
+      pollRef.current = setTimeout(poll, 1000);
+    } catch (err) { setError(extractApiError(err, "Prüfung konnte nicht gestartet werden")); }
+  }
+
+  async function cancelRun() {
+    try { await validationRulesApi.runCancel(); } catch (err) { setError(extractApiError(err, "Abbrechen fehlgeschlagen")); }
   }
 
   async function enablePriceUnit() {
@@ -247,6 +269,28 @@ export default function RulesPage() {
           <button className="btn btn-secondary" disabled={running || !rules.length} onClick={runAll}>{running ? "Prüft…" : "Alle Belege neu prüfen"}</button>
           <button className="btn btn-primary" disabled={!meta?.entities.length} onClick={() => setEdit("new")}><Icon name="plus" /> Neue Regel</button>
         </>} />
+      {runState && (runState.running || !!runState.total) && (
+        <Card title={runState.running ? "Prüfung läuft …" : runState.cancelled ? "Prüfung abgebrochen" : "Prüfung beendet"}>
+          <div className="space-y-2 text-sm">
+            <div className="h-2 w-full overflow-hidden rounded bg-gray-100" role="progressbar" aria-valuenow={runState.processed ?? 0} aria-valuemax={runState.total ?? 0}>
+              <div className="h-full bg-blue-600 transition-all" style={{ width: `${runState.total ? Math.min(100, ((runState.processed ?? 0) / runState.total) * 100) : 0}%` }} />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="tabular-nums">{(runState.processed ?? 0).toLocaleString("de-DE")} von {(runState.total ?? 0).toLocaleString("de-DE")} Belegen · {runState.rules ?? 0} Regeln · {runState.workers ?? 1} parallel</span>
+              {runState.running && <button className="btn btn-secondary" onClick={cancelRun}>Abbrechen</button>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge tone="green">{runState.counts?.ok ?? 0} in Ordnung</Badge>
+              <Badge tone="amber">{runState.counts?.warn ?? 0} mit Hinweis</Badge>
+              <Badge tone="red">{runState.counts?.needs_review ?? 0} „Prüfen!“</Badge>
+              <Badge tone="gray">{runState.counts?.unchecked ?? 0} nicht prüfbar</Badge>
+              {!!runState.error_count && <Badge tone="red">{runState.error_count} Fehler</Badge>}
+            </div>
+            {!!runState.errors?.length && <ul className="list-disc pl-5 text-xs text-red-700">{runState.errors.map((m, i) => <li key={i}>{m}</li>)}</ul>}
+            {!runState.running && !!runState.flagged?.length && <p className="text-xs text-gray-600">Auffällig (Beleg-IDs, Auszug): {runState.flagged.join(", ")}</p>}
+          </div>
+        </Card>
+      )}
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
       {meta && meta.entities.some((e) => e.name === "position") && !meta.price_unit_field && (

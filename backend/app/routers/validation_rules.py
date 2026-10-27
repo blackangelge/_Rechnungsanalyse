@@ -213,3 +213,33 @@ def run_checks(body: RunIn, db: Session = Depends(get_db)):
             db.commit()
     db.commit()
     return {"documents": len(ids), "rules": len(specs), "counts": counts, "flagged_sample": flagged}
+
+
+# ─── Hintergrundlauf mit Fortschritt ─────────────────────────────────────────
+
+class RunBackgroundIn(BaseModel):
+    document_ids: list[int] | None = None
+    workers: int = 4
+
+
+@router.post("/run-background")
+def run_background(body: RunBackgroundIn):
+    """Alle (oder die genannten) Belege im Hintergrund neu prüfen — Fortschritt über GET /run-state."""
+    from app.database import SessionLocal
+    from app.services import rule_run
+    try:
+        return rule_run.start(SessionLocal, body.document_ids, body.workers)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/run-state")
+def run_state():
+    from app.services import rule_run
+    return rule_run.get_state()
+
+
+@router.post("/run-cancel")
+def run_cancel():
+    from app.services import rule_run
+    return {"cancelling": rule_run.cancel()}

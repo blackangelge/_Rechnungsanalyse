@@ -406,3 +406,36 @@ def test_filter_rule_issues_mismatch_and_not_calculable(world):
     assert d_bad.id in mismatch and d_skip.id not in mismatch and d_ok.id not in mismatch
     assert d_skip.id in notcalc and d_ok.id not in notcalc
     assert {d_bad.id, d_skip.id} <= set(both) and d_ok.id not in both
+
+
+def test_background_run_with_progress_cancel_and_parallel(world, sqlite_session_factory):
+    from app.services import rule_run
+    seed_default_rules(world.db)
+    world.db.commit()
+    bad = deepcopy(SAMPLE)
+    bad["gesamtbetrag_brutto"] = "5.000,00"
+    ids = [world.add_doc(bad).id, world.add_doc().id, world.add_doc().id]
+    world.db.commit()
+    # Ergebnisse veralten lassen, dann neu prüfen
+    for rec in world.db.query(ExtractedRecord).filter(ExtractedRecord.parent_record_id.is_(None)).all():
+        d = dict(rec.data); d.pop("_validation", None); d.pop("_checks", None); rec.data = d
+    world.db.commit()
+    for workers in (1, 3):
+        rule_run._state.clear(); rule_run._state.update(running=True, total=0, processed=0, counts={}, flagged=[], errors=[], error_count=0)
+        st = rule_run.run(sqlite_session_factory, None, workers)
+        assert st["running"] is False and st["total"] == 3 and st["processed"] == 3 and st["error_count"] == 0
+        assert st["counts"].get("needs_review") == 1 and ids[0] in st["flagged"]
+    world.db.expire_all()
+    root = world.db.query(ExtractedRecord).filter(ExtractedRecord.document_id == ids[0], ExtractedRecord.parent_record_id.is_(None)).one()
+    assert root.data["_validation"]["status"] == "needs_review"
+    # Abbruch vor dem Start der Blöcke: nichts mehr verarbeitet
+    rule_run._state.clear(); rule_run._state.update(running=True, total=0, processed=0, counts={}, flagged=[], errors=[], error_count=0)
+    rule_run._cancel.set()
+    orig = rule_run._cancel.clear
+    rule_run._cancel.clear = lambda: None
+    try:
+        st = rule_run.run(sqlite_session_factory, None, 1)
+    finally:
+        rule_run._cancel.clear = orig
+        rule_run._cancel.clear()
+    assert st["processed"] == 0 and st["cancelled"] is True
