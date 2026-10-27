@@ -38,26 +38,53 @@ def _mask(url: str | None) -> str | None:
 
 
 class ConfigIn(BaseModel):
+    """Verbindung entweder in Einzelfeldern (Host/IP, Port, Datenbank, Benutzer, Passwort) oder als komplette URL (Erweitert)."""
+    host: str | None = None
+    port: int | str | None = None
+    database: str | None = None
+    user: str | None = None
+    password: str | None = None            # leer = bisheriges Passwort behalten
     source_url: str | None = None
     source_storage_path: str | None = None
+
+
+def _config_out(cfg) -> dict:
+    return {"source_url": _mask(cfg.source_url), "has_url": bool(cfg.source_url), "source_storage_path": cfg.source_storage_path,
+            **mm.parse_url(cfg.source_url)}
 
 
 @router.get("/config")
 def get_config(db: Session = Depends(get_db)):
     cfg = mm.get_config(db)
     db.commit()
-    return {"source_url": _mask(cfg.source_url), "has_url": bool(cfg.source_url), "source_storage_path": cfg.source_storage_path}
+    return _config_out(cfg)
 
 
 @router.put("/config")
 def put_config(body: ConfigIn, db: Session = Depends(get_db)):
     cfg = mm.get_config(db)
-    if body.source_url is not None and _MASK not in body.source_url:      # maskierte URL zurückgeschickt → unverändert lassen
-        cfg.source_url = body.source_url.strip() or None
+    try:
+        if body.host is not None or body.database is not None or body.user is not None:
+            old_pw = None
+            if cfg.source_url:
+                from sqlalchemy.engine import make_url
+                try:
+                    old_pw = make_url(cfg.source_url).password
+                except Exception:
+                    old_pw = None
+            cfg.source_url = mm.build_url(body.host or "", body.port, body.database or "", body.user or "", body.password or old_pw)
+        elif body.source_url is not None and _MASK not in body.source_url:      # maskierte URL zurückgeschickt → unverändert lassen
+            url = body.source_url.strip()
+            if url and "://" not in url:
+                raise mm.MigrationError("Das ist keine Datenbank-URL. Bitte Host/IP, Port, Datenbank, Benutzer und Passwort in den Feldern eintragen.")
+            cfg.source_url = url or None
+    except mm.MigrationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.source_storage_path is not None:
         cfg.source_storage_path = body.source_storage_path.strip() or None
     db.commit()
-    return {"source_url": _mask(cfg.source_url), "has_url": bool(cfg.source_url), "source_storage_path": cfg.source_storage_path}
+    return _config_out(cfg)
 
 
 @router.post("/test")
@@ -65,11 +92,12 @@ def test_connection(db: Session = Depends(get_db)):
     cfg = mm.get_config(db)
     try:
         engine = mm.open_source(cfg.source_url or "")
+        mm.check_connection(engine)
         counts = mm.count_source(engine)
     except mm.MigrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Verbindung fehlgeschlagen: {str(exc)[:300]}") from exc
+        raise HTTPException(status_code=400, detail=mm.explain_connection_error(exc)) from exc
     storage = {"path": cfg.source_storage_path, "exists": False, "sample": None}
     if cfg.source_storage_path:
         root = Path(cfg.source_storage_path)

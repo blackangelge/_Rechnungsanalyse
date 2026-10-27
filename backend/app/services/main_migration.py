@@ -65,17 +65,85 @@ def get_config(db: Session) -> MainMigrationConfig:
     return cfg
 
 
+def build_url(host: str, port: int | str | None, database: str, user: str, password: str | None) -> str:
+    """PostgreSQL-URL aus einzelnen Angaben (Sonderzeichen im Passwort werden korrekt maskiert)."""
+    from sqlalchemy.engine import URL
+    host, database, user = (host or "").strip(), (database or "").strip(), (user or "").strip()
+    if not host or not database or not user:
+        raise MigrationError("Host/IP, Datenbankname und Benutzer müssen angegeben werden.")
+    if "://" in host or "/" in host or " " in host or ":" in host:
+        raise MigrationError("Im Feld „Host“ nur die IP-Adresse oder den Rechnernamen eintragen (ohne postgresql:// und ohne Port).")
+    try:
+        port_n = int(port) if str(port or "").strip() else 5432
+    except ValueError as exc:
+        raise MigrationError("Der Port muss eine Zahl sein (üblich: 5432).") from exc
+    if not 1 <= port_n <= 65535:
+        raise MigrationError("Der Port muss zwischen 1 und 65535 liegen.")
+    return URL.create("postgresql", username=user, password=password or None, host=host, port=port_n, database=database).render_as_string(hide_password=False)
+
+
+def parse_url(url: str | None) -> dict:
+    """Bestandteile der gespeicherten URL für die Oberfläche (ohne Passwort)."""
+    if not url:
+        return {"host": "", "port": 5432, "database": "", "user": "", "has_password": False}
+    from sqlalchemy.engine import make_url
+    try:
+        u = make_url(url)
+    except Exception:
+        return {"host": "", "port": 5432, "database": "", "user": "", "has_password": False}
+    return {"host": u.host or "", "port": u.port or 5432, "database": u.database or "", "user": u.username or "", "has_password": bool(u.password)}
+
+
+def explain_connection_error(exc: Exception) -> str:
+    """Technische Datenbankfehler in verständliche Hinweise übersetzen (Original bleibt angehängt)."""
+    raw = str(getattr(exc, "orig", None) or exc).strip().splitlines()[0][:300] if str(exc).strip() else exc.__class__.__name__
+    low = raw.lower()
+    if "password authentication failed" in low or "authentication failed" in low:
+        hint = "Benutzer oder Passwort stimmen nicht."
+    elif "does not exist" in low and "database" in low:
+        hint = "Die Datenbank mit diesem Namen gibt es dort nicht (Name prüfen, z. B. rechnungsanalyse)."
+    elif "role" in low and "does not exist" in low:
+        hint = "Der Benutzer existiert in der MAIN-Datenbank nicht."
+    elif "could not translate host name" in low or "name or service not known" in low or "nodename nor servname" in low:
+        hint = "Der Rechnername ist nicht auflösbar — die IP-Adresse des NAS verwenden."
+    elif "timeout" in low or "timed out" in low:
+        hint = "Keine Antwort — IP-Adresse/Port prüfen und ob eine Firewall den Zugriff blockiert."
+    elif "connection refused" in low or "could not connect" in low or "no route to host" in low:
+        hint = ("Auf diesem Host/Port nimmt niemand Verbindungen an. Die Datenbank von MAIN ist normalerweise nur intern erreichbar: "
+                "In der MAIN-Compose-Datei beim Dienst „db“ einen Port nach außen freigeben (z. B. ports: \"5433:5432\"), das MAIN-Projekt neu starten "
+                "und hier die NAS-IP mit Port 5433 eintragen.")
+    elif "ssl" in low:
+        hint = "SSL-Problem bei der Verbindung."
+    else:
+        hint = "Verbindung nicht möglich."
+    return f"{hint} (Technisch: {raw})"
+
+
 def open_source(url: str) -> Engine:
     """Verbindung zur MAIN-Datenbank — PostgreSQL wird auf „nur lesen“ gestellt."""
     if not url or not url.strip():
-        raise MigrationError("Keine Verbindungs-URL der MAIN-Datenbank angegeben.")
+        raise MigrationError("Keine Verbindung zur MAIN-Datenbank eingetragen.")
+    url = url.strip()
+    if "://" not in url:
+        raise MigrationError("Das ist keine Datenbank-URL. Bitte Host/IP, Port, Datenbank, Benutzer und Passwort in den Feldern eintragen.")
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
     kwargs: dict[str, Any] = {"pool_pre_ping": True}
     if url.startswith("postgresql"):
-        kwargs["connect_args"] = {"options": "-c default_transaction_read_only=on"}
+        kwargs["connect_args"] = {"options": "-c default_transaction_read_only=on", "connect_timeout": 8}
     try:
-        return create_engine(url.strip(), **kwargs)
+        return create_engine(url, **kwargs)
     except Exception as exc:                                      # ungültige URL / fehlender Treiber
-        raise MigrationError(f"Verbindung nicht möglich: {exc}") from exc
+        raise MigrationError(f"Die Verbindungsangaben sind ungültig: {str(exc)[:200]}") from exc
+
+
+def check_connection(engine: Engine) -> None:
+    """Probeverbindung mit verständlicher Fehlermeldung."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise MigrationError(explain_connection_error(exc)) from exc
 
 
 # ─── Quellpfade ──────────────────────────────────────────────────────────────

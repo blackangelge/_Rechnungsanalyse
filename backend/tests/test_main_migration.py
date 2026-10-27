@@ -269,3 +269,46 @@ def test_reanalyze_selects_no_data_and_flagged_documents(world):
     check = world.factory()
     assert check.query(WorkflowTask).count() == 2
     check.close()
+
+
+def test_build_url_and_errors():
+    from app.services import main_migration as mm
+    url = mm.build_url("192.168.1.20", "5433", "rechnungsanalyse", "appuser", "p@ss/w:rd")
+    assert "192.168.1.20:5433" in url and "p%40ss%2Fw%3Ard" in url
+    parts = mm.parse_url(url)
+    assert parts["host"] == "192.168.1.20" and parts["port"] == 5433 and parts["has_password"]
+    for bad in ("postgresql://1.2.3.4", "1.2.3.4:5432"):
+        try:
+            mm.build_url(bad, 5432, "d", "u", "p")
+            raise AssertionError("sollte scheitern")
+        except mm.MigrationError:
+            pass
+    try:
+        mm.open_source("192.168.1.20")
+        raise AssertionError("sollte scheitern")
+    except mm.MigrationError as exc:
+        assert "keine Datenbank-URL" in str(exc)
+    assert "Port nach außen" in mm.explain_connection_error(Exception("connection refused"))
+
+
+def test_config_parts_roundtrip_keeps_password(world):
+    def override():
+        s = world.factory()
+        try:
+            yield s
+        finally:
+            s.close()
+    app.dependency_overrides[get_db] = override
+    try:
+        _config_roundtrip(TestClient(app))
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def _config_roundtrip(client):
+    r = client.put("/api/main-migration/config", json={"host": "10.0.0.5", "port": 5433, "database": "x", "user": "u", "password": "geheim"})
+    assert r.status_code == 200 and r.json()["has_password"] and "geheim" not in r.text
+    r = client.put("/api/main-migration/config", json={"host": "10.0.0.6", "port": 5433, "database": "x", "user": "u"})
+    assert r.json()["host"] == "10.0.0.6" and r.json()["has_password"]
+    r = client.put("/api/main-migration/config", json={"host": "postgresql://10.0.0.6", "database": "x", "user": "u"})
+    assert r.status_code == 422

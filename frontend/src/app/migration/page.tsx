@@ -46,36 +46,68 @@ export default function MigrationPage() {
 // ─── 1 · Verbindung ───────────────────────────────────────────────────────────
 
 function ConnectionTab({ setError, setInfo }: { setError: (m: string | null) => void; setInfo: (m: string | null) => void }) {
-  const [url, setUrl] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("5432");
+  const [database, setDatabase] = useState("rechnungsanalyse");
+  const [user, setUser] = useState("");
+  const [password, setPassword] = useState("");
+  const [hasPassword, setHasPassword] = useState(false);
   const [storage, setStorage] = useState("");
-  const [hasUrl, setHasUrl] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Awaited<ReturnType<typeof mainMigrationApi.test>> | null>(null);
 
   useEffect(() => {
-    mainMigrationApi.config().then((c) => { setUrl(c.source_url ?? ""); setStorage(c.source_storage_path ?? ""); setHasUrl(c.has_url); })
-      .catch((e) => setError(extractApiError(e, "Konfiguration konnte nicht geladen werden")));
+    mainMigrationApi.config().then((c) => {
+      if (c.has_url) { setHost(c.host); setPort(String(c.port)); setDatabase(c.database); setUser(c.user); setHasPassword(c.has_password); }
+      setStorage(c.source_storage_path ?? "");
+    }).catch((e) => setError(extractApiError(e, "Konfiguration konnte nicht geladen werden")));
   }, [setError]);
 
   async function save(andTest: boolean) {
     setBusy(true); setError(null); setInfo(null); setResult(null);
     try {
-      const c = await mainMigrationApi.saveConfig({ source_url: url, source_storage_path: storage });
-      setUrl(c.source_url ?? ""); setHasUrl(c.has_url);
+      const c = await mainMigrationApi.saveConfig({ host, port, database, user, password, source_storage_path: storage });
+      setHasPassword(c.has_password); setPassword("");
       if (andTest) setResult(await mainMigrationApi.test()); else setInfo("Gespeichert.");
     } catch (e) { setError(extractApiError(e, "Fehlgeschlagen")); } finally { setBusy(false); }
   }
 
   return (
     <div className="space-y-4">
+      <Card title="Datenbank von MAIN (wird nur lesend benutzt)">
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="sm:col-span-2">
+              <label className="label" htmlFor="m-host">Host / IP-Adresse</label>
+              <input id="m-host" className="input font-mono" value={host} onChange={(e) => setHost(e.target.value)} spellCheck={false} placeholder="192.168.1.20" />
+            </div>
+            <div>
+              <label className="label" htmlFor="m-port">Port</label>
+              <input id="m-port" className="input font-mono" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value)} placeholder="5433" />
+            </div>
+            <div>
+              <label className="label" htmlFor="m-db">Datenbankname</label>
+              <input id="m-db" className="input font-mono" value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label" htmlFor="m-user">Benutzer</label>
+              <input id="m-user" className="input font-mono" value={user} onChange={(e) => setUser(e.target.value)} spellCheck={false} autoComplete="off" placeholder="appuser" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label" htmlFor="m-pw">Passwort</label>
+              <input id="m-pw" type="password" className="input font-mono" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password"
+                placeholder={hasPassword ? "gespeichert — leer lassen zum Beibehalten" : ""} />
+            </div>
+          </div>
+          <Alert tone="info">
+            Nur die IP-Adresse eintragen (ohne <code>postgresql://</code>). Die Datenbank von MAIN ist normalerweise <b>nur intern</b> erreichbar. Damit dieses System sie erreicht:
+            in der MAIN-Compose-Datei beim Dienst <code>db</code> einen Port nach außen freigeben, z. B. <code>ports: - &quot;5433:5432&quot;</code>, MAIN im Container Manager neu starten,
+            hier die NAS-IP und Port <code>5433</code> eintragen. Nach der Übernahme kann die Freigabe wieder entfernt werden.
+          </Alert>
+        </div>
+      </Card>
       <Card>
         <div className="space-y-4">
-          <div>
-            <label className="label" htmlFor="m-url">Datenbank-URL von MAIN (wird nur lesend benutzt)</label>
-            <input id="m-url" className="input font-mono" value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false}
-              placeholder="postgresql://appuser:PASSWORT@HOST:5432/rechnungsanalyse" />
-            <p className="hint mt-1">Das Passwort wird nach dem Speichern verborgen. Aus dem Container muss der Rechner mit der MAIN-Datenbank erreichbar sein (Host/Port der MAIN-Datenbank, nicht „db“ des alten Stacks, sofern der Port nach außen freigegeben ist).</p>
-          </div>
           <div>
             <label className="label" htmlFor="m-storage">Ordner mit den MAIN-PDFs (im Container sichtbar)</label>
             <input id="m-storage" className="input font-mono" value={storage} onChange={(e) => setStorage(e.target.value)} spellCheck={false}
@@ -83,7 +115,7 @@ function ConnectionTab({ setError, setInfo }: { setError: (m: string | null) => 
             <p className="hint mt-1">Der kopierte MAIN-Speicherordner mit den Unterordnern <code>{"{Firma}_{Jahr}"}</code> und den Dateien <code>{"{ID}.pdf"}</code>. Ist es derselbe Ordner wie der Speicher dieses Systems, wird nichts doppelt kopiert.</p>
           </div>
           <div className="flex gap-2">
-            <button className="btn btn-primary" disabled={busy || (!url && !hasUrl)} onClick={() => save(true)}>{busy ? "Prüft…" : "Speichern und Verbindung testen"}</button>
+            <button className="btn btn-primary" disabled={busy || !host || !user} onClick={() => save(true)}>{busy ? "Prüft…" : "Speichern und Verbindung testen"}</button>
             <button className="btn btn-secondary" disabled={busy} onClick={() => save(false)}>Nur speichern</button>
           </div>
         </div>

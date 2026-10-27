@@ -1958,7 +1958,7 @@ export const validationRulesApi = {
 };
 
 // ─── Übernahme aus dem MAIN-Projekt ───────────────────────────────────────────
-export interface MigrationConfig { source_url: string | null; has_url: boolean; source_storage_path: string | null }
+export interface MigrationConfig { source_url: string | null; has_url: boolean; source_storage_path: string | null; host: string; port: number; database: string; user: string; has_password: boolean }
 export interface MigrationMappingEntry { target: string; sources: string[]; unit_sources?: string[]; transform?: string | null }
 export interface MigrationTarget { target: string; entity: string; entity_label: string; field: string; label: string; data_type: string; required: boolean }
 export interface MigrationState {
@@ -1972,7 +1972,7 @@ export interface MigrationSummary {
 
 export const mainMigrationApi = {
   config: () => apiClient.get<MigrationConfig>("/api/main-migration/config").then((r) => r.data),
-  saveConfig: (d: { source_url?: string; source_storage_path?: string }) => apiClient.put<MigrationConfig>("/api/main-migration/config", d).then((r) => r.data),
+  saveConfig: (d: { host?: string; port?: number | string; database?: string; user?: string; password?: string; source_url?: string; source_storage_path?: string }) => apiClient.put<MigrationConfig>("/api/main-migration/config", d).then((r) => r.data),
   test: () => apiClient.post<{ ok: boolean; counts: Record<string, number>; storage: { path: string | null; exists: boolean; sample: string | null } }>("/api/main-migration/test").then((r) => r.data),
   sourceFields: () => apiClient.get<Record<string, string[]>>("/api/main-migration/source-fields").then((r) => r.data),
   targets: () => apiClient.get<{ schema_version: number | null; targets: MigrationTarget[]; transforms: string[] }>("/api/main-migration/targets").then((r) => r.data),
