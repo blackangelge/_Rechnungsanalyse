@@ -77,6 +77,12 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
     head: "bg-orange-600 text-white", border: "border-orange-400",
     defaultConfig: {},
   },
+  reread_parties: {
+    label: "Zweite Auslesung bei Rollenfehler",
+    description: "Wirkt der Lieferant wie der Empfänger (eigene Gesellschaft, siehe „Eigene Gesellschaften“), liest die KI einmal mit Hinweis neu. Das neue Ergebnis ersetzt das alte nur, wenn der Fehler danach weg ist; sonst bleibt das Original und der Beleg „Prüfen!“. Ohne Fehler kein KI-Aufruf.",
+    head: "bg-rose-600 text-white", border: "border-rose-400",
+    defaultConfig: { ai_config_id: null },
+  },
   discard: {
     label: "Beleg verwerfen",
     description: "Legt den Beleg in den Papierkorb (umkehrbar; endgültig löschen geht erst dort nach Prüfung). Standard: nur, wenn es keine Eingangsrechnung ist.",
@@ -92,7 +98,7 @@ export const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
 };
 
 export const NODE_ORDER: WorkflowNodeType[] = [
-  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "check_rules", "discard", "end",
+  "trim_pages", "classify_pages", "detect_type", "branch", "schema_extract", "extract", "validate", "normalize_units", "ai_refine", "check_rules", "reread_parties", "discard", "end",
 ];
 
 export const BRANCH_FIELDS: Record<string, string> = {

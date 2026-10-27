@@ -224,3 +224,32 @@ def test_every_tool_has_summary_or_is_read():
         if t.kind == "write":
             assert t.summary is not None, t.name
     assert "create_unit" in at.tools_prompt()
+
+
+def test_own_company_tools_read_create_update_delete(client, ai, db, monkeypatch):
+    _scripted(monkeypatch, [
+        {"tool": "list_own_companies", "args": {}},
+        {"tool": "create_own_company", "args": {"name": "Alpha GmbH", "ibans": ["DE02 1203 0000 0000 2020 51", "DE89 3704 0044 0532 0130 00"]}},
+        {"tool": "final", "answer": "Vorschlag liegt bereit."},
+    ])
+    cid = _new_chat(client)
+    m = client.post(f"/api/assistant/chats/{cid}/messages", json={"content": "Lege Alpha GmbH an"}).json()["message"]
+    assert m["steps"][0]["tool"] == "list_own_companies" and len(m["proposals"]) == 1
+    assert "Alpha GmbH" in m["proposals"][0]["summary"]
+    assert client.get("/api/own-companies").json() == []                       # erst nach Freigabe
+    client.post(f"/api/assistant/chats/{cid}/messages/{m['id']}/proposals/{m['proposals'][0]['id']}/apply")
+    created = client.get("/api/own-companies").json()
+    assert len(created) == 1 and created[0]["name"] == "Alpha GmbH" and len(created[0]["ibans"]) == 2
+
+    _scripted(monkeypatch, [
+        {"tool": "update_own_company", "args": {"company": "alpha gmbh", "vat_ids": ["DE111222333"], "aliases": ["Alpha"]}},
+        {"tool": "delete_own_company", "args": {"company": created[0]["id"]}},
+        {"tool": "final", "answer": "ok"},
+    ])
+    m2 = client.post(f"/api/assistant/chats/{cid}/messages", json={"content": "ändern, dann löschen"}).json()["message"]
+    upd, dele = m2["proposals"]
+    client.post(f"/api/assistant/chats/{cid}/messages/{m2['id']}/proposals/{upd['id']}/apply")
+    c = client.get("/api/own-companies").json()[0]
+    assert c["vat_ids"] == ["DE111222333"] and c["aliases"] == ["Alpha"] and len(c["ibans"]) == 2     # nicht genannte Felder bleiben
+    client.post(f"/api/assistant/chats/{cid}/messages/{m2['id']}/proposals/{dele['id']}/apply")
+    assert client.get("/api/own-companies").json() == []

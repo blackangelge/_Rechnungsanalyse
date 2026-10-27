@@ -130,13 +130,15 @@ class _Stub:
         outer = self
         self.requests: list[dict] = []
         self.content, self.status = content, status
+        self.sequence: list = []                 # Antworten der Reihe nach (danach `content`)
 
         class H(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 outer.requests.append({"path": self.path, "body": body, "auth": self.headers.get("Authorization")})
+                answer = outer.sequence.pop(0) if outer.sequence else outer.content
                 payload = json.dumps({
-                    "choices": [{"message": {"content": outer.content if isinstance(outer.content, str) else json.dumps(outer.content)}}],
+                    "choices": [{"message": {"content": answer if isinstance(answer, str) else json.dumps(answer)}}],
                     "usage": {"prompt_tokens": 1000, "completion_tokens": 200, "completion_tokens_details": {"reasoning_tokens": 0}},
                 }).encode() if outer.status == 200 else b'{"error": {"message": "kaputt"}}'
                 self.send_response(outer.status)

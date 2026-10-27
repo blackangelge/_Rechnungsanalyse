@@ -585,6 +585,74 @@ def w_delete_wf(db: Session, a: dict):
     return {"deleted": int(a["id"])}
 
 
+# ── Eigene Gesellschaften (Rechnungsempfänger) ──
+_COMPANY_ARGS = '"name": "Muster GmbH", "aliases": ["Muster Handel"], "vat_ids": ["DE123456789"], "tax_numbers": [], "ibans": ["DE02 …"], "note": "", "active": true'
+
+
+def _company(db: Session, ref: Any):
+    from app.models.own_company import OwnCompany
+    from app.services.supplier_dedup import normalize_name
+    if isinstance(ref, int) or (isinstance(ref, str) and ref.strip().isdigit()):
+        c = db.get(OwnCompany, int(ref))
+        if c is not None:
+            return c
+    key = normalize_name(str(ref))
+    found = [c for c in db.query(OwnCompany).all() if key and (normalize_name(c.name) == key or key in [normalize_name(x) for x in (c.aliases or [])])]
+    if len(found) == 1:
+        return found[0]
+    if len(found) > 1:
+        raise ToolError(f"„{ref}“ ist nicht eindeutig — bitte die ID nennen ({', '.join(f'#{c.id}' for c in found)}).")
+    raise ToolError(f"Gesellschaft „{ref}“ gibt es nicht (list_own_companies zeigt die vorhandenen).")
+
+
+@_register("list_own_companies", "read", "{}",
+           "Eigene Gesellschaften (mögliche Rechnungsempfänger): id, Name, weitere Schreibweisen, USt-IdNrn., Steuernummern, IBANs, aktiv. "
+           "Wird zur Prüfung genutzt, ob als Lieferant fälschlich eine eigene Firma gelesen wurde.")
+def t_list_companies(db: Session, a: dict):
+    from app.routers import own_companies as r
+    return [r._out(c) for c in db.query(r.OwnCompany).order_by(r.OwnCompany.id).all()]
+
+
+@_register("own_company_suggestions", "read", '{"min_count": 2}',
+           "Häufig gelesene Rechnungsempfänger, die noch nicht in der Liste eigener Gesellschaften stehen (Vorschläge zum Anlegen).")
+def t_company_suggestions(db: Session, a: dict):
+    from app.services import own_companies as oc
+    return oc.suggestions(db, min_count=max(1, int(a.get("min_count") or 2)))
+
+
+@_register("create_own_company", "write", "{" + _COMPANY_ARGS + "}",
+           "Eigene Gesellschaft anlegen. Alle Angaben sind optional, mindestens eine Kennung (Name, Schreibweise, USt-IdNr., Steuernummer oder IBAN) ist nötig; USt-IdNr./Steuernummer/IBAN sind Listen (mehrere möglich).",
+           lambda a: f"Eigene Gesellschaft anlegen: {a.get('name') or (a.get('vat_ids') or a.get('ibans') or ['(ohne Namen)'])[0]}")
+def w_create_company(db: Session, a: dict):
+    from app.routers import own_companies as r
+    body = r.CompanyIn(**{k: a.get(k) for k in ("name", "aliases", "vat_ids", "tax_numbers", "ibans", "note") if k in a}, active=a.get("active", True))
+    return _jsonable(_http(r.create_company, body, db))
+
+
+@_register("update_own_company", "write", '{"company": "Muster GmbH" oder ID, ' + _COMPANY_ARGS + '}  (nur Geändertes angeben; Listen ersetzen die bisherigen komplett)',
+           "Eigene Gesellschaft ändern. Angegebene Felder ersetzen die bisherigen; nicht genannte bleiben.",
+           lambda a: f"Eigene Gesellschaft ändern: {a.get('company')}")
+def w_update_company(db: Session, a: dict):
+    _need(a, "company")
+    from app.routers import own_companies as r
+    c = _company(db, a["company"])
+    cur = r._out(c)
+    for k in ("name", "aliases", "vat_ids", "tax_numbers", "ibans", "note", "active"):
+        if k in a:
+            cur[k] = a[k]
+    return _jsonable(_http(r.update_company, c.id, r.CompanyIn(**{k: cur[k] for k in ("name", "aliases", "vat_ids", "tax_numbers", "ibans", "note", "active")}), db))
+
+
+@_register("delete_own_company", "write", '{"company": "Muster GmbH" oder ID}', "Eigene Gesellschaft aus der Liste löschen.",
+           lambda a: f"Eigene Gesellschaft löschen: {a.get('company')}")
+def w_delete_company(db: Session, a: dict):
+    _need(a, "company")
+    from app.routers import own_companies as r
+    c = _company(db, a["company"])
+    _http(r.delete_company, c.id, db)
+    return {"deleted": c.id}
+
+
 # ── Papierkorb ──
 def _trash_ids(db: Session, a: dict) -> list[int]:
     from app import crud

@@ -26,9 +26,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 # ─── Knotentypen und ihre Konfiguration ───────────────────────────────────────
 
-NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "check_rules", "discard", "end")
+NODE_TYPES = ("start", "trim_pages", "detect_type", "branch", "extract", "schema_extract", "classify_pages", "validate", "normalize_units", "ai_refine", "check_rules", "reread_parties", "discard", "end")
 # Knoten, die Extraktionsdaten bearbeiten (ohne vorherige Extraktion wirkungslos bzw. nur eingeschränkt)
-DATA_NODES = ("validate", "normalize_units", "check_rules")
+DATA_NODES = ("validate", "normalize_units", "check_rules", "reread_parties")
 MAX_STEPS = 100   # Schutz gegen Endlosschleifen (Zyklen werden zusätzlich beim Speichern verboten)
 
 
@@ -89,6 +89,12 @@ class CheckRulesConfig(BaseModel):
     """Prüfregeln (Menü „Prüfregeln“) auf die Schema-Datensätze anwenden; das Ergebnis steht danach im Weichenfeld „Prüfregel-Status“."""
 
 
+class RereadPartiesConfig(BaseModel):
+    """Zweite Auslesung, wenn Lieferant und Empfänger vertauscht wirken (Prüfung „Eigene Gesellschaften“). Nur bei Rollenfehlern; sonst ohne KI-Aufruf."""
+
+    ai_config_id: int | None = None          # None = in der Analyse gewählte KI
+
+
 class NormalizeConfig(BaseModel):
     target: Literal["t", "kg"] = "t"         # Zieleinheit für Gewichte (Menge, Einheit und Einzelpreis werden umgerechnet)
     # nur für Ziel t: "tonne_prices" = nur Positionen mit Preis je Tonne, "all" = alle Gewichtspositionen
@@ -126,7 +132,7 @@ CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "start": EmptyConfig, "end": EmptyConfig, "trim_pages": TrimConfig,
     "detect_type": DetectConfig, "extract": ExtractConfig, "schema_extract": SchemaExtractConfig, "classify_pages": ClassifyPagesConfig,
     "validate": ValidateConfig, "branch": BranchConfig,
-    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig, "check_rules": CheckRulesConfig, "discard": DiscardConfig,
+    "normalize_units": NormalizeConfig, "ai_refine": RefineConfig, "check_rules": CheckRulesConfig, "reread_parties": RereadPartiesConfig, "discard": DiscardConfig,
 }
 
 # Ausgänge je Knotentyp
@@ -570,6 +576,16 @@ def templates() -> list[dict]:
         ],
         "edges": [_edge("start", "trim"), _edge("trim", "extract"), _edge("extract", "end")],
     }
+    schema_reread = {
+        "nodes": [
+            _node("start", "start", "Start", 0, 60),
+            _node("extract", "schema_extract", "Schema-Extraktion", 240, 60),
+            _node("reread", "reread_parties", "Zweite Auslesung bei Rollenfehler", 500, 60),
+            _node("rules", "check_rules", "Regeln prüfen", 760, 60),
+            _node("end", "end", "Fertig", 1000, 60),
+        ],
+        "edges": [_edge("start", "extract"), _edge("extract", "reread"), _edge("reread", "rules"), _edge("rules", "end")],
+    }
     pages = {
         "nodes": [
             _node("start", "start", "Start", 0, 160),
@@ -593,6 +609,9 @@ def templates() -> list[dict]:
         {"key": "schema", "name": "Schema-Extraktion",
          "description": "Extrahiert nach der aktiven Schema-Definition (Structured Outputs) und speichert die Datensätze.",
          "graph": schema},
+        {"key": "schema_reread", "name": "Schema-Extraktion mit zweiter Auslesung",
+         "description": "Extrahiert nach dem Schema; wirkt der Lieferant wie der Empfänger (eigene Gesellschaft, siehe „Eigene Gesellschaften“), wird einmal mit Hinweis neu gelesen — nur übernommen, wenn der Fehler danach weg ist. Danach Prüfregeln.",
+         "graph": schema_reread},
         {"key": "schema_trimmed", "name": "Schema-Extraktion, erst kürzen",
          "description": "Kürzt die PDF auf die erste Seite und extrahiert dann nach dem Schema.",
          "graph": schema_trimmed},

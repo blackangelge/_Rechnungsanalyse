@@ -110,6 +110,8 @@ function summary(type: WorkflowNodeType, cfg: WorkflowNodeConfig, lookups: Looku
       return `Gewichte → ${cfg.target ?? "t"}${(cfg.target ?? "t") === "t" && (cfg.mode ?? "tonne_prices") === "tonne_prices" ? " (nur Preis je t)" : ""}`;
     case "check_rules":
       return "Prüfregeln anwenden";
+    case "reread_parties":
+      return "nur bei Lieferant = Empfänger";
     case "discard":
       return `${cfg.only_if === "always" ? "immer" : "nur Nicht-Rechnungen"} → Papierkorb`;
     case "ai_refine":
@@ -265,6 +267,16 @@ function Inspector({
             </select>
           </Field>
         </>
+      )}
+
+      {t === "reread_parties" && (
+        <Field label="KI-Konfiguration" hint="Leer = in der Analyse gewählte KI. Prompt und Schema-Version stammen aus dem Knoten „Schema-Extraktion“ davor.">
+          <select className={inputCls} value={cfg.ai_config_id ?? ""}
+            onChange={(e) => onChange({ config: { ai_config_id: num(e.target.value) } })}>
+            <option value="">Wie in der Analyse</option>
+            {aiConfigs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Field>
       )}
 
       {t === "classify_pages" && (

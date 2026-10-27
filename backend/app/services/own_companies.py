@@ -105,30 +105,41 @@ def _res(name: str, severity: str, status: str, message: str, root_id: int) -> d
             "formula": "", "status": status, "message": message}
 
 
-def party_checks(root, parties: Parties) -> list[dict]:
-    """Rollenprüfungen für den Beleg (`root` = Wurzel-Knoten aus `rule_engine.load_tree`)."""
-    data = root.data or {}
-    sup = (data.get("_master") or {}).get("lieferant") or {}
+def role_results(parties: Parties, sup: dict, r_name, r_vat, root_id: int = 0) -> list[dict]:
+    """Die beiden Fehler-Prüfungen (Lieferant = eigene Gesellschaft / Lieferant = Empfänger) aus gelesenen Werten (Dict `lieferant`)."""
     s_name, s_vat, s_tax, s_iban = sup.get("name"), sup.get("ust_id_nr"), sup.get("steuernummer"), sup.get("iban")
-    r_name, r_vat = data.get("empfaenger_name"), data.get("empfaenger_ust_id_nr")
     out: list[dict] = []
     has_supplier = bool(normalize_name(s_name) or normalize_vat(s_vat) or normalize_iban(s_iban))
-
     if parties.companies and has_supplier:
         m = match(parties, s_name, s_vat, s_tax, s_iban)
         if m:
             out.append(_res("Lieferant ist keine eigene Gesellschaft", "error", "failed",
                             f"Lieferant „{s_name or s_vat or s_iban}“ entspricht der eigenen Gesellschaft „{m[0].label}“ ({REASONS[m[1]]}) — "
-                            "vermutlich wurde der Empfänger statt des Lieferanten gelesen.", root.record_id))
+                            "vermutlich wurde der Empfänger statt des Lieferanten gelesen.", root_id))
         else:
-            out.append(_res("Lieferant ist keine eigene Gesellschaft", "error", "ok", "", root.record_id))
-
+            out.append(_res("Lieferant ist keine eigene Gesellschaft", "error", "ok", "", root_id))
     if has_supplier and (normalize_name(r_name) or normalize_vat(r_vat)):
         same = (normalize_vat(s_vat) and normalize_vat(s_vat) == normalize_vat(r_vat)) or (
             normalize_name(s_name) and normalize_name(r_name) and name_similarity(s_name, r_name) >= SIMILAR)
         out.append(_res("Lieferant ist nicht der Rechnungsempfänger", "error", "failed" if same else "ok",
                         f"Lieferant „{s_name}“ und Rechnungsempfänger „{r_name}“ sind dieselbe Firma — Rollen vermutlich vertauscht oder doppelt gelesen." if same else "",
-                        root.record_id))
+                        root_id))
+    return out
+
+
+def role_errors(parties: Parties, parsed: dict) -> list[str]:
+    """Meldungen der Rollenfehler in einer (noch ungespeicherten) KI-Antwort — für die zweite Auslesung."""
+    sup = parsed.get("lieferant") if isinstance(parsed.get("lieferant"), dict) else {}
+    return [r["message"] for r in role_results(parties, sup, parsed.get("empfaenger_name"), parsed.get("empfaenger_ust_id_nr")) if r["status"] == "failed"]
+
+
+def party_checks(root, parties: Parties) -> list[dict]:
+    """Rollenprüfungen für den Beleg (`root` = Wurzel-Knoten aus `rule_engine.load_tree`)."""
+    data = root.data or {}
+    sup = (data.get("_master") or {}).get("lieferant") or {}
+    s_name = sup.get("name")
+    r_name, r_vat = data.get("empfaenger_name"), data.get("empfaenger_ust_id_nr")
+    out = role_results(parties, sup, r_name, r_vat, root.record_id)
 
     if parties.companies and (normalize_name(r_name) or normalize_vat(r_vat)):
         m = match(parties, r_name, r_vat)

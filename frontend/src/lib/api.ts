@@ -853,7 +853,7 @@ export const logsApi = {
 // ─── Typen: Workflows ─────────────────────────────────────────────────────────
 
 export type WorkflowNodeType =
-  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "check_rules" | "discard" | "end";
+  | "start" | "trim_pages" | "detect_type" | "branch" | "extract" | "schema_extract" | "classify_pages" | "validate" | "normalize_units" | "ai_refine" | "check_rules" | "reread_parties" | "discard" | "end";
 
 export interface WorkflowNodeConfig {
   // trim_pages

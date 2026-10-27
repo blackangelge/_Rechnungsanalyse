@@ -179,3 +179,56 @@ def test_requeue_and_automation_need_a_workflow(client, db):
     wf = crud.workflow.create(db, "Schema", None, _tpl("schema"))
     r = client.patch(f"/api/imports/{batch.id}/automation", json={"folder_sync": True, "workflow_id": wf.id})
     assert r.status_code == 200 and r.json()["workflow_id"] == wf.id and r.json()["folder_sync"] is True
+
+
+# ─── Zweite Auslesung bei Rollenfehler ────────────────────────────────────────
+
+def _company(db, name):
+    from app.models.own_company import OwnCompany
+    db.add(OwnCompany(name=name))
+    db.commit()
+
+
+def _supplier(db, doc_id):
+    root = db.query(ExtractedRecord).filter_by(document_id=doc_id, parent_record_id=None).one()
+    return root.data["_master"]["lieferant"]["name"], root.data["_validation"]["status"]
+
+
+def test_second_reading_corrects_swapped_supplier(env):
+    _company(env.db, "Muster Handels GmbH")                      # eigene Gesellschaft
+    swapped = copy.deepcopy(SAMPLE)
+    swapped["lieferant"]["name"] = "Muster Handels GmbH"         # KI hat den Empfänger als Lieferanten gelesen
+    swapped["lieferant"]["iban"] = swapped["lieferant"]["ust_id_nr"] = None
+    env.stub.sequence = [swapped, SAMPLE]                         # 1. Auslesung falsch, 2. Auslesung richtig
+    wf = crud.workflow.create(env.db, "Reread", None, _tpl("schema_reread"))
+    doc = _run(env, env.make_doc(), wf.id)
+    assert doc.status == "done" and len(env.stub.requests) == 2
+    assert "HINWEIS ZUR ZWEITEN AUSLESUNG" in env.stub.requests[1]["body"]["messages"][0]["content"]
+    assert "Muster Handels GmbH" in env.stub.requests[1]["body"]["messages"][0]["content"]
+    name, status = _supplier(env.db, doc.id)
+    assert name == "ACME GmbH" and status != "needs_review"
+    reread = next(t for t in doc.workflow_run if t["type"] == "reread_parties")
+    assert reread["status"] == "ok" and "Lieferant korrigiert" in reread["detail"]
+    assert env.db.query(DocumentTokenCount).filter_by(document_id=doc.id).one().input_token_count == 2000     # beide Anfragen gezählt
+
+
+def test_second_reading_keeps_original_when_error_persists(env):
+    _company(env.db, "Muster Handels GmbH")
+    swapped = copy.deepcopy(SAMPLE)
+    swapped["lieferant"]["name"] = "Muster Handels GmbH"
+    swapped["lieferant"]["iban"] = swapped["lieferant"]["ust_id_nr"] = None
+    env.stub.content = swapped                                     # auch die zweite Auslesung bleibt falsch
+    wf = crud.workflow.create(env.db, "Reread", None, _tpl("schema_reread"))
+    doc = _run(env, env.make_doc(), wf.id)
+    assert doc.status == "done" and len(env.stub.requests) == 2
+    name, status = _supplier(env.db, doc.id)
+    assert name == "Muster Handels GmbH" and status == "needs_review"          # Original bleibt, Beleg zur Prüfung markiert
+    assert "Original behalten" in next(t for t in doc.workflow_run if t["type"] == "reread_parties")["detail"]
+
+
+def test_second_reading_not_triggered_when_all_fine(env):
+    _company(env.db, "Muster Handels GmbH")
+    wf = crud.workflow.create(env.db, "Reread", None, _tpl("schema_reread"))
+    doc = _run(env, env.make_doc(), wf.id)
+    assert doc.status == "done" and len(env.stub.requests) == 1                # kein zweiter KI-Aufruf
+    assert "nicht nötig" in next(t for t in doc.workflow_run if t["type"] == "reread_parties")["detail"]

@@ -82,6 +82,8 @@ class RunContext:
     max_pages: int | None = None            # Kapazität der gewählten KI in Seiten (None = unbeschränkt)
     schema_done: bool = False             # Schema-Extraktion hat Datensätze gespeichert
     schema_summary: dict = field(default_factory=dict)
+    schema_extra: str | None = None       # Zusatzanweisung der Schema-Extraktion (für die zweite Auslesung wiederverwendet)
+    schema_version_id: int | None = None
     rule_status: str | None = None        # Ergebnis der Prüfregeln (Knoten „Regeln prüfen“): ok|warn|needs_review|unchecked
     images: list | None = None
     page_count: int = 0
@@ -610,9 +612,76 @@ async def _h_schema_extract(cfg, ctx: RunContext):
     except SchemaValidationFailed as exc:
         raise RuntimeError("Antwort entspricht nicht dem Schema: " + "; ".join(exc.messages[:5])) from exc
     ctx.schema_done = True
+    ctx.schema_extra, ctx.schema_version_id = extra, prepared.version_id
     ctx.schema_summary = {"records": saved.record_count, "issues": saved.issue_count, "unknown_units": saved.unknown_units,
                           "version": prepared.version_number}
     return NodeResult(detail=f"{saved.record_count} Datensatz/-sätze, {saved.issue_count} Hinweis(e), Schema v{prepared.version_number}")
+
+
+def _db_saved_roles(doc_id: int):
+    """Rollenfehler des gespeicherten Belegs: (Fehlermeldungen, gelesener Lieferantenname, eigene Gesellschaften)."""
+    from app.services import own_companies, rule_engine
+    db = SessionLocal()
+    try:
+        parties = own_companies.load_parties(db)
+        root, _ = rule_engine.load_tree(db, doc_id)
+        if root is None:
+            return [], None, parties
+        errs = [r["message"] for r in own_companies.party_checks(root, parties) if r["status"] == "failed" and r["severity"] == "error"]
+        name = ((root.data or {}).get("_master") or {}).get("lieferant", {}).get("name")
+        return errs, name, parties
+    finally:
+        db.close()
+
+
+_REREAD_HINT = (
+    "\n\nHINWEIS ZUR ZWEITEN AUSLESUNG: Bei der ersten Auslesung wurde als Lieferant \"{name}\" gelesen. Das ist falsch — diese Firma ist der "
+    "Rechnungsempfänger bzw. eine eigene Gesellschaft, nicht der Aussteller. Lies den Lieferanten neu: Aussteller ist die Firma im Briefkopf/Logo, in der "
+    "Absenderzeile über dem Anschriftenfeld und im Fußbereich (Bankverbindung, USt-IdNr., Steuernummer, HRB). Alle Lieferantenfelder (Name, Anschrift, "
+    "Bank, Steuerkennungen) müssen zum Aussteller gehören. Den Rechnungsempfänger trägst du nur in empfaenger_name/empfaenger_ust_id_nr ein. "
+    "Ist der Aussteller nicht erkennbar, setze die Lieferantenfelder auf null."
+)
+
+
+async def _h_reread_parties(cfg, ctx: RunContext):
+    """Zweite Auslesung bei Rollenfehler — nie schlechter als vorher: das neue Ergebnis ersetzt das alte nur, wenn der Fehler danach weg ist."""
+    from app.services import own_companies, schema_extraction, structured_ai
+    from app.services.schema_pipeline import SchemaValidationFailed
+    if not ctx.schema_done:
+        return NodeResult(detail="übersprungen — keine Schema-Extraktion")
+    errors, wrong_name, parties = await asyncio.to_thread(_db_saved_roles, ctx.doc_id)
+    if not errors:
+        ctx.node_io = {"notes": ["Lieferant und Empfänger unauffällig — keine zweite Auslesung nötig."]}
+        return NodeResult(detail="nicht nötig — Lieferant/Empfänger unauffällig")
+    proxy = await asyncio.to_thread(_db_ai_proxy, cfg.ai_config_id) if cfg.ai_config_id else ctx.ai_proxy
+    extra = (ctx.schema_extra or "") + _REREAD_HINT.format(name=wrong_name or "?")
+    notes = [f"Auslöser: {m}" for m in errors]
+    try:
+        prepared = await asyncio.to_thread(_db_schema_prepare, ctx.schema_version_id, extra)
+        images = await ctx.ensure_images()
+        result = await asyncio.to_thread(structured_ai.call_structured, proxy, prepared.system_prompt, prepared.user_text, images, prepared.response_format)
+    except (schema_extraction.ExtractionSetupError, RuntimeError) as exc:
+        ctx.node_io = {"notes": notes + [f"Zweite Auslesung nicht möglich: {exc}"]}
+        return NodeResult(detail="zweite Auslesung nicht möglich — Original behalten")
+    ctx.add_stats(result.ki_stats)
+    ctx.node_io = {"prompt": _clip(prepared.system_prompt), "response": _clip(result.raw), "model": getattr(proxy, "model_name", None), "notes": notes}
+    if _docs()._is_ai_conn_error(result.raw) or result.error or result.parsed is None:
+        ctx.node_io["notes"].append("KI-Antwort nicht verwertbar — Original behalten.")
+        return NodeResult(detail="KI-Antwort nicht verwertbar — Original behalten")
+    sup = result.parsed.get("lieferant") if isinstance(result.parsed.get("lieferant"), dict) else {}
+    new_name = sup.get("name")
+    still = own_companies.role_errors(parties, result.parsed)
+    if still or not (new_name and str(new_name).strip()):
+        ctx.node_io["notes"].append("Der Fehler besteht weiter" + (" bzw. der Lieferant fehlt" if not new_name else "") + " — Original behalten, Beleg bleibt zur Prüfung markiert.")
+        return NodeResult(detail=f"Fehler nicht behoben (neu gelesen: {new_name or 'kein Lieferant'}) — Original behalten")
+    try:
+        saved = await asyncio.to_thread(_db_schema_finish, ctx.doc_id, prepared, result.parsed)
+    except SchemaValidationFailed as exc:
+        ctx.node_io["notes"].append("Antwort entspricht nicht dem Schema: " + "; ".join(exc.messages[:3]) + " — Original behalten.")
+        return NodeResult(detail="Antwort ungültig — Original behalten")
+    ctx.schema_summary = {"records": saved.record_count, "issues": saved.issue_count, "unknown_units": saved.unknown_units, "version": prepared.version_number}
+    ctx.node_io["notes"].append(f"Lieferant korrigiert: „{wrong_name}“ → „{new_name}“.")
+    return NodeResult(detail=f"Lieferant korrigiert: „{wrong_name}“ → „{new_name}“")
 
 
 def _db_check_rules(doc_id: int) -> dict:
@@ -701,7 +770,7 @@ async def _h_refine(cfg, ctx: RunContext):
 HANDLERS = {
     "start": _h_start, "end": _h_end, "discard": _h_discard, "trim_pages": _h_trim, "detect_type": _h_detect,
     "branch": _h_branch, "extract": _h_extract, "schema_extract": _h_schema_extract, "classify_pages": _h_classify_pages, "validate": _h_validate,
-    "normalize_units": _h_normalize, "ai_refine": _h_refine, "check_rules": _h_check_rules,
+    "normalize_units": _h_normalize, "ai_refine": _h_refine, "check_rules": _h_check_rules, "reread_parties": _h_reread_parties,
 }
 
 
