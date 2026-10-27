@@ -175,8 +175,8 @@ _FILTER_KEYS = (
     "validation_statuses", "include_hidden", "error_codes", "not_invoice", "only_deleted",
 )
 
-# Dokumententypen, die KEINE Eingangsrechnung sind. 0 = noch nicht erkannt, 1 = Eingangsrechnung, 15 = Mischbeleg (enthält eine Rechnung)
-NOT_INVOICE_EXCLUDED_TYPES = (0, 1, 15)
+# Dokumententypen, die KEINE Eingangsrechnung sind. 0 = noch nicht erkannt, 1 = Eingangsrechnung, 17 = Mischbeleg (enthält eine Rechnung)
+NOT_INVOICE_EXCLUDED_TYPES = (0, 1, 17)
 
 
 def _filtered_query(db: Session, **f):

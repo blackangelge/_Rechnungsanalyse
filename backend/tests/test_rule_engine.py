@@ -161,7 +161,7 @@ def test_evaluation_never_changes_stored_quantities(world):
 
     def quantities():
         rows = world.db.query(ExtractedRecord).filter(ExtractedRecord.document_id == doc.id, ExtractedRecord.parent_record_id.isnot(None)).all()
-        return {r.id: dict(r.data["menge"]) for r in rows}
+        return {r.id: dict(r.data["menge"]) for r in rows if "menge" in r.data}
     before = quantities()
     re_.evaluate_document(world.db, doc.id)
     world.db.commit()
@@ -178,7 +178,7 @@ def test_rules_api_crud_test_and_run(client, world):
     pos = next(e for e in meta["entities"] if e["name"] == "position")
     assert {"menge", "einzelpreis", "gesamtpreis"} <= {f["name"] for f in pos["fields"]} and "kg" in meta["units"]
     beleg = next(e for e in meta["entities"] if e["name"] == "beleg")
-    assert beleg["children"] == ["position"] and all(e["name"] != "lieferant" for e in meta["entities"])
+    assert sorted(beleg["children"]) == ["position", "umsatzsteuer"] and all(e["name"] != "lieferant" for e in meta["entities"])
 
     body = {"name": "Eigene", "entity_name": "position", "left_expr": "menge.kg * 2", "right_expr": "einzelpreis", "severity": "warn"}
     bad = client.post("/api/validation-rules", json={**body, "left_expr": "nixda"})

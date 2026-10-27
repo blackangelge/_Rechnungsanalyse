@@ -52,7 +52,7 @@ class Document(Base):
     # Maschinenlesbarer Grund, wenn der Beleg nachbearbeitet werden muss (status = error):
     # too_many_pages · encrypted · unreadable · NULL = sonstiger/kein Fehler
     error_code: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
-    # Dokumententyp-Integer: 0=Unbekannt, 1=Eingangsrechnung, 2=Ausgangsrechnung, …
+    # Dokumententyp-Integer: 0=Unbekannt, 1=Eingangsrechnung, 3=Gutschrift, … 15=Sonstiges, 17=Mischbeleg
     # Nur Eingangsrechnungen (1) erhalten eine vollständige InvoiceExtraction.
     document_type: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)

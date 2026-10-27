@@ -21,6 +21,7 @@ export default function SchemaPage() {
   const [fieldModal, setFieldModal] = useState<{ field: SchemaField | null } | null>(null);
   const [entityModal, setEntityModal] = useState(false);
   const [relationModal, setRelationModal] = useState(false);
+  const [missing, setMissing] = useState<string[]>([]);
 
   const load = useCallback(async (preferId?: number) => {
     setLoading(true);
@@ -30,6 +31,7 @@ export default function SchemaPage() {
       setVersions(list);
       const target = (preferId && list.find((v) => v.id === preferId)) || list.find((v) => v.status === "draft") || list.find((v) => v.status === "active") || list[0];
       if (target) setVersion(await schemaApi.version(target.id)); else setVersion(null);
+      schemaApi.standardParts().then((r) => setMissing(r.missing)).catch(() => setMissing([]));
     } catch (err) {
       setError(extractApiError(err, "Schema konnte nicht geladen werden"));
     } finally {
@@ -98,6 +100,16 @@ export default function SchemaPage() {
           </>}
         </>} />
 
+      {missing.length > 0 && version?.status === "active" && (
+        <div className="mb-4">
+          <Alert tone="info">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>Dem aktiven Schema fehlen Standardfelder: <b>{missing.join(", ")}</b>. Sie werden als neue Version ergänzt (bestehende Belege bleiben unverändert); dazu werden die mitgelieferten Prompts angelegt.</span>
+              <button className="btn btn-primary" onClick={async () => { const r = await run(() => schemaApi.applyStandardParts()); if (r) { await load(); } }}>Standardfelder ergänzen</button>
+            </div>
+          </Alert>
+        </div>
+      )}
       {error && <div className="mb-4"><Alert tone="error" onClose={() => setError(null)}>{error}</Alert></div>}
       {loading && !version && <Spinner />}
       {loaded && !version && !loading && (

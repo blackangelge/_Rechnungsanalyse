@@ -23,8 +23,8 @@ def _ent(version, name):
 def test_seed_creates_active_version_with_entities_and_relations(db, seeded):
     active = sd.get_active(db)
     assert active.id == seeded.id and active.version_number == 1
-    assert [e.name for e in active.entities] == ["beleg", "position", "lieferant"]
-    assert {r.name for r in active.relations} == {"positionen", "lieferant"}
+    assert [e.name for e in active.entities] == ["beleg", "position", "lieferant", "umsatzsteuer"]
+    assert {r.name for r in active.relations} == {"positionen", "lieferant", "umsatzsteuer_zusammenfassung"}
     assert sd.validate_version(active) == []
 
 
@@ -64,7 +64,7 @@ def test_draft_copy_edit_and_activate_keeps_old_version(db, seeded):
     assert "kostenstelle" in {f.name for f in _ent(draft, "beleg").fields}
     # Kopie ist vollständig und von der alten unabhängig
     assert len(_ent(draft, "position").fields) == len(_ent(old, "position").fields)
-    assert {r.name for r in draft.relations} == {"positionen", "lieferant"}
+    assert {r.name for r in draft.relations} == {"positionen", "lieferant", "umsatzsteuer_zusammenfassung"}
     assert all(r.source_entity_id in {e.id for e in draft.entities} for r in draft.relations)
 
 

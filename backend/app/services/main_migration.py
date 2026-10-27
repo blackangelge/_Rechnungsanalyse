@@ -23,6 +23,7 @@ import logging
 import re
 import shutil
 import threading
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -301,7 +302,15 @@ def build_parsed(version: SchemaVersion, mapping: list[dict], doc: dict, ext: di
             continue
         target = by_id[rel.target_entity_id]
         entries = _entries_for(mapping, target.name)
-        if rel.kind == "parent_child":
+        if rel.kind == "parent_child" and target.name in _CHILD_LISTS:
+            items: list = []
+            for path in _CHILD_LISTS[target.name]:
+                found = walk_path(raw, path.partition(".")[2])
+                if isinstance(found, list) and found:
+                    items = found
+                    break
+            parsed[rel.name] = [_entity_dict(target, entries, SourceCtx(doc, ext, sup, raw, None, it)) for it in items if isinstance(it, dict)]
+        elif rel.kind == "parent_child":
             rows = []
             for i in range(max(len(raw_positions), len(positions))):
                 db_row = next((p for p in positions if p.get("position_index") == i), positions[i] if i < len(positions) else None)
@@ -321,6 +330,7 @@ _DEFAULT_BELEG = {
     "rechnungsdatum": (["raw.rechnungsdaten.rechnungsdatum", "raw.rechnungsdatum", "ext.invoice_date"], None),
     "faelligkeit": (["raw.rechnungsdaten.faelligkeit", "raw.faelligkeit", "ext.due_date"], None),
     "kundennummer": (["raw.rechnungsdaten.kundennummer", "raw.kundennummer", "ext.customer_number"], None),
+    "bestellnummer": (["raw.rechnungsdaten.bestellnummer", "raw.bestellnummer"], None),
     "gesamtbetrag_netto": ([f"{_NEW}.gesamtbetrag_netto", "raw.gesamtbetrag_netto"], None),
     "steuerbetrag": ([f"{_NEW}.umsatzsteuer_zusammenfassung[*].steuerbetrag", f"{_NEW}.steuerbetrag", "raw.steuerbetrag"], "sum"),
     "gesamtbetrag_brutto": ([f"{_NEW}.gesamtbetrag_brutto", "raw.gesamtbetrag_brutto", "ext.total_amount"], None),
@@ -353,6 +363,8 @@ _DEFAULT_POSITION = {
     "steuersatz": (["rawpos.steuersatz"], None),
     "preisnachlass_betrag": (["rawpos.preisnachlass.betrag"], None),
     "preisnachlass_prozent": (["rawpos.preisnachlass.prozent"], None),
+    "preisnachlass_bezeichnung": (["rawpos.preisnachlass.bezeichnung"], None),
+    "waehrung": (["rawpos.waehrung", f"{_NEW}.waehrung"], None),
     "preis_je_menge": (["rawpos.preis_je_menge"], None),
     "preiseinheit": (["rawpos.preiseinheit"], "price_unit"),
     "mengeneinheit_typ": (["rawpos.mengeneinheit_typ"], None),
@@ -361,7 +373,14 @@ _DEFAULT_QUANTITY = {
     "menge": (["rawpos.menge", "pos.quantity"], ["rawpos.mengeneinheit", "pos.unit"]),
     "verpackungsinhalt": (["rawpos.verpackungsinhalt"], ["rawpos.verpackungsinhalt_einheit"]),
 }
-_DEFAULTS_BY_ENTITY = {"beleg": _DEFAULT_BELEG, "lieferant": _DEFAULT_LIEFERANT, "position": _DEFAULT_POSITION}
+_DEFAULT_UMSATZSTEUER = {
+    "steuersatz": (["rawpos.steuersatz"], None),
+    "nettobetrag": (["rawpos.nettobetrag"], None),
+    "steuerbetrag": (["rawpos.steuerbetrag"], None),
+}
+_DEFAULTS_BY_ENTITY = {"beleg": _DEFAULT_BELEG, "lieferant": _DEFAULT_LIEFERANT, "position": _DEFAULT_POSITION, "umsatzsteuer": _DEFAULT_UMSATZSTEUER}
+# Listen in der KI-Antwort, aus denen die Datensätze weiterer Unter-Entitäten entstehen (Felder über „rawpos.“ = Eintrag der Liste)
+_CHILD_LISTS = {"umsatzsteuer": [f"{_NEW}.umsatzsteuer_zusammenfassung", "raw.umsatzsteuer_zusammenfassung"]}
 
 
 def default_mapping(version: SchemaVersion) -> list[dict]:
@@ -614,8 +633,51 @@ def _dt(v: Any) -> datetime | None:
     return None
 
 
+# Dokumenttyp-Namen (MAIN, normalisiert: klein, ohne Sonderzeichen) → ID in diesem System
+_TYPE_NAMES = {
+    "unbekannt": 0, "eingangsrechnung": 1, "ausgangsrechnung": 1, "rechnung": 1,
+    "gutschrift": 3, "gutschriftstorno": 3, "gutschriftkreditnote": 3, "storno": 3, "kreditnote": 3,
+    "lieferschein": 4, "bestellbestatigung": 5, "auftragsbestatigung": 5, "angebot": 6, "mahnung": 7, "kontoauszug": 8,
+    "kassenbon": 9, "kassenbonquittung": 9, "quittung": 9, "vertrag": 10, "lohnabrechnung": 11, "reisekostenabrechnung": 12,
+    "zollpapier": 13, "versicherungspolice": 14, "sonstiges": 15, "zahlungsavis": 16, "mischbeleg": 17,
+}
+
+
+def _type_key(name: str) -> str:
+    n = unicodedata.normalize("NFKD", (name or "").lower()).encode("ascii", "ignore").decode()
+    n = re.sub(r"\(.*?\)", "", n)
+    return re.sub(r"[^a-z]", "", n)
+
+
+def load_type_map(engine: Engine) -> dict[int, int]:
+    """
+    Dokumenttyp-IDs von MAIN → IDs dieses Systems. Über die Namen aus MAIN-Tabelle `document_types` (die IDs unterscheiden sich:
+    hier gibt es keine „Ausgangsrechnung“, sie zählt als Eingangsrechnung). Unbekannte Namen → Sonstiges (15). Ohne diese Tabelle
+    bleiben die IDs unverändert.
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, name FROM document_types")).mappings().all()
+    except Exception:
+        return {}
+    out: dict[int, int] = {}
+    for r in rows:
+        key = _type_key(r["name"])
+        if key in _TYPE_NAMES:
+            out[int(r["id"])] = _TYPE_NAMES[key]
+        else:
+            out[int(r["id"])] = next((v for k, v in _TYPE_NAMES.items() if len(k) >= 7 and key.startswith(k)), 15)
+    return out
+
+
+def _map_type(old: Any, type_map: dict[int, int] | None) -> int:
+    n = int(old or 0)
+    return n if not type_map else type_map.get(n, n if n == 0 else 15)
+
+
 def migrate_one(db: Session, version: SchemaVersion, built, resolver: UnitResolver, mapping: list[dict], doc: dict, ext: dict | None,
-                sup: dict | None, positions: list[dict], batch_id: int, storage_root: Path | None, dry: bool) -> tuple[Document, str, str | None]:
+                sup: dict | None, positions: list[dict], batch_id: int, storage_root: Path | None, dry: bool,
+                type_map: dict[int, int] | None = None) -> tuple[Document, str, str | None]:
     """Legt Beleg + Datensätze an. Rückgabe: (Beleg, Status imported|no_data, Hinweis). Wirft bei harten Fehlern (Aufrufer fängt)."""
     batch = db.get(ImportBatch, batch_id)
     old_id = doc["id"]
@@ -625,7 +687,7 @@ def migrate_one(db: Session, version: SchemaVersion, built, resolver: UnitResolv
     new = Document(
         id=old_id, batch_id=batch_id, original_filename=doc.get("original_filename") or f"beleg_{old_id}.pdf",
         file_size_bytes=int(doc.get("file_size_bytes") or 0), page_count=int(doc.get("page_count") or 0),
-        document_type=int(doc.get("document_type_id") or 0), comment=doc.get("comment") or None, status="pending",
+        document_type=_map_type(doc.get("document_type_id"), type_map), comment=doc.get("comment") or None, status="pending",
         raw_response=(doc.get("error_message") or None) if mstatus == "error" else None,
     )
     db.add(new)
@@ -637,18 +699,19 @@ def migrate_one(db: Session, version: SchemaVersion, built, resolver: UnitResolv
         new.soft_deleted, new.deleted_at, new.deleted_reason = True, _dt(doc["deleted_at"]), "Aus MAIN übernommen (dort gelöscht)"
     notes: list[str] = []
 
+    dest = Path(batch.storage_folder_path) / f"{new.id}.pdf"
     pdf = _find_pdf(storage_root, doc, old_id) if storage_root else None
-    if pdf is None:
-        notes.append("PDF nicht gefunden")
-    elif not dry:
-        dest_dir = Path(batch.storage_folder_path)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f"{new.id}.pdf"
-        if not dest.exists() or dest.stat().st_size != pdf.stat().st_size:
-            shutil.copyfile(pdf, dest)
+    if dest.is_file():                                        # schon im Speicher dieses Systems (z. B. Ordner direkt hineinkopiert)
         new.stored_filename = dest.name
         new.file_size_bytes = dest.stat().st_size
-    elif dry:
+    elif pdf is None:
+        notes.append("PDF nicht gefunden")
+    elif not dry:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pdf, dest)
+        new.stored_filename = dest.name
+        new.file_size_bytes = dest.stat().st_size
+    else:
         new.stored_filename = f"{new.id}.pdf"
 
     raw = _parse_raw((ext or {}).get("raw_response")) if ext else None
@@ -657,7 +720,7 @@ def migrate_one(db: Session, version: SchemaVersion, built, resolver: UnitResolv
         return new, "imported", "; ".join(notes) or None
     if raw is None:
         new.status = "done" if mstatus == "done" else "pending"
-        if mstatus == "done" and new.document_type in (0, 1):
+        if mstatus == "done" and new.document_type in (0, 1, 17):
             return new, "no_data", "; ".join(notes + ["keine verwertbare KI-Antwort"])
         return new, "imported", "; ".join(notes) or None
 
@@ -692,9 +755,10 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
             raise MigrationError("Übersetzungstabelle fehlerhaft: " + "; ".join(problems[:5]))
         built = build_extraction_model(version)
         resolver = UnitResolver(db)
+        type_map = load_type_map(engine)
         storage_root = Path(cfg.source_storage_path) if cfg.source_storage_path else None
         if storage_root is not None and not storage_root.is_dir():
-            raise MigrationError(f"Speicherordner der MAIN-PDFs nicht gefunden: {storage_root}")
+            raise MigrationError(f"Ordner der MAIN-PDFs nicht gefunden: {storage_root}")
 
         where, params = ["1=1"], {}
         if options.old_batch_ids:
@@ -756,7 +820,7 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
                             bid = _ensure_batch(db, batch_cache.get(d["batch_id"]) or {"id": d["batch_id"]}, batch_items, options.dry_run)
                             new, status, note = migrate_one(db, version, built, resolver, mapping, d, exts.get(d["id"]),
                                                             sups.get((exts.get(d["id"]) or {}).get("supplier_id")), poss.get(d["id"], []),
-                                                            bid, storage_root, options.dry_run)
+                                                            bid, storage_root, options.dry_run, type_map)
                             _remember(db, "document", d["id"], new.id, status, note, prev)
                         _bump(status)
                         if note and "PDF nicht gefunden" in note:

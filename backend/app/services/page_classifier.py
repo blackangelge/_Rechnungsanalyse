@@ -22,9 +22,9 @@ from app.models.document_page import PAGE_KINDS
 from app.services import structured_ai
 
 INVOICE_KINDS = ("rechnung", "rechnung_folgeseite")
-# Seitentyp → Dokumententyp-ID (siehe routers/settings.py); 15 = Mischbeleg
-KIND_TO_DOCTYPE = {"lieferschein": 3, "bestellung": 4, "angebot": 5, "mahnung": 7, "kontoauszug": 8, "vertrag": 9, "sonstiges": 14}
-DOCTYPE_INVOICE, DOCTYPE_MIXED, DOCTYPE_UNKNOWN = 1, 15, 0
+# Seitentyp → Dokumententyp-ID (siehe routers/settings.py); 17 = Mischbeleg
+KIND_TO_DOCTYPE = {"lieferschein": 4, "bestellung": 5, "angebot": 6, "mahnung": 7, "kontoauszug": 8, "vertrag": 10, "sonstiges": 15}
+DOCTYPE_INVOICE, DOCTYPE_MIXED, DOCTYPE_UNKNOWN = 1, 17, 0
 
 SYSTEM_PROMPT = """Du sortierst die Seiten eines PDFs (oft ein gescanntes Sammeldokument). Jede Seite bekommt genau einen Typ:
 - rechnung: erste Seite einer Rechnung (Briefkopf, Rechnungsnummer/-datum, Positionen oder Summen)
@@ -198,7 +198,7 @@ def summarize(pages: list[PageVerdict]) -> Summary:
         doc_type, mixed = DOCTYPE_INVOICE, False
     elif other:
         top = Counter(next(p.typ for p in pages if p.seite == n) for n in other).most_common(1)[0][0]
-        doc_type, mixed = KIND_TO_DOCTYPE.get(top, 14), False
+        doc_type, mixed = KIND_TO_DOCTYPE.get(top, 15), False
     else:
         doc_type, mixed = DOCTYPE_UNKNOWN, False
     return Summary(len(pages), invoice, other, empty, doc_type, mixed, segments)

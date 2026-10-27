@@ -35,8 +35,8 @@ def docs(db, tmp_path):
     db.add(batch)
     db.commit()
     out = {}
-    for name, typ, status in [("rechnung", 1, "done"), ("lieferschein", 3, "done"), ("mahnung", 7, "done"), ("misch", 15, "done"),
-                              ("neu", 0, "done"), ("laeuft", 3, "processing")]:
+    for name, typ, status in [("rechnung", 1, "done"), ("lieferschein", 4, "done"), ("mahnung", 7, "done"), ("misch", 17, "done"),
+                              ("neu", 0, "done"), ("laeuft", 4, "processing")]:
         d = crud.document.create(db, batch.id, f"{name}.pdf", 1)
         d.document_type, d.status, d.stored_filename = typ, status, f"{d.id}.pdf"
         (folder / f"{d.id}.pdf").write_bytes(b"%PDF-1.4")
@@ -108,7 +108,7 @@ def test_non_invoice_pdf_is_discarded_into_the_trash(pages_env, monkeypatch):
     wf = crud.workflow.create(env.db, "Seiten", None, _tpl("pages_schema"))
     doc = _analyze(env, wf.id)
     assert doc.soft_deleted is True and doc.deleted_reason == "Keine Eingangsrechnung" and doc.deleted_at is not None
-    assert doc.status == "done" and doc.document_type == 3                              # Typ bleibt für die Prüfung sichtbar
+    assert doc.status == "done" and doc.document_type == 4                              # Typ bleibt für die Prüfung sichtbar
     run = doc.workflow_run
     assert [t["type"] for t in run if t["type"] != "saved"] == ["start", "classify_pages", "branch", "discard"]
     assert "Papierkorb" in run[3]["detail"]

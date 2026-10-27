@@ -71,7 +71,7 @@ def _rows(ws):
 def test_sheet_per_entity_columns_order_and_typed_cells(world):
     world.add_doc()
     wb = _book(_export(world, _template(world.db, "Blatt je Tabelle")))
-    assert wb.sheetnames == ["Beleg", "Position", "Lieferant"]
+    assert wb.sheetnames == ["Beleg", "Position", "Lieferant", "Umsatzsteuer"]
     head = [c.value for c in wb["Beleg"][1]]
     assert head[:5] == ["Datensatz-ID", "Beleg-ID", "Lieferant-ID", "Rechnungsnr.", "Rechnungsdatum"]       # Reihenfolge = Schema
     assert head[-2:] == ["Lieferant", "Lieferant USt-IdNr."]
@@ -260,7 +260,7 @@ def test_export_endpoint_streams_xlsx_or_explains(client, world):
     tid = _template(world.db, "Blatt je Tabelle").id
     r = client.get(f"/api/export-templates/{tid}/export")
     assert r.status_code == 200 and "spreadsheetml" in r.headers["content-type"] and "attachment" in r.headers["content-disposition"]
-    assert _book(r.content).sheetnames == ["Beleg", "Position", "Lieferant"]
+    assert _book(r.content).sheetnames == ["Beleg", "Position", "Lieferant", "Umsatzsteuer"]
     r = client.get(f"/api/export-templates/{tid}/export", params={"document_ids": [987654]})
     assert r.status_code == 404 and "keine Datensätze" in r.json()["detail"]
     assert client.get("/api/export-templates/999/export").status_code == 404

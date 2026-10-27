@@ -33,7 +33,7 @@ class DocumentRead(BaseModel):
     # Kommen via Model-Properties aus ImportBatch
     company: str | None = None
     year: int | None = None
-    # 0=Unbekannt, 1=Eingangsrechnung, 2=Ausgangsrechnung, …
+    # 0=Unbekannt, 1=Eingangsrechnung, 3=Gutschrift, … 15=Sonstiges (siehe routers/settings.py)
     document_type: int = 0
     comment: str | None
     # pending | processing | done | error

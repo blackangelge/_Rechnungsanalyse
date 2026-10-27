@@ -1836,6 +1836,8 @@ export const schemaApi = {
   normalizers: () => apiClient.get<RegistryItem[]>("/api/schema/normalizers").then((r) => r.data),
   functions: () => apiClient.get<RegistryItem[]>("/api/schema/functions").then((r) => r.data),
   /** Spielt Einheiten, Ausgangsschema und Export-Vorlagen ein (nur was noch fehlt) */
+  standardParts: () => apiClient.get<{ missing: string[] }>("/api/schema/standard-parts").then((r) => r.data),
+  applyStandardParts: () => apiClient.post<{ changed: boolean; schema_version: number | null; prompts_created: string[] }>("/api/schema/standard-parts").then((r) => r.data),
   seed: () => apiClient.post<{ units_created: boolean; schema_created: boolean; schema_version: number | null; templates_created: boolean }>("/api/schema/seed").then((r) => r.data),
   preview: (value: unknown, chain: NormalizerStep[]) =>
     apiClient.post<{ ok: boolean; value: unknown; errors: string[]; issues: unknown[] }>("/api/schema/normalizers/preview", { value, chain }).then((r) => r.data),

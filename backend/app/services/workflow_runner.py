@@ -328,7 +328,7 @@ async def _h_end(cfg, ctx: RunContext):
 
 def _looks_like_invoice(ctx: RunContext) -> bool:
     """Der Beleg ist (auch teilweise) eine Eingangsrechnung: extrahiert, Schema gefüllt, Typ Rechnung/Mischbeleg oder Rechnungsseiten erkannt."""
-    return bool(ctx.extracted or ctx.schema_done or ctx.document_type_id in (1, 15) or (ctx.invoice_page_count or 0) > 0)
+    return bool(ctx.extracted or ctx.schema_done or ctx.document_type_id in (1, 17) or (ctx.invoice_page_count or 0) > 0)
 
 
 async def _h_discard(cfg, ctx: RunContext):

@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 class DocumentTypeRead(BaseModel):
     """Leseschema für einen Dokumententyp (id + name)."""
 
-    id: int    # 1=Eingangsrechnung, 2=Ausgangsrechnung, ... 15=Unbekannt
+    id: int    # 1=Eingangsrechnung, 3=Gutschrift, ... 15=Sonstiges, 17=Mischbeleg
     name: str  # Anzeigename (z.B. "Eingangsrechnung")
 
     model_config = ConfigDict(from_attributes=True)

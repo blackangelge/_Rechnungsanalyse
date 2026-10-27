@@ -24,19 +24,20 @@ SAMPLE = {
         "name": "ACME GmbH", "strasse": "Hauptstr. 1", "plz": "12345", "ort": "Berlin", "land": "DE", "hrb_nummer": None,
         "steuernummer": None, "ust_id_nr": "DE 123 456 789", "bank_name": "Sparkasse", "iban": "DE02 1203 0000 0000 2020 51", "bic": "BYLADEM1001",
     },
-    "rechnungsnummer": " RE-2024/0815 ", "rechnungsdatum": "25.03.2025", "faelligkeit": "2025-04-25", "kundennummer": "K-1",
+    "rechnungsnummer": " RE-2024/0815 ", "rechnungsdatum": "25.03.2025", "faelligkeit": "2025-04-25", "kundennummer": "K-1", "bestellnummer": "B-77",
     "gesamtbetrag_netto": "3.960,00 €", "steuerbetrag": 752.4, "gesamtbetrag_brutto": "4.712,40", "rabatt_betrag": None,
     "skonto_prozent": 2, "skonto_betrag": None, "skonto_frist_tage": "14", "zahlungsbedingungen": "14 Tage 2 % Skonto", "waehrung": "EUR",
+    "umsatzsteuer_zusammenfassung": [{"steuersatz": 19, "nettobetrag": "3.960,00", "steuerbetrag": "752,40"}],
     "positionen": [
         {"position_nr": 1, "artikelbezeichnung": "Schrauben M8", "artikelnummer": "S-8", "menge": {"value": "4.400", "unit": "Stück"},
          "einzelpreis": "90,00", "gesamtpreis": "3.960,00", "steuersatz": 19, "preisnachlass_betrag": None, "preisnachlass_prozent": None,
-         "preiseinheit": None, "preis_je_menge": 100, "verpackungsinhalt": None, "mengeneinheit_typ": "stueck"},
+         "waehrung": "EUR", "preisnachlass_bezeichnung": None, "preiseinheit": None, "preis_je_menge": 100, "verpackungsinhalt": None, "mengeneinheit_typ": "stueck"},
         {"position_nr": 2, "artikelbezeichnung": "Splitt", "artikelnummer": None, "menge": {"value": "25.880,00", "unit": "kg"},
          "einzelpreis": "0,41", "gesamtpreis": None, "steuersatz": None, "preisnachlass_betrag": None, "preisnachlass_prozent": None,
-         "preiseinheit": None, "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": "gewicht"},
+         "waehrung": "EUR", "preisnachlass_bezeichnung": None, "preiseinheit": None, "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": "gewicht"},
         {"position_nr": 3, "artikelbezeichnung": "Fassware", "artikelnummer": None, "menge": {"value": 5, "unit": "Fass"},
          "einzelpreis": None, "gesamtpreis": None, "steuersatz": None, "preisnachlass_betrag": None, "preisnachlass_prozent": None,
-         "preiseinheit": None, "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": None},
+         "waehrung": "EUR", "preisnachlass_bezeichnung": None, "preiseinheit": None, "preis_je_menge": None, "verpackungsinhalt": None, "mengeneinheit_typ": None},
     ],
 }
 
@@ -197,13 +198,16 @@ def test_tools_extension_point(world, stub):
 
 def _records(db, doc):
     root = db.query(ExtractedRecord).filter_by(document_id=doc.id, parent_record_id=None).one()
-    kids = db.query(ExtractedRecord).filter_by(parent_record_id=root.id).order_by(ExtractedRecord.position_index).all()
+    from app.models.schema_def import SchemaEntity
+    pos_ids = [e.id for e in db.query(SchemaEntity).filter_by(name="position").all()]
+    kids = (db.query(ExtractedRecord).filter(ExtractedRecord.parent_record_id == root.id, ExtractedRecord.entity_id.in_(pos_ids))
+            .order_by(ExtractedRecord.position_index).all())
     return root, kids
 
 
 def test_full_pipeline_normalizes_and_saves(world, stub):
     out = se.run_sync(world.db, world.doc, [], _config(stub))
-    assert out.save.record_count == 4 and out.result.ki_stats["input_tokens"] == 1000
+    assert out.save.record_count == 5 and out.result.ki_stats["input_tokens"] == 1000
     root, kids = _records(world.db, world.doc)
     d = root.data
     assert d["rechnungsnummer"] == "RE-2024/0815"                                    # getrimmt
@@ -246,7 +250,7 @@ def test_vendor_matched_by_configured_fields_not_duplicated(world, stub):
 def test_reanalysis_replaces_records_and_review_items(world, stub):
     se.run_sync(world.db, world.doc, [], _config(stub))
     se.run_sync(world.db, world.doc, [], _config(stub))
-    assert world.db.query(ExtractedRecord).filter_by(document_id=world.doc.id).count() == 4
+    assert world.db.query(ExtractedRecord).filter_by(document_id=world.doc.id).count() == 5
     assert world.db.query(UnitReviewItem).filter_by(document_id=world.doc.id, status="open").count() == 1
 
 
@@ -315,7 +319,7 @@ def test_schema_violation_saves_nothing(world, stub):
     stub.content = broken
     out = se.run_sync(world.db, world.doc, [], _config(stub))
     assert out.save is None and len(out.validation_errors) >= 3
-    assert world.db.query(ExtractedRecord).filter_by(document_id=world.doc.id).count() == 4    # alter Stand bleibt
+    assert world.db.query(ExtractedRecord).filter_by(document_id=world.doc.id).count() == 5    # alter Stand bleibt
 
 
 def test_validate_output_direct(world):

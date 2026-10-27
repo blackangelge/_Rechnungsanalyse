@@ -236,9 +236,9 @@ def test_summarize_invoice_only_other_only_mixed_and_empty():
     inv = pc.summarize([V(1, "rechnung", True, "R1"), V(2, "rechnung_folgeseite"), V(3, "leer")])
     assert (inv.document_type_id, inv.mixed, inv.invoice_pages, inv.empty_pages) == (1, False, [1, 2], [3])
     other = pc.summarize([V(1, "lieferschein", True), V(2, "lieferschein"), V(3, "sonstiges")])
-    assert (other.document_type_id, other.mixed, other.invoice_pages) == (3, False, [])
+    assert (other.document_type_id, other.mixed, other.invoice_pages) == (4, False, [])
     mixed = pc.summarize([V(1, "lieferschein", True), V(2, "rechnung", True, "R9"), V(3, "rechnung_folgeseite"), V(4, "mahnung", True)])
-    assert (mixed.document_type_id, mixed.mixed, mixed.invoice_pages, mixed.other_pages) == (15, True, [2, 3], [1, 4])
+    assert (mixed.document_type_id, mixed.mixed, mixed.invoice_pages, mixed.other_pages) == (17, True, [2, 3], [1, 4])
     assert [(s.first, s.last, s.kind, s.invoice_number) for s in mixed.segments] == [(1, 1, "lieferschein", None), (2, 3, "rechnung", "R9"), (4, 4, "mahnung", None)]
     nothing = pc.summarize([V(1, "leer"), V(2, "leer")])
     assert nothing.document_type_id == 0 and not nothing.mixed
@@ -391,7 +391,7 @@ def test_classify_node_keeps_only_invoice_pages_and_extracts_them(pages_env):
     wf = crud.workflow.create(env.db, "Seiten", None, _tpl("pages_schema"))
     doc = _analyze(env, wf.id)
     assert doc.status == "done", doc.raw_response
-    assert doc.page_count == 2 and doc.pdf_version == 2 and doc.document_type == 15               # 20 → 2 Seiten, Mischbeleg
+    assert doc.page_count == 2 and doc.pdf_version == 2 and doc.document_type == 17               # 20 → 2 Seiten, Mischbeleg
     pages = env.db.query(DocumentPage).filter_by(document_id=doc.id).order_by(DocumentPage.page_no).all()
     assert len(pages) == 20 and pages[12].kind == "rechnung" and pages[12].invoice_number == "R-1" and pages[0].kind == "lieferschein"
     assert all(p.pdf_version == 1 for p in pages)                                                # bezieht sich auf das Original
@@ -435,7 +435,7 @@ def test_classify_only_keeps_pdf_and_sets_type(pages_env):
     g["edges"].append({"id": "e-b-end", "source": "branch", "target": "extract", "sourceHandle": "true"})
     wf = crud.workflow.create(env.db, "Nur erkennen", None, g)
     doc = _analyze(env, wf.id)
-    assert doc.status == "done" and doc.page_count == 20 and doc.pdf_version == 1 and doc.document_type == 15
+    assert doc.status == "done" and doc.page_count == 20 and doc.pdf_version == 1 and doc.document_type == 17
     assert env.db.query(DocumentPage).filter_by(document_id=doc.id).count() == 20
 
 
@@ -444,15 +444,15 @@ def test_branch_on_invoice_page_count_and_document_type_mixed():
     cfg = BranchConfig(field="invoice_page_count", op="gt", value="0")
     assert evaluate_condition(cfg, {"invoice_page_count": 2}) and not evaluate_condition(cfg, {"invoice_page_count": 0})
     assert not evaluate_condition(cfg, {"invoice_page_count": None})
-    mixed = BranchConfig(field="document_type", op="equals", value="15")
-    assert evaluate_condition(mixed, {"document_type_id": 15, "document_type_name": "Mischbeleg"})
+    mixed = BranchConfig(field="document_type", op="equals", value="17")
+    assert evaluate_condition(mixed, {"document_type_id": 17, "document_type_name": "Mischbeleg"})
     assert workflow_service.validate_graph(_tpl("pages_schema")).ok
 
 
 def test_document_types_list_contains_mixed():
     c = TestClient(app)
     names = {t["id"]: t["name"] for t in c.get("/api/document-types").json()}
-    assert names[15].startswith("Mischbeleg")
+    assert names[17].startswith("Mischbeleg")
 
 
 # ─── Standardfeld Seitenanzahl ───────────────────────────────────────────────

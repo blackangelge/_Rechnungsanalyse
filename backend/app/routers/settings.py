@@ -38,21 +38,23 @@ router = APIRouter(prefix="/api/settings", tags=["Einstellungen"])
 _DOCUMENT_TYPES = [
     {"id": 0,  "name": "Unbekannt"},
     {"id": 1,  "name": "Eingangsrechnung"},
-    {"id": 2,  "name": "Ausgangsrechnung"},
-    {"id": 3,  "name": "Lieferschein"},
-    {"id": 4,  "name": "Bestellbestätigung"},
-    {"id": 5,  "name": "Angebot"},
-    {"id": 6,  "name": "Gutschrift / Storno"},
+    {"id": 3,  "name": "Gutschrift / Kreditnote"},
+    {"id": 4,  "name": "Lieferschein"},
+    {"id": 5,  "name": "Auftragsbestätigung"},
+    {"id": 6,  "name": "Angebot"},
     {"id": 7,  "name": "Mahnung"},
     {"id": 8,  "name": "Kontoauszug"},
-    {"id": 9,  "name": "Vertrag"},
-    {"id": 10, "name": "Lohnabrechnung"},
-    {"id": 11, "name": "Steuer- / Behördendokument"},
+    {"id": 9,  "name": "Kassenbon / Quittung"},
+    {"id": 10, "name": "Vertrag"},
+    {"id": 11, "name": "Lohnabrechnung"},
     {"id": 12, "name": "Reisekostenabrechnung"},
-    {"id": 13, "name": "Kassenbon / Quittung"},
-    {"id": 14, "name": "Sonstiges kaufmännisches Dokument"},
-    {"id": 15, "name": "Mischbeleg (Rechnung + weitere Dokumente)"},   # nur durch die Seitenklassifikation gesetzt
+    {"id": 13, "name": "Zollpapier"},
+    {"id": 14, "name": "Versicherungspolice"},
+    {"id": 15, "name": "Sonstiges"},
+    {"id": 16, "name": "Zahlungsavis"},
+    {"id": 17, "name": "Mischbeleg (Rechnung + weitere Dokumente)"},   # nur durch die Seitenklassifikation gesetzt
 ]
+# Es gibt bewusst keine ID 2: „Ausgangsrechnung“ ist aus Sicht des Empfängers eine Eingangsrechnung (die KI kann beides nicht zuverlässig trennen).
 
 doc_types_router = APIRouter(prefix="/api", tags=["Dokumententypen"])
 

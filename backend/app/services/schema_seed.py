@@ -11,11 +11,23 @@ from app.crud import schema_definition as sd
 from app.models.schema_def import SchemaVersion
 
 # (name, Anzeigename, Typ, Beschreibung, Ausgabeformat)
+BESTELLNUMMER = ("bestellnummer", "Bestellnr.", "text",
+                 "Bestell-/Auftragsnummer des Kunden („Ihre Bestellnummer“, „Bestellnr.“, „Auftrags-Nr.“, „PO-Nummer“), sonst null", None)
+POS_WAEHRUNG = ("waehrung", "Währung", "text", "Währung der Position als ISO-4217-Code (z. B. EUR)", None)
+POS_NACHLASS_TEXT = ("preisnachlass_bezeichnung", "Nachlass-Bezeichnung", "text", "Bezeichnung des Nachlasses auf die Position (z. B. „Mengenrabatt“)", None)
+# Steuerzusammenfassung: eine Zeile je Steuersatz
+USTEUER_FIELDS = [
+    ("steuersatz", "Steuersatz (%)", "decimal", "Steuersatz in Prozent (z. B. 19)", "0.00"),
+    ("nettobetrag", "Nettobetrag (€)", "decimal", "Nettobetrag dieses Steuersatzes", "#,##0.00"),
+    ("steuerbetrag", "Steuerbetrag (€)", "decimal", "Steuerbetrag dieses Steuersatzes", "#,##0.00"),
+]
+USTEUER_RELATION = "umsatzsteuer_zusammenfassung"
 _BELEG = [
     ("rechnungsnummer", "Rechnungsnr.", "text", "Rechnungsnummer wie gedruckt", None),
     ("rechnungsdatum", "Rechnungsdatum", "date", "Rechnungsdatum (YYYY-MM-DD)", "DD.MM.YYYY"),
     ("faelligkeit", "Fälligkeit", "date", "Fälligkeitsdatum (YYYY-MM-DD)", "DD.MM.YYYY"),
     ("kundennummer", "Kundennr.", "text", "Kundennummer beim Lieferanten", None),
+    BESTELLNUMMER,
     ("gesamtbetrag_netto", "Netto (€)", "decimal", "Gesamtbetrag netto", "#,##0.00"),
     ("steuerbetrag", "Steuer (€)", "decimal", "Gesamter Steuerbetrag", "#,##0.00"),
     ("gesamtbetrag_brutto", "Brutto (€)", "decimal", "Gesamtbetrag brutto (Zahlbetrag)", "#,##0.00"),
@@ -42,6 +54,8 @@ _POSITION = [
     ("steuersatz", "Steuersatz (%)", "decimal", "Steuersatz der Position", "0.00"),
     ("preisnachlass_betrag", "Nachlass (€)", "decimal", "Nachlass auf die Position, Betrag", "#,##0.00"),
     ("preisnachlass_prozent", "Nachlass (%)", "decimal", "Nachlass auf die Position, Prozent", "0.00"),
+    POS_WAEHRUNG,
+    POS_NACHLASS_TEXT,
     ("preiseinheit", "Preiseinheit", "text", PRICE_UNIT_DESCRIPTION, None),
     ("preis_je_menge", "Preis je (Einheiten)", "decimal", "Der Einzelpreis gilt je N Einheiten (z. B. 100)", "#,##0.####"),
     ("verpackungsinhalt", "Inhalt je Verpackung", "quantity", "Inhalt einer Verpackung (VPE/VE) mit Einheit", "#,##0.####"),
@@ -94,7 +108,52 @@ def seed_initial_schema(db: Session) -> SchemaVersion | None:
         ], description="Art der Mengeneinheit",
     )
     _fill(db, lieferant, _LIEFERANT)
+    steuer = sd.add_entity(db, version, "umsatzsteuer", "Umsatzsteuer", "Zeile der Steuerzusammenfassung (je Steuersatz)")
+    _fill(db, steuer, USTEUER_FIELDS)
+    sd.add_relation(db, version, USTEUER_RELATION, "parent_child", beleg, steuer, "Steuerzusammenfassung des Belegs")
     sd.add_relation(db, version, "positionen", "parent_child", beleg, position, "Positionen des Belegs")
     sd.add_relation(db, version, "lieferant", "reference", beleg, lieferant, "Lieferant des Belegs")
     sd.activate(db, version)
     return version
+
+
+# ─── Ergänzung eines bestehenden Schemas um die Standardteile (Bestellnummer, Währung/Nachlass-Text, Umsatzsteuer) ──
+
+def missing_standard_parts(version: SchemaVersion | None) -> list[str]:
+    """Teile des Ausgangsschemas, die in der Version fehlen (leer = vollständig oder nicht anwendbar)."""
+    if version is None:
+        return []
+    ents = {e.name: e for e in version.entities}
+    out: list[str] = []
+    beleg, pos = ents.get("beleg"), ents.get("position")
+    if beleg is not None and not any(f.name == BESTELLNUMMER[0] for f in beleg.fields):
+        out.append("beleg.bestellnummer")
+    if pos is not None:
+        for row in (POS_WAEHRUNG, POS_NACHLASS_TEXT):
+            if not any(f.name == row[0] for f in pos.fields):
+                out.append(f"position.{row[0]}")
+    if beleg is not None and "umsatzsteuer" not in ents:
+        out.append("umsatzsteuer (Steuerzusammenfassung)")
+    return out
+
+
+def apply_standard_parts(db: Session) -> SchemaVersion | None:
+    """Neuer Entwurf aus dem aktiven Schema → fehlende Standardteile ergänzen → aktivieren. None, wenn nichts fehlt."""
+    version = sd.get_active(db)
+    missing = missing_standard_parts(version)
+    if not missing:
+        return None
+    draft = sd.create_draft_from(db, version, "Standardfelder ergänzt (Bestellnummer, Währung, Nachlass-Text, Umsatzsteuer)")
+    ents = {e.name: e for e in draft.entities}
+    beleg, pos = ents.get("beleg"), ents.get("position")
+    if "beleg.bestellnummer" in missing:
+        _fill(db, beleg, [BESTELLNUMMER])
+    for row in (POS_WAEHRUNG, POS_NACHLASS_TEXT):
+        if f"position.{row[0]}" in missing:
+            _fill(db, pos, [row])
+    if any(m.startswith("umsatzsteuer") for m in missing):
+        steuer = sd.add_entity(db, draft, "umsatzsteuer", "Umsatzsteuer", "Zeile der Steuerzusammenfassung (je Steuersatz)")
+        _fill(db, steuer, USTEUER_FIELDS)
+        sd.add_relation(db, draft, USTEUER_RELATION, "parent_child", beleg, steuer, "Steuerzusammenfassung des Belegs")
+    sd.activate(db, draft)
+    return draft

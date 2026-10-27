@@ -278,15 +278,41 @@ def seed_defaults(db: Session = Depends(get_db)):
     """Spielt Einheiten, Ausgangsschema und Export-Vorlagen ein — jeweils nur, wenn noch nichts vorhanden ist (idempotent)."""
     from app.services.export_seed import seed_export_templates
     from app.services.schema_seed import seed_initial_schema
+    from app.services.prompt_seed import seed_prompts
     from app.services.units_seed import seed_default_units
 
     try:
         units = seed_default_units(db)
         version = seed_initial_schema(db)
         templates = seed_export_templates(db)
+        seed_prompts(db)
         db.commit()
     except sd.SchemaError as exc:
         db.rollback()
         raise HTTPException(400, str(exc)) from exc
     return {"units_created": units, "schema_created": version is not None,
             "schema_version": version.version_number if version else None, "templates_created": templates}
+
+
+# ─── Standardteile in ein bestehendes Schema nachtragen ──────────────────────
+
+@router.get("/standard-parts")
+def standard_parts_status(db: Session = Depends(get_db)):
+    """Welche Standardfelder (Bestellnummer, Währung/Nachlass-Text je Position, Umsatzsteuer-Zeilen) dem aktiven Schema fehlen."""
+    from app.services.schema_seed import missing_standard_parts
+    return {"missing": missing_standard_parts(sd.get_active(db))}
+
+
+@router.post("/standard-parts")
+def apply_standard_parts_endpoint(db: Session = Depends(get_db)):
+    """Ergänzt die fehlenden Standardteile (neue Schema-Version; bestehende Datensätze bleiben unverändert) und legt die mitgelieferten Prompts an."""
+    from app.services.prompt_seed import seed_prompts
+    from app.services.schema_seed import apply_standard_parts
+    try:
+        draft = apply_standard_parts(db)
+        prompts = seed_prompts(db)
+        db.commit()
+    except sd.SchemaError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return {"changed": draft is not None, "schema_version": draft.version_number if draft else None, "prompts_created": prompts}

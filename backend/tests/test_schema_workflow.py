@@ -71,7 +71,7 @@ def test_schema_workflow_saves_records_and_finishes_document(env):
     assert doc.status == "done" and doc.page_count == 2 and doc.used_workflow_name == "Schema"
     root = env.db.query(ExtractedRecord).filter_by(document_id=doc.id, parent_record_id=None).one()
     assert root.data["rechnungsnummer"] == "RE-2024/0815" and root.data["seitenanzahl"] == 2
-    assert env.db.query(ExtractedRecord).filter_by(document_id=doc.id).count() == 4
+    assert env.db.query(ExtractedRecord).filter_by(document_id=doc.id).count() == 5
     run = doc.workflow_run
     assert [t["type"] for t in run] == ["start", "schema_extract", "end", "saved"]
     node = run[1]
@@ -107,7 +107,7 @@ def test_schema_violation_sets_document_error_and_keeps_old_records(env):
     env.stub.content = {"unsinn": 1}
     doc = _run(env, doc, wf.id)
     assert doc.status == "error" and "entspricht nicht dem Schema" in (doc.raw_response or "")
-    assert env.db.query(ExtractedRecord).filter_by(document_id=doc.id).count() == 4
+    assert env.db.query(ExtractedRecord).filter_by(document_id=doc.id).count() == 5
 
 
 def test_unreachable_ai_keeps_document_for_retry(env):

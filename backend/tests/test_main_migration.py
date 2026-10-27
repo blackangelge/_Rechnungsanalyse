@@ -138,7 +138,11 @@ def test_run_keeps_ids_copies_pdfs_and_runs_rules(world):
     # Datensätze aus der KI-Antwort
     root = db.query(ExtractedRecord).filter(ExtractedRecord.document_id == 101, ExtractedRecord.parent_record_id.is_(None)).one()
     assert root.data["rechnungsnummer"] == "RE-1" and root.data["rechnungsdatum"] == "2025-03-25" and root.data["steuerbetrag"] == 2762.98
-    kids = db.query(ExtractedRecord).filter(ExtractedRecord.parent_record_id == root.id).order_by(ExtractedRecord.position_index).all()
+    from app.models.schema_def import SchemaEntity
+    pos_ids = [e.id for e in db.query(SchemaEntity).filter_by(name="position").all()]
+    kids = db.query(ExtractedRecord).filter(ExtractedRecord.parent_record_id == root.id, ExtractedRecord.entity_id.in_(pos_ids)).order_by(ExtractedRecord.position_index).all()
+    steuer = [r for r in db.query(ExtractedRecord).filter(ExtractedRecord.parent_record_id == root.id).all() if r.entity_id not in pos_ids]
+    assert len(steuer) == 1 and steuer[0].data["steuersatz"] == 19 and steuer[0].data["steuerbetrag"] == 2762.98
     assert len(kids) == 2 and kids[0].data["menge"]["original_value"] == 25000 and kids[0].data["menge"]["original_unit"] == "kg"
     assert kids[0].data["preiseinheit"] == "t" and kids[1].data["preiseinheit"] == "VPE"
     assert kids[1].data["verpackungsinhalt"]["original_value"] == 90
@@ -159,7 +163,7 @@ def test_second_run_skips_everything_and_new_ids_do_not_collide(world):
     assert state["counts"].get("skipped_done") == 5 and "imported" not in state["counts"]
     db = world.db
     db.expire_all()
-    assert db.query(Document).count() == 5 and db.query(ExtractedRecord).filter_by(document_id=101).count() == 3
+    assert db.query(Document).count() == 5 and db.query(ExtractedRecord).filter_by(document_id=101).count() == 4
 
 
 def test_occupied_id_is_reported_not_overwritten(world):

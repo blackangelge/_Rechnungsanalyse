@@ -190,25 +190,25 @@ export default function SystemPromptsPage() {
               </pre>
               <p className="text-violet-700">
                 <strong>ID 1 (Eingangsrechnung)</strong> löst die vollständige Rechnungsextraktion aus.
-                Alle anderen IDs (2–15) markieren das Dokument nur mit dem Dokumententyp.
+                Alle anderen IDs (3–16; eine ID 2 gibt es bewusst nicht) markieren das Dokument nur mit dem Dokumententyp.
               </p>
               <p className="text-violet-600 font-medium">Verfügbare Dokumententypen:</p>
               <ul className="text-violet-700 space-y-0.5 list-none">
                 <li><strong>1 — Eingangsrechnung</strong> → vollständige Extraktion</li>
-                <li>2 — Ausgangsrechnung</li>
-                <li>3 — Lieferschein</li>
-                <li>4 — Bestellbestätigung</li>
-                <li>5 — Angebot</li>
-                <li>6 — Gutschrift / Storno</li>
+                <li>3 — Gutschrift / Kreditnote</li>
+                <li>4 — Lieferschein</li>
+                <li>5 — Auftragsbestätigung</li>
+                <li>6 — Angebot</li>
                 <li>7 — Mahnung</li>
                 <li>8 — Kontoauszug</li>
-                <li>9 — Vertrag</li>
-                <li>10 — Lohnabrechnung</li>
-                <li>11 — Steuer- / Behördendokument</li>
+                <li>9 — Kassenbon / Quittung</li>
+                <li>10 — Vertrag</li>
+                <li>11 — Lohnabrechnung</li>
                 <li>12 — Reisekostenabrechnung</li>
-                <li>13 — Kassenbon / Quittung</li>
-                <li>14 — Sonstiges kaufmännisches Dokument</li>
-                <li>15 — Unbekannt</li>
+                <li>13 — Zollpapier</li>
+                <li>14 — Versicherungspolice</li>
+                <li>15 — Sonstiges</li>
+                <li>16 — Zahlungsavis</li>
               </ul>
             </div>
           )}

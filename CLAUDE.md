@@ -1635,3 +1635,19 @@ automatisch fertig verarbeitet, sobald eine ausreichend große KI-Konfiguration 
 Live verifiziert: Dokument mit 23 Seiten gegen eine auf 1 Seite limitierte Konfiguration
 getestet → `waiting_capacity` gesetzt, Task alle 20s (Poll-Intervall) neu versucht ohne
 `attempts` zu erhöhen; nach Anheben der Kapazität automatisch fertig verarbeitet.
+
+
+### Dokumenttypen neu nummeriert, Standardfelder, mitgelieferte Prompts (Migration `0029_doc_types`)
+
+- **Dokumenttypen** (`routers/settings.py::_DOCUMENT_TYPES`) folgen der Liste des Klassifizierer-Prompts: 0 Unbekannt · 1 Eingangsrechnung · 3 Gutschrift / Kreditnote · 4 Lieferschein · 5 Auftragsbestätigung · 6 Angebot · 7 Mahnung ·
+  8 Kontoauszug · 9 Kassenbon / Quittung · 10 Vertrag · 11 Lohnabrechnung · 12 Reisekostenabrechnung · 13 Zollpapier · 14 Versicherungspolice · 15 Sonstiges · 16 Zahlungsavis · **17 Mischbeleg** (nur durch die Seitenerkennung gesetzt).
+  **Es gibt bewusst keine ID 2:** „Ausgangsrechnung“ ist aus Empfängersicht eine Eingangsrechnung (die KI kann beides nicht zuverlässig trennen). Maßgeblich für das Projekt sind nur Eingangsrechnungen; alles andere wird geprüft und gelöscht (Papierkorb).
+  Konstanten: `page_classifier.DOCTYPE_MIXED = 17`, `crud.document.NOT_INVOICE_EXCLUDED_TYPES = (0, 1, 17)`, `workflow_runner._looks_like_invoice` (1, 17). Migration 0029 nummeriert `documents.document_type` um
+  (alt → neu: 2→1, 3→4, 4→5, 5→6, 6→3, 9→10, 10→11, 11→15, 13→9, 14→15, 15→17). Workflow-Weichen mit `document_type equals 1` bleiben gültig; Weichen auf andere IDs müssen angepasst werden. Snapshots der Analyse-Historie behalten die alten IDs.
+- **MAIN-Übernahme übersetzt die Typen** über die Namen aus MAIN-Tabelle `document_types` (`main_migration.load_type_map`; Ausgangsrechnung → 1, unbekannte Namen → 15; ohne diese Tabelle bleiben die IDs).
+  Liegen die PDFs schon in `STORAGE_PATH/{Firma}_{Jahr}/{ID}.pdf`, werden sie ohne Quellordner erkannt (`stored_filename` wird gesetzt, nichts kopiert).
+- **Schema-Ergänzungen** (`services/schema_seed.py`): `beleg.bestellnummer`, `position.waehrung`, `position.preisnachlass_bezeichnung` und die Entität `umsatzsteuer` (steuersatz, nettobetrag, steuerbetrag; Beziehung `umsatzsteuer_zusammenfassung`
+  = eine Zeile je Steuersatz). Neue Installationen bekommen sie im Ausgangsschema; bestehende über den Hinweis auf `/schema` („Standardfelder ergänzen“, `GET|POST /api/schema/standard-parts` → neue Version, Datensätze älterer Versionen bleiben).
+  Die MAIN-Standardübersetzung füllt sie (Liste `_CHILD_LISTS`: Unter-Entitäten außer `position` lesen ihre Zeilen aus einer Liste der KI-Antwort, Felder über `rawpos.`).
+- **Mitgelieferte Prompts** (`services/prompt_seed.py`, Typ 2 = Workflow-Baustein, legt nur Fehlendes an): „Eingangsrechnung – Auslese-Regeln (Zusatzanweisung)“ (Regeln 1–16 ohne JSON-Struktur — die kommt aus dem Schema; im Knoten „Schema-Extraktion“ als Zusatzanweisung wählen)
+  und „Dokumententyp – Klassifikator …“ (im Knoten „Dokumententyp erkennen“ wählen). Eingespielt über „Einspielen“ und „Standardfelder ergänzen“.
