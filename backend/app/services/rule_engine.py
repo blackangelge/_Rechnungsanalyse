@@ -294,6 +294,9 @@ def _in_price_unit(data: dict, raw: dict, price_unit: str, units: "UnitTable | N
     else:
         content = _num(pack)
     content = Decimal(1) if content is None else content
+    per = _num(data.get("preis_je_menge"))
+    if per is not None and per == content:
+        return original               # dieselbe Zahl in „Preis je“ und „Inhalt“ (z. B. 100 Schrauben = 1 VPE): die Regel teilt schon durch „Preis je“
     return None if content == 0 else original / content
 
 

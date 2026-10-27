@@ -439,3 +439,24 @@ def test_background_run_with_progress_cancel_and_parallel(world, sqlite_session_
         rule_run._cancel.clear = orig
         rule_run._cancel.clear()
     assert st["processed"] == 0 and st["cancelled"] is True
+
+
+def test_price_basis_examples_from_the_prompt_rules(world):
+    """Beispiel 1: 4.400 St, 90 € je VPE, 100 Schrauben = 1 VPE → Menge ÷ Preis-je-Menge × Einzelpreis; Beispiel 2: 25.500 kg, 420 €/Tonne."""
+    from app.services import rule_seed
+    units = re_.load_unit_table(world.db)
+    rule = RuleSpec(None, "p", "position", rule_seed._STRICT_LEFT, "gesamtpreis", tolerance_abs=0.02)
+
+    def ev(menge, preis, gesamt, pe, per=None, pack=None):
+        data = {"preis_je_menge": per, "preisnachlass_prozent": None, "preisnachlass_betrag": None, "menge": _qty(world.db, *menge),
+                "einzelpreis": preis, "gesamtpreis": gesamt, "preiseinheit": pe}
+        if pack:
+            data["verpackungsinhalt"] = _qty(world.db, *pack)
+        return re_.evaluate_rule(rule, re_.Node(1, "position", data), units)
+
+    assert ev((4400, "St"), 90, 3960, "VPE", per=100)["status"] == "ok"                       # (4400 / 100) × 90
+    assert ev((4400, "St"), 90, 396000, "VPE", per=100)["status"] == "failed"
+    assert ev((4400, "St"), 90, 3960, "VPE", per=100, pack=(100, "St"))["status"] == "ok"     # Zahl doppelt angegeben → nicht doppelt geteilt
+    assert ev((4400, "St"), 90, 3960, "VPE", pack=(100, "St"))["status"] == "ok"              # nur als Inhalt je VPE angegeben
+    assert ev((25500, "kg"), 420, 10710, "Tonne")["status"] == "ok"                           # 25,5 t × 420
+    assert ev((25500, "kg"), 420, 10710000, "Tonne")["status"] == "failed"
