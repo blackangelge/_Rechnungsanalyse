@@ -34,6 +34,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/schema", label: "Schema", icon: "schema" },
       { href: "/einheiten", label: "Einheiten", icon: "ruler" },
       { href: "/pruefregeln", label: "Prüfregeln", icon: "check" },
+      { href: "/gesellschaften", label: "Eigene Gesellschaften", icon: "check" },
       { href: "/export-vorlagen", label: "Export-Vorlagen", icon: "sheet" },
       { href: "/daten", label: "Daten", icon: "database" },
       { href: "/assistent", label: "KI-Assistent", icon: "sparkle" },

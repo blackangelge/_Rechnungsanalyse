@@ -24,7 +24,7 @@ SAMPLE = {
         "name": "ACME GmbH", "strasse": "Hauptstr. 1", "plz": "12345", "ort": "Berlin", "land": "DE", "hrb_nummer": None,
         "steuernummer": None, "ust_id_nr": "DE 123 456 789", "bank_name": "Sparkasse", "iban": "DE02 1203 0000 0000 2020 51", "bic": "BYLADEM1001",
     },
-    "rechnungsnummer": " RE-2024/0815 ", "rechnungsdatum": "25.03.2025", "faelligkeit": "2025-04-25", "kundennummer": "K-1", "bestellnummer": "B-77",
+    "rechnungsnummer": " RE-2024/0815 ", "rechnungsdatum": "25.03.2025", "faelligkeit": "2025-04-25", "kundennummer": "K-1", "bestellnummer": "B-77", "empfaenger_name": "Muster Handels GmbH", "empfaenger_ust_id_nr": "DE999888777",
     "gesamtbetrag_netto": "3.960,00 €", "steuerbetrag": 752.4, "gesamtbetrag_brutto": "4.712,40", "rabatt_betrag": None,
     "skonto_prozent": 2, "skonto_betrag": None, "skonto_frist_tage": "14", "zahlungsbedingungen": "14 Tage 2 % Skonto", "waehrung": "EUR",
     "umsatzsteuer_zusammenfassung": [{"steuersatz": 19, "nettobetrag": "3.960,00", "steuerbetrag": "752,40"}],

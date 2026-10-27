@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models.schema_def import ExtractedRecord
-from app.services import rule_engine
+from app.services import own_companies, rule_engine
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +47,12 @@ def cancel() -> bool:
 def _check_block(session_factory: Callable[[], Session], ids: list[int], specs, units) -> None:
     db = session_factory()
     try:
+        parties = own_companies.load_parties(db)
         for doc_id in ids:
             if _cancel.is_set():
                 break
             try:
-                status = rule_engine.evaluate_document(db, doc_id, specs, units=units)["summary"]["status"]
+                status = rule_engine.evaluate_document(db, doc_id, specs, units=units, parties=parties)["summary"]["status"]
                 with _lock:
                     _state["counts"][status] = _state["counts"].get(status, 0) + 1
                     if status in ("needs_review", "warn") and len(_state["flagged"]) < 50:

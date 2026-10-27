@@ -620,13 +620,15 @@ def load_specs(db: Session, only_enabled: bool = True) -> list[RuleSpec]:
 
 
 def evaluate_document(db: Session, document_id: int, specs: list[RuleSpec] | None = None, store: bool = True,
-                      units: UnitTable | None = None) -> dict:
+                      units: UnitTable | None = None, parties=None) -> dict:
     """Prüft alle Datensätze eines Belegs und legt das Ergebnis (`_checks` je Datensatz, `_validation` an der Wurzel) ab. Kein Commit."""
     specs = load_specs(db) if specs is None else specs
     root, _ = load_tree(db, document_id)
     if root is None:
         return {"summary": {"status": "unchecked", "ok": 0, "failed": 0, "skipped": 0}, "results": []}
     results = evaluate_tree(root, specs, load_unit_table(db) if units is None else units)
+    from app.services import own_companies                       # Rollenprüfung Lieferant/Empfänger (siehe own_companies.py)
+    results += own_companies.party_checks(root, own_companies.load_parties(db) if parties is None else parties)
     summary = summarize(results)
     if store:
         by_record: dict[int, list[dict]] = {}

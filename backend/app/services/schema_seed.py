@@ -13,6 +13,10 @@ from app.models.schema_def import SchemaVersion
 # (name, Anzeigename, Typ, Beschreibung, Ausgabeformat)
 BESTELLNUMMER = ("bestellnummer", "Bestellnr.", "text",
                  "Bestell-/Auftragsnummer des Kunden („Ihre Bestellnummer“, „Bestellnr.“, „Auftrags-Nr.“, „PO-Nummer“), sonst null", None)
+EMPFAENGER_NAME = ("empfaenger_name", "Rechnungsempfänger", "text",
+                   "Name des Rechnungsempfängers (Kunde, an den die Rechnung adressiert ist) wie gedruckt — NICHT der Aussteller", None)
+EMPFAENGER_UST = ("empfaenger_ust_id_nr", "USt-IdNr. Empfänger", "text",
+                  "USt-IdNr. des Rechnungsempfängers, nur wenn auf der Rechnung gedruckt (ohne Leerzeichen), sonst null", None)
 POS_WAEHRUNG = ("waehrung", "Währung", "text", "Währung der Position als ISO-4217-Code (z. B. EUR)", None)
 POS_NACHLASS_TEXT = ("preisnachlass_bezeichnung", "Nachlass-Bezeichnung", "text", "Bezeichnung des Nachlasses auf die Position (z. B. „Mengenrabatt“)", None)
 # Steuerzusammenfassung: eine Zeile je Steuersatz
@@ -28,6 +32,8 @@ _BELEG = [
     ("faelligkeit", "Fälligkeit", "date", "Fälligkeitsdatum (YYYY-MM-DD)", "DD.MM.YYYY"),
     ("kundennummer", "Kundennr.", "text", "Kundennummer beim Lieferanten", None),
     BESTELLNUMMER,
+    EMPFAENGER_NAME,
+    EMPFAENGER_UST,
     ("gesamtbetrag_netto", "Netto (€)", "decimal", "Gesamtbetrag netto", "#,##0.00"),
     ("steuerbetrag", "Steuer (€)", "decimal", "Gesamter Steuerbetrag", "#,##0.00"),
     ("gesamtbetrag_brutto", "Brutto (€)", "decimal", "Gesamtbetrag brutto (Zahlbetrag)", "#,##0.00"),
@@ -128,6 +134,10 @@ def missing_standard_parts(version: SchemaVersion | None) -> list[str]:
     beleg, pos = ents.get("beleg"), ents.get("position")
     if beleg is not None and not any(f.name == BESTELLNUMMER[0] for f in beleg.fields):
         out.append("beleg.bestellnummer")
+    if beleg is not None:
+        for row in (EMPFAENGER_NAME, EMPFAENGER_UST):
+            if not any(f.name == row[0] for f in beleg.fields):
+                out.append(f"beleg.{row[0]}")
     if pos is not None:
         for row in (POS_WAEHRUNG, POS_NACHLASS_TEXT):
             if not any(f.name == row[0] for f in pos.fields):
@@ -143,11 +153,14 @@ def apply_standard_parts(db: Session) -> SchemaVersion | None:
     missing = missing_standard_parts(version)
     if not missing:
         return None
-    draft = sd.create_draft_from(db, version, "Standardfelder ergänzt (Bestellnummer, Währung, Nachlass-Text, Umsatzsteuer)")
+    draft = sd.create_draft_from(db, version, "Standardfelder ergänzt (Bestellnummer, Empfänger, Währung, Nachlass-Text, Umsatzsteuer)")
     ents = {e.name: e for e in draft.entities}
     beleg, pos = ents.get("beleg"), ents.get("position")
     if "beleg.bestellnummer" in missing:
         _fill(db, beleg, [BESTELLNUMMER])
+    for row in (EMPFAENGER_NAME, EMPFAENGER_UST):
+        if f"beleg.{row[0]}" in missing:
+            _fill(db, beleg, [row])
     for row in (POS_WAEHRUNG, POS_NACHLASS_TEXT):
         if f"position.{row[0]}" in missing:
             _fill(db, pos, [row])

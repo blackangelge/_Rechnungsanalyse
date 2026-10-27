@@ -204,8 +204,10 @@ def run_checks(body: RunIn, db: Session = Depends(get_db)):
         ids = [i for (i,) in db.query(ExtractedRecord.document_id).filter(ExtractedRecord.parent_record_id.is_(None)).distinct().all()]
     counts = {"ok": 0, "warn": 0, "needs_review": 0, "unchecked": 0}
     flagged: list[int] = []
+    from app.services import own_companies
+    parties = own_companies.load_parties(db)
     for n, doc_id in enumerate(ids, 1):
-        status = rule_engine.evaluate_document(db, doc_id, specs, units=units)["summary"]["status"]
+        status = rule_engine.evaluate_document(db, doc_id, specs, units=units, parties=parties)["summary"]["status"]
         counts[status] += 1
         if status in ("needs_review", "warn") and len(flagged) < 50:
             flagged.append(doc_id)

@@ -16,7 +16,7 @@ def _old_schema(db):
     draft = sd.create_draft_from(db, v, "alt")
     beleg = next(e for e in draft.entities if e.name == "beleg")
     pos = next(e for e in draft.entities if e.name == "position")
-    for ent, names in ((beleg, ["bestellnummer"]), (pos, ["waehrung", "preisnachlass_bezeichnung"])):
+    for ent, names in ((beleg, ["bestellnummer", "empfaenger_name", "empfaenger_ust_id_nr"]), (pos, ["waehrung", "preisnachlass_bezeichnung"])):
         for f in list(ent.fields):
             if f.name in names:
                 sd.delete_field(db, f)
@@ -40,7 +40,7 @@ def test_fresh_schema_is_complete(db):
 def test_existing_schema_gets_missing_parts_in_new_version(db):
     _old_schema(db)
     old = sd.get_active(db)
-    assert len(missing_standard_parts(old)) == 4
+    assert len(missing_standard_parts(old)) == 6
     new = apply_standard_parts(db)
     db.commit()
     assert new.version_number == old.version_number + 1 and sd.get_active(db).id == new.id

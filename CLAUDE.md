@@ -1662,3 +1662,14 @@ getestet → `waiting_capacity` gesetzt, Task alle 20s (Poll-Intervall) neu vers
 - **Preisbezug (Prompt Fassung 3, Regeln 20/21):** Positionspreis = Menge ÷ `preis_je_menge` × Einzelpreis, bezogen auf die `preiseinheit`; Umrechnung zwischen Einheiten derselben Gruppe (kg ↔ Tonne) macht die Prüfregel über die Einheitengruppen (`menge.@preiseinheit`), die KI rechnet nie um.
   Beispiel 1: 4.400 St, „100 Schrauben = 1 VPE“, 90 € je VPE → `preis_je_menge` 100, `preiseinheit` VPE (`verpackungsinhalt` leer). Beispiel 2: 25.500 kg, 420 €/Tonne → `preiseinheit` Tonne. Steht dieselbe Zahl in `preis_je_menge` und `verpackungsinhalt`,
   wird sie nicht doppelt geteilt (`rule_engine._in_price_unit`). Ein unveränderter Prompt der Fassung 1 oder 2 wird beim Einspielen ersetzt (`prompt_seed._EXTRACTION_V2`).
+
+### Eigene Gesellschaften und Rollenprüfung Lieferant/Empfänger (Migration `0030_own_companies`, Seite `/gesellschaften`)
+
+Schutz gegen „KI hat den Empfänger statt des Lieferanten gelesen“ — **nur Markieren, nie automatisch Korrigieren** (die KI bekommt weder Liste noch Hinweis; der Vergleich läuft danach im System, `services/own_companies.py`).
+- **Liste** `own_companies` (`models/own_company.py`, `routers/own_companies.py` `/api/own-companies`): **alle Angaben optional**, mindestens eine Kennung nötig (Name, weitere Schreibweisen, USt-IdNrn., Steuernummern, IBANs — jeweils Listen, also mehrere IBANs möglich), Notiz, aktiv.
+  `GET /suggestions`: häufig gelesene Empfänger (`beleg.empfaenger_name`, ≥ 2 Belege, ähnliche Schreibweisen zusammengefasst), die noch nicht in der Liste stehen → „Übernehmen…“ in der Oberfläche.
+- **Abgleich** (`match`): USt-IdNr./IBAN/Steuernummer (Schreibweise egal) → Name nach Normalisierung (`supplier_dedup.normalize_name`: ohne Rechtsform, Umlaute/Satzzeichen egal, auch die Schreibweisen) → Ähnlichkeit ≥ 90 %.
+- **Prüfungen** (`party_checks`, laufen in `rule_engine.evaluate_document`, Ergebnis im Format der Prüfregeln → Badge „Prüfen!“, Filter „Stimmt nicht“, Excel, Infos-Ansicht): (1) Lieferant ist keine eigene Gesellschaft (Fehler; nur mit gefüllter Liste),
+  (2) Lieferant ≠ Rechnungsempfänger (Fehler; braucht keine Liste), (3) Empfänger steht in der Liste (Hinweis; nur mit Liste), (4) Lieferant passt zum bekannten Lieferanten mit gleicher IBAN/USt-IdNr. (Hinweis). Gelesener Lieferant = `root.data["_master"]["lieferant"]`.
+  Wirkt auch bei der MAIN-Übernahme (Prüfung (1) braucht dort keinen Empfänger). Nach Änderungen an der Liste: Prüfregeln → „Alle Belege neu prüfen“.
+- **Schema/Prompt:** `beleg.empfaenger_name` und `beleg.empfaenger_ust_id_nr` (Standardfelder, über „Standardfelder ergänzen“ nachrüstbar), Prompt Fassung 4 (Regel 24); ältere unveränderte Fassungen werden ersetzt.

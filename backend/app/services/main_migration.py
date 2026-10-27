@@ -331,6 +331,8 @@ _DEFAULT_BELEG = {
     "faelligkeit": (["raw.rechnungsdaten.faelligkeit", "raw.faelligkeit", "ext.due_date"], None),
     "kundennummer": (["raw.rechnungsdaten.kundennummer", "raw.kundennummer", "ext.customer_number"], None),
     "bestellnummer": (["raw.rechnungsdaten.bestellnummer", "raw.bestellnummer"], None),
+    "empfaenger_name": (["raw.rechnungsempfaenger.name", "raw.empfaenger.name"], None),
+    "empfaenger_ust_id_nr": (["raw.rechnungsempfaenger.ust_id_nr", "raw.empfaenger.ust_id_nr"], None),
     "gesamtbetrag_netto": ([f"{_NEW}.gesamtbetrag_netto", "raw.gesamtbetrag_netto"], None),
     "steuerbetrag": ([f"{_NEW}.umsatzsteuer_zusammenfassung[*].steuerbetrag", f"{_NEW}.steuerbetrag", "raw.steuerbetrag"], "sum"),
     "gesamtbetrag_brutto": ([f"{_NEW}.gesamtbetrag_brutto", "raw.gesamtbetrag_brutto", "ext.total_amount"], None),

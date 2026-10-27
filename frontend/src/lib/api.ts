@@ -2002,3 +2002,16 @@ export const mainMigrationApi = {
   reanalyze: (d: { workflow_id: number; include: string[]; limit?: number | null }) =>
     apiClient.post<{ enqueued: number; candidates?: number; message?: string }>("/api/main-migration/reanalyze", d).then((r) => r.data),
 };
+
+
+// ─── Eigene Gesellschaften (Rechnungsempfänger) ────────────────────────────────
+export interface OwnCompany { id: number; name: string | null; aliases: string[]; vat_ids: string[]; tax_numbers: string[]; ibans: string[]; note: string | null; active: boolean }
+export type OwnCompanyInput = Omit<OwnCompany, "id">;
+export interface OwnCompanySuggestion { name: string; aliases: string[]; vat_id: string | null; count: number }
+export const ownCompaniesApi = {
+  list: () => apiClient.get<OwnCompany[]>("/api/own-companies").then((r) => r.data),
+  suggestions: (minCount = 2) => apiClient.get<OwnCompanySuggestion[]>("/api/own-companies/suggestions", { params: { min_count: minCount } }).then((r) => r.data),
+  create: (d: OwnCompanyInput) => apiClient.post<OwnCompany>("/api/own-companies", d).then((r) => r.data),
+  update: (id: number, d: OwnCompanyInput) => apiClient.put<OwnCompany>(`/api/own-companies/${id}`, d).then((r) => r.data),
+  remove: (id: number) => apiClient.delete(`/api/own-companies/${id}`),
+};

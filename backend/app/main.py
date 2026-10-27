@@ -323,7 +323,7 @@ from app.routers import main_migration as main_migration_router
 from app.routers import positions as positions_router
 from app.routers import validation_backfill as validation_backfill_router
 from app.routers import export_settings as export_settings_router
-from app.routers import ai_questions as ai_questions_router, change_log as change_log_router, data_backup as data_backup_router, db_assistant, db_browser
+from app.routers import own_companies as own_companies_router, ai_questions as ai_questions_router, change_log as change_log_router, data_backup as data_backup_router, db_assistant, db_browser
 
 # Anmeldung selbst (Login/Logout/me) ist offen bzw. prüft sich selbst
 app.include_router(auth.router)                        # /api/auth/*
@@ -356,6 +356,7 @@ app.include_router(data_backup_router.router, dependencies=_protected)          
 app.include_router(change_log_router.router, dependencies=_protected)           # /api/change-log/* (Änderungsprotokoll)
 app.include_router(db_browser.router, dependencies=_protected)                   # /api/db/* (Daten-Browser)
 app.include_router(db_assistant.router, dependencies=_protected)                 # /api/db-assistant/* (KI-Assistent)
+app.include_router(own_companies_router.router, dependencies=_protected)         # /api/own-companies/* (eigene Gesellschaften = Empfänger)
 app.include_router(ai_questions_router.router, dependencies=_protected)          # /api/ai-questions/* (freie KI-Frage an Belege + Verlauf)
 
 
