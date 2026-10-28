@@ -120,18 +120,28 @@ class Document(Base):
 
     @property
     def total_amount(self):
-        """Gesamtbetrag brutto aus der InvoiceExtraction (None wenn keine Extraktion)."""
-        return self.extraction.total_amount_brutto if self.extraction else None
+        """Gesamtbetrag brutto — aus der alten Extraktion, sonst aus dem Schema-Wurzel-Datensatz
+        (via crud.document._attach_rule_status gesetztes `_schema_root`)."""
+        if self.extraction:
+            return self.extraction.total_amount_brutto
+        r = getattr(self, "_schema_root", None)
+        return r.get("gesamtbetrag_brutto") if r else None
 
     @property
     def invoice_number(self) -> str | None:
-        """Rechnungsnummer aus der InvoiceExtraction (None wenn keine Extraktion)."""
-        return self.extraction.invoice_number if self.extraction else None
+        """Rechnungsnummer — alte Extraktion, sonst Schema-Wurzel-Datensatz (`_schema_root`)."""
+        if self.extraction:
+            return self.extraction.invoice_number
+        r = getattr(self, "_schema_root", None)
+        return r.get("rechnungsnummer") if r else None
 
     @property
     def supplier_name(self) -> str | None:
-        """Lieferantenname (vendor_id-Freitext) aus der InvoiceExtraction."""
-        return self.extraction.vendor_id if self.extraction else None
+        """Lieferantenname — alte Extraktion (vendor_id-Freitext), sonst Schema-Wurzel-Datensatz (`_schema_root`)."""
+        if self.extraction:
+            return self.extraction.vendor_id
+        r = getattr(self, "_schema_root", None)
+        return r.get("supplier_name") if r else None
 
     @property
     def validation_status(self) -> str | None:

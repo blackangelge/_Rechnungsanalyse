@@ -218,10 +218,19 @@ def _filtered_query(db: Session, **f):
     if needs_join:
         query = query.outerjoin(InvoiceExtraction, Document.id == InvoiceExtraction.document_id)
 
-    if g("total_min") is not None:
-        query = query.filter(InvoiceExtraction.total_amount_brutto >= Decimal(str(g("total_min"))))
-    if g("total_max") is not None:
-        query = query.filter(InvoiceExtraction.total_amount_brutto <= Decimal(str(g("total_max"))))
+    if g("total_min") is not None or g("total_max") is not None:
+        # alter Betrag (invoice_extractions) ODER Schema-Wurzel (data.gesamtbetrag_brutto)
+        amt = ExtractedRecord.data["gesamtbetrag_brutto"].as_float()
+        def _schema_amt(cond):
+            return db.query(ExtractedRecord.id).filter(
+                ExtractedRecord.document_id == Document.id, ExtractedRecord.parent_record_id.is_(None), cond
+            ).exists()
+        if g("total_min") is not None:
+            m = float(g("total_min"))
+            query = query.filter(or_(InvoiceExtraction.total_amount_brutto >= Decimal(str(g("total_min"))), _schema_amt(amt >= m)))
+        if g("total_max") is not None:
+            m = float(g("total_max"))
+            query = query.filter(or_(InvoiceExtraction.total_amount_brutto <= Decimal(str(g("total_max"))), _schema_amt(amt <= m)))
     if g("has_extraction") is True:
         query = query.filter(InvoiceExtraction.id.isnot(None))
     elif g("has_extraction") is False:
@@ -254,9 +263,19 @@ def _filtered_query(db: Session, **f):
     if g("error_codes"):
         codes = g("error_codes")
         query = query.filter(Document.error_code.isnot(None) if "any" in codes else Document.error_code.in_(codes))
-    # vendor_id ist der Lieferantenname-String in der Extraktion
+    # Lieferant: alter Freitext (invoice_extractions.vendor_id) ODER Schema-Lieferant (data._master.lieferant.name)
     if g("supplier_name_filter"):
-        query = query.filter(InvoiceExtraction.vendor_id.ilike(f"%{g('supplier_name_filter')}%"))
+        name = f"%{g('supplier_name_filter')}%"
+        schema_sup = (
+            db.query(ExtractedRecord.id)
+            .filter(
+                ExtractedRecord.document_id == Document.id,
+                ExtractedRecord.parent_record_id.is_(None),
+                ExtractedRecord.data["_master"]["lieferant"]["name"].as_string().ilike(name),
+            )
+            .exists()
+        )
+        query = query.filter(or_(InvoiceExtraction.vendor_id.ilike(name), schema_sup))
 
     if g("company") or g("year") is not None:
         query = query.join(ImportBatch, Document.batch_id == ImportBatch.id)
@@ -314,21 +333,33 @@ def get_all_filtered(
 
 
 def _attach_rule_status(db: Session, docs: list[Document]) -> None:
-    """Ergebnis der Prüfregeln (Wurzel-Datensatz, data._validation) an die Listenzeilen hängen — nur dieser Teilwert wird gelesen."""
+    """Pro Listenzeile aus dem Wurzel-Datensatz des neuen Schemas anhängen: Prüfregel-Status (data._validation)
+    sowie Kopffelder (Rechnungsnr., Brutto, Lieferantenname) — Letztere füllen die Spalten für Belege ohne alte
+    Extraktion (migriert/schema-extrahiert). Es werden nur diese Teilwerte gelesen, nicht das ganze data-JSON."""
     for d in docs:
         d.rule_status = d.rule_failed = d.rule_skipped = None
+        d._schema_root = None
     if not docs:
         return
     rows = (
-        db.query(ExtractedRecord.document_id, ExtractedRecord.data["_validation"])
+        db.query(
+            ExtractedRecord.document_id,
+            ExtractedRecord.data["_validation"],
+            ExtractedRecord.data["rechnungsnummer"].as_string(),
+            ExtractedRecord.data["gesamtbetrag_brutto"].as_float(),
+            ExtractedRecord.data["_master"]["lieferant"]["name"].as_string(),
+        )
         .filter(ExtractedRecord.document_id.in_([d.id for d in docs]), ExtractedRecord.parent_record_id.is_(None))
         .all()
     )
-    by_doc = {doc_id: val for doc_id, val in rows if isinstance(val, dict)}
+    by_doc = {r[0]: r for r in rows}
     for d in docs:
-        val = by_doc.get(d.id)
-        if val:
-            d.rule_status, d.rule_failed, d.rule_skipped = val.get("status"), val.get("failed"), val.get("skipped")
+        r = by_doc.get(d.id)
+        if r is None:
+            continue
+        if isinstance(r[1], dict):
+            d.rule_status, d.rule_failed, d.rule_skipped = r[1].get("status"), r[1].get("failed"), r[1].get("skipped")
+        d._schema_root = {"rechnungsnummer": r[2], "gesamtbetrag_brutto": r[3], "supplier_name": r[4]}
 
 
 def count_filtered(db: Session, **filters) -> int:
