@@ -953,7 +953,9 @@ export default function BelegePage() {
               Ausgeblendete Imports einbeziehen
             </label>
             <div className="ml-auto flex gap-2">
-              <button onClick={applyFilters} className="btn btn-primary">Filter anwenden</button>
+              <button onClick={applyFilters} disabled={loading} className="btn btn-primary disabled:opacity-60">
+                {loading ? (<><span className="mr-1.5 inline-block animate-spin">⟳</span>Lädt…</>) : "Filter anwenden"}
+              </button>
               <button onClick={resetFilters} className="btn btn-secondary">Zurücksetzen</button>
             </div>
           </div>
@@ -1131,7 +1133,14 @@ export default function BelegePage() {
               localFilter={localQ} onLocalFilter={changeLocalFilter} />
 
             {/* Tabelle */}
-            <div className="card w-full overflow-x-auto">
+            <div className="card w-full overflow-x-auto relative">
+              {loading && documents.length > 0 && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center bg-white/60">
+                  <div className="mt-6 flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-1.5 text-sm text-gray-600 shadow-sm">
+                    <span className="inline-block animate-spin">⟳</span> Lädt…
+                  </div>
+                </div>
+              )}
               <table className="table-ra min-w-full">
                 <thead>
                   <tr>
