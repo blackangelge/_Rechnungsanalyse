@@ -117,6 +117,14 @@ def _norm_id(text: str | None) -> str:
     return re.sub(r"[\s]+", "", text or "").upper()
 
 
+def _cap(v, n: int):
+    """Text auf die Spaltenlänge kürzen — Quelldaten (z.B. aus MAIN) können überlange/fehlerhafte Werte enthalten."""
+    if v is None:
+        return None
+    s = str(v)
+    return s[:n] if len(s) > n else s
+
+
 def match_vendor(db: Session, entity: SchemaEntity, values: dict) -> Vendor | None:
     """Findet (nach `match_fields` in dieser Reihenfolge) oder legt an; ergänzt nur leere Felder. Kein Commit."""
     name = (values.get("name") or "").strip() if isinstance(values.get("name"), str) else values.get("name")
@@ -148,10 +156,12 @@ def match_vendor(db: Session, entity: SchemaEntity, values: dict) -> Vendor | No
         if v not in (None, "") and not getattr(found, attr):
             setattr(found, attr, v)
     iban = values.get("iban")
+    bic = _cap(values.get("bic"), 20)
+    bank_name = _cap(values.get("bank_name"), 255)
     if iban and not any(_norm_id(b.iban) == _norm_id(str(iban)) for b in found.bank_accounts):
-        db.add(VendorBankAccount(vendor_id=found.id, bank_name=values.get("bank_name"), iban=str(iban), bic=values.get("bic")))
-    elif not iban and values.get("bank_name") and not found.bank_accounts:
-        db.add(VendorBankAccount(vendor_id=found.id, bank_name=values.get("bank_name"), iban=None, bic=values.get("bic")))
+        db.add(VendorBankAccount(vendor_id=found.id, bank_name=bank_name, iban=_cap(str(iban), 50), bic=bic))
+    elif not iban and bank_name and not found.bank_accounts:
+        db.add(VendorBankAccount(vendor_id=found.id, bank_name=bank_name, iban=None, bic=bic))
     db.flush()
     db.refresh(found)
     return found

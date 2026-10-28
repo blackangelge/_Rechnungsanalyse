@@ -322,6 +322,30 @@ def build_parsed(version: SchemaVersion, mapping: list[dict], doc: dict, ext: di
     return parsed
 
 
+def _coerce_for_schema(parsed: dict) -> None:
+    """Werte an die strengen Schema-Typen angleichen, damit MAIN-Eigenheiten die Validierung nicht sprengen (ändert `parsed` in place):
+    position_nr als Bruchzahl (z.B. 1.1) → Text (ganze Zahlen bleiben Zahl); Einheiten/Namen/Bezeichnungen, die als Zahl gelesen wurden → Text."""
+    def stringify(d: dict, key: str) -> None:
+        v = d.get(key)
+        if v is not None and not isinstance(v, str):
+            d[key] = str(v)
+
+    for val in parsed.values():
+        items = val if isinstance(val, list) else ([val] if isinstance(val, dict) else [])
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            pn = it.get("position_nr")
+            if isinstance(pn, float) and not isinstance(pn, bool):
+                it["position_nr"] = int(pn) if pn.is_integer() else str(pn)
+            for fk in ("name", "artikelbezeichnung", "artikelnummer", "preisnachlass_bezeichnung", "preiseinheit"):
+                if fk in it:
+                    stringify(it, fk)
+            for qv in it.values():
+                if isinstance(qv, dict) and "unit" in qv:
+                    stringify(qv, "unit")
+
+
 # ─── Standard-Übersetzung ────────────────────────────────────────────────────
 
 _NEW = "raw.zahlungsinformationen"
@@ -770,6 +794,7 @@ def migrate_one(db: Session, version: SchemaVersion, built, resolver: UnitResolv
         return new, "imported", "; ".join(notes) or None
 
     parsed = build_parsed(version, mapping, doc, ext or {}, sup or {}, raw, positions)
+    _coerce_for_schema(parsed)
     validated = schema_pipeline.validate_output(built, parsed)
     ctx = field_functions.build_context(new)
     root = schema_pipeline.build_drafts(db, version, validated, ctx, resolver)
@@ -993,6 +1018,7 @@ def preview(db: Session, old_document_id: int) -> dict:
         out["parsed"], out["schema_errors"] = None, ["Keine verwertbare KI-Antwort — der Beleg würde ohne Daten übernommen."]
         return out
     parsed = build_parsed(version, cfg.mapping or [], doc, ext or {}, sup or {}, raw, positions)
+    _coerce_for_schema(parsed)
     out["parsed"] = parsed
     try:
         schema_pipeline.validate_output(build_extraction_model(version), parsed)
