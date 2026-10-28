@@ -23,7 +23,6 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { RuleBadge, RuleChecksPanel } from "@/components/belege/RuleChecks";
-import { createPortal } from "react-dom";
 import Pager from "@/components/common/Pager";
 import { Alert, PageHeader } from "@/components/ui";
 import { fetchAllPages, matchesWords } from "@/lib/loadAll";
@@ -37,6 +36,7 @@ import {
   DocumentType,
   DOCUMENT_TYPES,
   ImportBatch,
+  SchemaRecords,
   UNIT_TYPE_LABELS,
   ValidationStatus,
   WorkflowListItem,
@@ -1114,7 +1114,8 @@ export default function BelegePage() {
             )}
           </div>
         ) : (
-          <>
+          <div className={showPreview ? "flex items-start gap-4" : ""}>
+            <div className={showPreview ? "min-w-0 flex-1" : ""}>
             {/* Anzahl + Blätterleiste (oben) */}
             <Pager testId="pager-top" loading={loading} total={total} page={page} pageSize={pageSize}
               totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo}
@@ -1125,7 +1126,7 @@ export default function BelegePage() {
               localFilter={localQ} onLocalFilter={changeLocalFilter} />
 
             {/* Tabelle */}
-            <div className={`card overflow-x-auto ${showPreview ? "w-1/2" : "w-full"}`}>
+            <div className="card w-full overflow-x-auto">
               <table className="table-ra min-w-full">
                 <thead>
                   <tr>
@@ -1320,11 +1321,12 @@ export default function BelegePage() {
               onLoadAll={loadAllHits} allActive={allActive} allLoading={allProgress} onExitAll={leaveAllMode}
               localFilter={localQ} onLocalFilter={changeLocalFilter} />
             </div>
+            </div>{/* Ende linke Spalte (Tabelle) */}
 
-            {/* PDF-Vorschau */}
-            {showPreview && createPortal(
-              <div className="fixed right-0 bottom-0 z-40 flex w-1/2 flex-col border-l border-gray-200 bg-white shadow-2xl"
-                   style={{ top: 0 }}>
+            {/* PDF-Vorschau: fester Streifen rechts, im Layout-Fluss (überdeckt die Tabelle nicht) */}
+            {showPreview && (
+              <div className="sticky top-4 flex w-1/2 shrink-0 flex-col self-start overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm"
+                   style={{ height: "calc(100vh - 7rem)" }}>
                 <div className="flex shrink-0 items-center justify-between border-b bg-white px-4 py-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm font-medium text-gray-800">
@@ -1341,10 +1343,9 @@ export default function BelegePage() {
                   className="w-full flex-1"
                   title={`PDF-Vorschau #${previewDocId}`}
                 />
-              </div>,
-              document.body
+              </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
@@ -1479,7 +1480,9 @@ export default function BelegePage() {
                   {/* Fallback auf viewedDoc.raw_response (Document-Ebene) für Fälle ohne
                       InvoiceExtraction, z.B. waiting_capacity — dort steht der Grund als
                       Klartext, nicht als KI-JSON-Antwort. */}
-                  <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response ?? null} />
+                  {(viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response)
+                    ? <KiRawView rawResponse={viewedDoc.extraction?.raw_response ?? viewedDoc.raw_response ?? null} />
+                    : <KiSchemaView docId={viewedDoc.id} />}
                   <UsedWorkflow doc={viewedDoc} />
                   <UsedPrompts doc={viewedDoc} />
                 </>
@@ -1545,6 +1548,102 @@ function KiRawView({ rawResponse }: { rawResponse: string | null }) {
   );
 }
 
+// ─── KI-Antwort für Schema-/migrierte Belege ──────────────────────────────────
+/**
+ * Schema-extrahierte und migrierte Belege haben keinen Roh-KI-Text mehr — die
+ * strukturierten Schema-Datensätze SIND die „KI-Antwort". Hier formatiert anzeigen.
+ */
+function KiSchemaView({ docId }: { docId: number }) {
+  const [schema, setSchema] = useState<SchemaRecords | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    documentsApi.schemaRecords(docId)
+      .then((s) => { if (!cancelled) { setSchema(s); setLoaded(true); } })
+      .catch(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [docId]);
+
+  if (!loaded) return <p className="text-sm text-gray-400">Lade…</p>;
+  if (!schema?.has_schema) return <p className="text-sm text-gray-400">Keine KI-Antwort gespeichert.</p>;
+  const payload = { ...(schema.root ?? {}), positionen: schema.children };
+  return (
+    <div>
+      <p className="mb-2 text-xs text-gray-400">Strukturierte Schema-Auslesung (für diesen Beleg gibt es keinen Roh-KI-Text).</p>
+      <pre className="overflow-x-auto rounded-lg bg-gray-950 p-4 text-xs leading-relaxed text-green-300 whitespace-pre-wrap break-words">
+        {JSON.stringify(payload, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+// ─── Schema → bekanntes Infos-Format ──────────────────────────────────────────
+/**
+ * Übersetzt die Schema-Datensätze (neues dynamisches Schema) in das verschachtelte
+ * Format (lieferant / rechnungsdaten / zahlungsinformationen / positionen), damit die
+ * vorhandene Infos-Ansicht sie ohne Änderung rendern kann.
+ */
+function schemaToRaw(schema: SchemaRecords): Record<string, unknown> | null {
+  const root = schema.root;
+  if (!root) return null;
+  const master = ((root._master as Record<string, unknown>)?.lieferant as Record<string, unknown>) ?? {};
+  const positions = schema.children.filter((c) => c.entity === "position").map((c) => c.data);
+  const ust = schema.children.filter((c) => c.entity === "umsatzsteuer").map((c) => c.data);
+  const qval = (q: unknown) => {
+    const m = q as Record<string, unknown> | null;
+    return m && typeof m === "object" ? (m.original_value ?? m.value ?? null) : (q ?? null);
+  };
+  const qunit = (q: unknown) => {
+    const m = q as Record<string, unknown> | null;
+    return m && typeof m === "object" ? (m.original_unit ?? m.unit ?? null) : null;
+  };
+  const skontoAny = root.skonto_betrag != null || root.skonto_prozent != null || root.skonto_frist_tage != null;
+  return {
+    lieferant: {
+      name: master.name ?? null,
+      hrb_nummer: master.hrb_nummer ?? null,
+      steuernummer: master.steuernummer ?? null,
+      ust_id_nr: master.ust_id_nr ?? null,
+      anschrift: { strasse: master.strasse ?? null, plz: master.plz ?? null, ort: master.ort ?? null, land: master.land ?? null },
+      bankverbindung: { bank_name: master.bank_name ?? null, iban: master.iban ?? null, bic: master.bic ?? null },
+    },
+    rechnungsdaten: {
+      rechnungsnummer: root.rechnungsnummer ?? null,
+      rechnungsdatum: root.rechnungsdatum ?? null,
+      faelligkeit: root.faelligkeit ?? null,
+      kundennummer: root.kundennummer ?? null,
+      bestellnummer: root.bestellnummer ?? null,
+    },
+    zahlungsinformationen: {
+      gesamtbetrag_netto: root.gesamtbetrag_netto ?? null,
+      gesamtbetrag_brutto: root.gesamtbetrag_brutto ?? null,
+      waehrung: root.waehrung ?? null,
+      skonto: skontoAny
+        ? { betrag: root.skonto_betrag ?? null, prozent: root.skonto_prozent ?? null, frist_tage: root.skonto_frist_tage ?? null }
+        : null,
+      zahlungsbedingungen: root.zahlungsbedingungen ?? null,
+      umsatzsteuer_zusammenfassung: ust.length
+        ? ust.map((u) => ({ steuersatz: u.steuersatz ?? null, nettobetrag: u.nettobetrag ?? null, steuerbetrag: u.steuerbetrag ?? null }))
+        : null,
+    },
+    positionen: positions.map((p) => ({
+      position_nr: p.position_nr ?? null,
+      artikelbezeichnung: p.artikelbezeichnung ?? null,
+      artikelnummer_lieferant: p.artikelnummer ?? null,
+      menge: qval(p.menge),
+      mengeneinheit: qunit(p.menge),
+      einzelpreis: p.einzelpreis ?? null,
+      gesamtpreis: p.gesamtpreis ?? null,
+      steuersatz: p.steuersatz ?? null,
+      preisnachlass: { betrag: p.preisnachlass_betrag ?? null, prozent: p.preisnachlass_prozent ?? null, bezeichnung: p.preisnachlass_bezeichnung ?? null },
+      preis_je_menge: p.preis_je_menge ?? null,
+      verpackungsinhalt: qval(p.verpackungsinhalt),
+      verpackungsinhalt_einheit: qunit(p.verpackungsinhalt),
+      mengeneinheit_typ: p.mengeneinheit_typ ?? null,
+    })),
+  };
+}
+
 // ─── Formatierte Infos-Ansicht ────────────────────────────────────────────────
 /**
  * Zeigt die extrahierten Rechnungsdaten strukturiert an.
@@ -1567,10 +1666,24 @@ function InfosView({
 }) {
   const ext = doc.extraction;
 
+  // Neues dynamisches Schema: Belege ohne alte Extraktion (migriert / schema-extrahiert)
+  // speichern ihre Daten in extracted_records. Die holen und in das bekannte
+  // verschachtelte Format übersetzen, damit die Ansicht unten unverändert rendert.
+  const [schema, setSchema] = useState<SchemaRecords | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (ext?.raw_response) { setSchema(null); return; }
+    documentsApi.schemaRecords(doc.id).then((s) => { if (!cancelled) setSchema(s); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [doc.id, ext?.raw_response]);
+
   let raw: Record<string, unknown> | null = null;
   if (ext?.raw_response) {
     try { raw = JSON.parse(ext.raw_response); } catch { /* ignore */ }
+  } else if (schema?.has_schema) {
+    raw = schemaToRaw(schema);
   }
+  const hasSchema = !!schema?.has_schema;
 
   const lieferant = (raw?.lieferant as Record<string, unknown>) ?? null;
   const anschrift = (lieferant?.anschrift as Record<string, unknown>) ?? null;
@@ -1833,7 +1946,7 @@ function InfosView({
         </div>
       )}
 
-      {!ext && (
+      {!ext && !hasSchema && (
         <p className="text-sm text-gray-400">Keine Extraktionsdaten vorhanden.</p>
       )}
     </div>

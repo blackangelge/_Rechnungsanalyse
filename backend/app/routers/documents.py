@@ -1642,6 +1642,34 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
     return doc
 
 
+@router.get("/{doc_id}/schema-records")
+def document_schema_records(doc_id: int, db: Session = Depends(get_db)):
+    """
+    Schema-Datensätze eines Belegs (neues dynamisches Schema) für die Belege-Detailansicht.
+
+    Liefert den Wurzel-Datensatz (Belegfelder + Lieferant unter data._master) und die
+    Unter-Datensätze (Positionen, USt-Zusammenfassung …) je Entität. `has_schema` ist False,
+    wenn der Beleg über das alte Modell (invoice_extractions) ausgelesen wurde — dann füllt
+    die alte Extraktion die Ansicht. Schema-/migrierte Belege haben keinen Roh-KI-Text; die
+    strukturierten Felder hier sind die „KI-Antwort".
+    """
+    from app.models.schema_def import ExtractedRecord, SchemaEntity
+
+    records = db.query(ExtractedRecord).filter(ExtractedRecord.document_id == doc_id).all()
+    if not records:
+        return {"has_schema": False, "root": None, "root_entity": None, "children": []}
+    names = {e.id: e.name for e in db.query(SchemaEntity).all()}
+    root = next((r for r in records if r.parent_record_id is None), None)
+    children = [r for r in records if r.parent_record_id is not None]
+    children.sort(key=lambda r: (r.position_index if r.position_index is not None else 1_000_000, r.id))
+    return {
+        "has_schema": True,
+        "root": root.data if root else None,
+        "root_entity": names.get(root.entity_id) if root else None,
+        "children": [{"entity": names.get(r.entity_id), "data": r.data} for r in children],
+    }
+
+
 @router.post("/{doc_id}/validate", response_model=DocumentDetail)
 def revalidate_document(doc_id: int, db: Session = Depends(get_db)):
     """

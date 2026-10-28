@@ -549,6 +549,14 @@ export interface AnalyzeRequest {
   workflow_id?: number;
 }
 
+/** Antwort von GET /api/documents/{id}/schema-records (neues dynamisches Schema). */
+export interface SchemaRecords {
+  has_schema: boolean;
+  root: Record<string, unknown> | null;
+  root_entity: string | null;
+  children: { entity: string | null; data: Record<string, unknown> }[];
+}
+
 export const documentsApi = {
   nonInvoiceSummary: () => apiClient.get<NonInvoiceSummary>("/api/documents/non-invoices/summary").then((r) => r.data),
   /** In den Papierkorb legen (umkehrbar) */
@@ -581,6 +589,9 @@ export const documentsApi = {
       .then((r) => r.data),
   get: (id: number) =>
     apiClient.get<DocumentDetail>(`/api/documents/${id}`).then((r) => r.data),
+  /** Schema-Datensätze (neues dynamisches Schema) eines Belegs für die Detailansicht. */
+  schemaRecords: (id: number) =>
+    apiClient.get<SchemaRecords>(`/api/documents/${id}/schema-records`).then((r) => r.data),
   previewUrl: (id: number) => `${BASE}/api/documents/${id}/preview`,
   updateComment: (id: number, comment: string | null) =>
     apiClient.patch<DocumentDetail>(`/api/documents/${id}/comment`, { comment }).then((r) => r.data),
