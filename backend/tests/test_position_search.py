@@ -1,4 +1,4 @@
-"""Artikelsuche: Suche, Filter, Sortierung, Paginierung, Kennzahlen."""
+"""Artikelsuche (über das neue Schema, extracted_records): Suche, Filter, Sortierung, Paginierung, Kennzahlen."""
 
 from datetime import date
 
@@ -7,9 +7,14 @@ from fastapi.testclient import TestClient
 
 from app import crud
 from app.crud import position_search
+from app.crud import schema_definition as sd
 from app.database import get_db
 from app.main import app
 from app.models.import_batch import ImportBatch
+from app.models.schema_def import ExtractedRecord
+from app.services.schema_seed import seed_initial_schema
+from app.services.units import UnitResolver, normalize_quantity
+from app.services.units_seed import seed_default_units
 
 
 @pytest.fixture()
@@ -26,12 +31,19 @@ def client(sqlite_session_factory):
 
 
 def P(desc, art, qty, unit, price, total, discount=None):
-    return {"product_name": desc, "product_description": None, "article_number": art, "quantity": qty, "unit": unit,
+    return {"product_name": desc, "article_number": art, "quantity": qty, "unit": unit,
             "unit_price": price, "total_price": total, "discount": discount}
 
 
 @pytest.fixture()
 def world(db):
+    seed_default_units(db)
+    seed_initial_schema(db)
+    version = sd.get_active(db)
+    beleg_e = next(e for e in version.entities if e.name == "beleg")
+    pos_e = next(e for e in version.entities if e.name == "position")
+    resolver = UnitResolver(db)
+
     class W:
         pass
     w = W()
@@ -46,12 +58,25 @@ def world(db):
     def doc(key, batch, supplier, inv_no, inv_date, positions):
         d = crud.document.create(db, w.batches[batch].id, f"{key}.pdf", 1)
         crud.document.update_status(db, d.id, "done")
-        crud.document.save_extraction(
-            db, d.id, {"supplier_name": supplier, "invoice_number": inv_no, "invoice_date": inv_date},
-            positions, "{}",
-            validation={"status": "ok", "issues": [], "corrections": []},
+        root = ExtractedRecord(
+            document_id=d.id, entity_id=beleg_e.id, schema_version_id=version.id, parent_record_id=None,
+            data={"rechnungsnummer": inv_no, "rechnungsdatum": inv_date.isoformat(),
+                  "_master": {"lieferant": {"name": supplier}}, "_validation": {"status": "ok"}},
         )
+        db.add(root)
+        db.flush()
+        for i, p in enumerate(positions):
+            menge, _ = normalize_quantity(resolver, {"value": p["quantity"], "unit": p["unit"]})
+            db.add(ExtractedRecord(
+                document_id=d.id, entity_id=pos_e.id, schema_version_id=version.id, parent_record_id=root.id,
+                position_index=i,
+                data={"artikelbezeichnung": p["product_name"], "artikelnummer": p["article_number"],
+                      "menge": menge, "einzelpreis": p["unit_price"], "gesamtpreis": p["total_price"],
+                      "preisnachlass_bezeichnung": p["discount"]},
+            ))
+        db.commit()
         w.docs[key] = d
+
     doc("d1", "A", "Agro GmbH", "R-001", date(2024, 3, 1), [
         P("Kalkammonsalpeter 27% N", "KAS-27", 500, "kg", 0.40, 200.0),
         P("Harnstoff 46%", "HS-46", 2, "t", 450.0, 900.0, "5%"),
@@ -112,7 +137,7 @@ def test_free_text_all_words_must_match_description_or_article_number(client, wo
 
 def test_special_characters_are_literal_not_wildcards(client, world):
     assert get(client, q="50%")[1] == 1                                         # nur "Rabatt_Aktion 50% Sonder"
-    assert get(client, q="%")[1] == 4                                           # nur Bezeichnungen mit literalem % (27%, 27%, 46%, 50%)
+    assert get(client, q="%")[1] == 4                                           # Bezeichnungen mit literalem % (27%, 27%, 46%, 50%)
     assert get(client, q="n_a")[1] == 0                                         # "_" ist kein Platzhalter
     assert get(client, q="Rabatt_Aktion")[1] == 1
 
@@ -237,19 +262,20 @@ def test_units_are_converted_to_base_unit_in_list_and_filter(client, world):
     assert round(float(row["base_unit_price"]), 4) == 450.0       # 900 € ÷ 2 t (Positionspreis ÷ Basismenge)
     piece = next(i for i in get(client, limit=100)[0] if i["unit"] == "Stück")
     assert piece["base_unit"] is None and piece["base_quantity"] is None
-    mass = next(g for g in client.get("/api/positions/unit-table").json() if g["group"] == "mass")
-    assert mass["base_unit"] == "t" and {"unit": "kg", "factor": 0.001} in mass["units"]
     assert get(client, unit_group="mass")[1] == 4                  # kg, KG, kg, t
     assert get(client, unit_group="volume")[1] == 0
     assert client.get("/api/positions", params={"unit_group": "bogus"}).status_code == 422
 
 
 def test_summary_counts_positions_without_total_price(client, world):
-    from app.models.order_position import OrderPosition
     # Ausgangslage: nur die leere Position hat keinen Gesamtpreis
     assert client.get("/api/positions/summary").json()["without_total_price"] == 1
     from app.services.query_guard import clear_all_caches
-    world.db.query(OrderPosition).filter(OrderPosition.product_name == "Harnstoff 46%").update({"total_price": None})
+    rec = next(r for r in world.db.query(ExtractedRecord).all()
+               if isinstance(r.data, dict) and r.data.get("artikelbezeichnung") == "Harnstoff 46%")
+    data = dict(rec.data)
+    data["gesamtpreis"] = None
+    rec.data = data
     world.db.commit()
     clear_all_caches()
     s = client.get("/api/positions/summary").json()

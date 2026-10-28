@@ -42,6 +42,49 @@ def _doc(db, positions, raw=None):
     return d
 
 
+def _schema_doc(db, positions):
+    """Beleg mit Positionen im NEUEN Schema (extracted_records) — für die Artikelsuche."""
+    from app.crud import schema_definition as sd
+    from app.models.schema_def import ExtractedRecord
+    from app.models.units import UnitGroup
+    from app.services.schema_seed import seed_initial_schema
+    from app.services.units import UnitResolver, normalize_quantity
+    from app.services.units_seed import seed_default_units
+
+    if db.query(UnitGroup).first() is None:
+        seed_default_units(db)
+    if sd.get_active(db) is None:
+        seed_initial_schema(db)
+    version = sd.get_active(db)
+    beleg_e = next(e for e in version.entities if e.name == "beleg")
+    pos_e = next(e for e in version.entities if e.name == "position")
+    resolver = UnitResolver(db)
+    b = ImportBatch(company_name="F", year=2025, import_folder_path="/x", storage_folder_path="/s", status="done")
+    db.add(b)
+    db.commit()
+    d = crud.document.create(db, b.id, "a.pdf", 1)
+    crud.document.update_status(db, d.id, "done")
+    root = ExtractedRecord(document_id=d.id, entity_id=beleg_e.id, schema_version_id=version.id, parent_record_id=None,
+                           data={"rechnungsnummer": "R-1", "_master": {"lieferant": {"name": "L"}}, "_validation": {"status": "ok"}})
+    db.add(root)
+    db.flush()
+    for i, p in enumerate(positions):
+        menge, _ = normalize_quantity(resolver, {"value": p.get("quantity"), "unit": p.get("unit")})
+        pack = None
+        if p.get("pack_size") is not None:
+            pack = {"original_value": p["pack_size"], "original_unit": p.get("pack_unit"),
+                    "value": None, "unit": None, "status": "ok"}
+        db.add(ExtractedRecord(
+            document_id=d.id, entity_id=pos_e.id, schema_version_id=version.id, parent_record_id=root.id, position_index=i,
+            data={"artikelbezeichnung": p.get("product_description"), "artikelnummer": p.get("article_number"),
+                  "menge": menge, "einzelpreis": p.get("unit_price"), "gesamtpreis": p.get("total_price"),
+                  "preis_je_menge": p.get("price_quantity"), "verpackungsinhalt": pack,
+                  "mengeneinheit_typ": p.get("unit_type")},
+        ))
+    db.commit()
+    return d
+
+
 # ── KI-Auslesung ────────────────────────────────────────────────────────────
 
 def test_ai_mapping_reads_basis_pack_and_type():
@@ -115,10 +158,10 @@ def test_backfill_detects_basis_from_totals_and_pack_from_text(client, db):
 # ── Artikelsuche und Excel ──────────────────────────────────────────────────
 
 def test_article_search_returns_content_values(client, db):
-    d = _doc(db, [{"product_description": "Schraube", "quantity": 44, "unit": "VPE", "unit_price": 90, "total_price": 3960,
-                   "pack_size": 100, "pack_unit": "Stück", "unit_type": "verpackung"},
-                  {"product_description": "Mutter", "quantity": 4400, "unit": "Stück", "unit_price": 90, "total_price": 3960, "price_quantity": 100},
-                  {"product_description": "Ohne", "quantity": 3, "unit": "Stück", "unit_price": 2, "total_price": 6}])
+    _schema_doc(db, [{"product_description": "Schraube", "quantity": 44, "unit": "VPE", "unit_price": 90, "total_price": 3960,
+                      "pack_size": 100, "pack_unit": "Stück", "unit_type": "verpackung"},
+                     {"product_description": "Mutter", "quantity": 4400, "unit": "Stück", "unit_price": 90, "total_price": 3960, "price_quantity": 100},
+                     {"product_description": "Ohne", "quantity": 3, "unit": "Stück", "unit_price": 2, "total_price": 6}])
     rows = {r["product_description"]: r for r in client.get("/api/positions").json()}
     s = rows["Schraube"]
     assert float(s["content_quantity"]) == 4400 and s["content_unit"] == "Stück" and round(float(s["content_unit_price"]), 4) == 0.9
@@ -129,7 +172,7 @@ def test_article_search_returns_content_values(client, db):
 
 
 def test_article_search_pack_in_weight_units_gets_base_values(client, db):
-    _doc(db, [{"product_description": "Sack", "quantity": 40, "unit": "Sack", "unit_price": 10, "total_price": 400, "pack_size": 25, "pack_unit": "kg"}])
+    _schema_doc(db, [{"product_description": "Sack", "quantity": 40, "unit": "Sack", "unit_price": 10, "total_price": 400, "pack_size": 25, "pack_unit": "kg"}])
     r = client.get("/api/positions").json()[0]
     assert r["base_unit"] == "t" and round(float(r["base_quantity"]), 4) == 1.0 and round(float(r["base_unit_price"]), 2) == 400.0
 
