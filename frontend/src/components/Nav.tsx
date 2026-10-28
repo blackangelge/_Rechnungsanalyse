@@ -82,7 +82,6 @@ export default function Nav({
   const [open, setOpen] = useState(false);
   const [unitReview, setUnitReview] = useState(0);              // offene Schreibweisen in der Einheiten-Prüfliste
   const full = pathname === "/assistent" || pathname.startsWith("/assistent/");   // Vollbild-Seite ohne Rand
-  const wide = isActive(pathname, "/belege");   // spaltenreiche Tabelle + PDF-Split: volle Hauptbreite ohne 1400px-Kappung
 
   useEffect(() => { setJsOk(true); }, []);
   useEffect(() => { setOpen(false); }, [pathname]);
@@ -167,7 +166,7 @@ export default function Nav({
         <main className="h-[calc(100dvh-49px)] min-w-0 flex-1 overflow-hidden lg:h-screen">{children}</main>
       ) : (
         <main className="min-w-0 flex-1 overflow-x-hidden">
-          <div className={`${wide ? "" : "mx-auto max-w-[1400px]"} p-4 sm:p-6 lg:p-8`}>{children}</div>
+          <div className="p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
       )}
     </div>
