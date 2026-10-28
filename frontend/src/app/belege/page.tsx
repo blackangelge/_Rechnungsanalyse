@@ -136,13 +136,14 @@ function ValidationBadge({ status }: { status: ValidationStatus | null | undefin
 
 /** Filter-Presets für die Plausibilitätsprüfung → Backend-Statuswerte */
 const VALIDATION_FILTERS: Record<string, { label: string; statuses?: ValidationStatus[]; ruleIssue?: ("mismatch" | "notcalc")[] }> = {
-  rechnet_nicht: { label: "Stimmt nicht / nicht berechenbar", ruleIssue: ["mismatch", "notcalc"] },
+  ok: { label: "Regeln OK / In Ordnung", statuses: ["ok", "manual_ok"] },
+  warn: { label: "Hinweis", statuses: ["warn" as ValidationStatus] },
+  needs_review: { label: "Prüfen! / manuell prüfen", statuses: ["needs_review"] },
   mismatch: { label: "Summen / Rechnung stimmen nicht", ruleIssue: ["mismatch"] },
-  notcalc: { label: "Nicht berechenbar (Wert fehlt)", ruleIssue: ["notcalc"] },
-  needs_review: { label: "Manuell prüfen", statuses: ["needs_review"] },
-  warn: { label: "Mit Hinweis (Prüfregeln)", statuses: ["warn" as ValidationStatus] },
+  notcalc: { label: "Nicht prüfbar (Wert fehlt)", ruleIssue: ["notcalc"] },
+  unchecked: { label: "Nicht geprüft", statuses: ["unchecked" as ValidationStatus] },
+  rechnet_nicht: { label: "Stimmt nicht / nicht berechenbar", ruleIssue: ["mismatch", "notcalc"] },
   corrected: { label: "Automatisch korrigiert", statuses: ["corrected", "ai_corrected"] },
-  ok: { label: "In Ordnung", statuses: ["ok", "manual_ok"] },
 };
 
 function BatchMultiSelect({
@@ -895,7 +896,7 @@ export default function BelegePage() {
                 className="input py-1.5 w-28" />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-gray-600">Plausibilität</label>
+              <label className="text-xs font-medium text-gray-600">Prüfung / Regeln</label>
               <select value={filterValidation} onChange={(e) => setFilterValidation(e.target.value)}
                 className="input py-1.5 w-60">
                 <option value="">Alle</option>
