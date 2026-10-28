@@ -10,7 +10,7 @@ Analyse (Validierung, Normalisierer, Einheiten, Lieferanten-Zuordnung, Speichern
   {"target": "position.einzelpreis", "sources": ["rawpos.einzelpreis", "pos.unit_price"], "transform": null}
   {"target": "position.menge", "sources": ["rawpos.menge", "pos.quantity"], "unit_sources": ["rawpos.mengeneinheit", "pos.unit"]}   (Mengenfelder)
 `target` = `<Entität>.<Feld>` des aktiven Schemas; die erste nicht leere Quelle gewinnt. Quellen:
-  doc.<Spalte>      documents (MAIN)            ext.<Spalte>     invoice_extractions        sup.<Spalte>   suppliers (über ext.supplier_id)
+  doc.<Spalte>      documents (MAIN)            ext.<Spalte>     invoice_extractions        sup.<Spalte>   vendor/suppliers (automatisch erkannt: neu über ext.vendor_id=Name, alt über ext.supplier_id)
   raw.<Pfad>        KI-Antwort (JSON)           pos.<Spalte>     order_positions (je Position)
   rawpos.<Pfad>     Position i der KI-Antwort   const:<Text>     fester Wert
 Pfade: `a.b.c`, `liste[*].feld` (alle Elemente), `liste[0].feld`. Transformationen: sum · first · join · price_unit.
@@ -333,9 +333,9 @@ _DEFAULT_BELEG = {
     "bestellnummer": (["raw.rechnungsdaten.bestellnummer", "raw.bestellnummer"], None),
     "empfaenger_name": (["raw.rechnungsempfaenger.name", "raw.empfaenger.name"], None),
     "empfaenger_ust_id_nr": (["raw.rechnungsempfaenger.ust_id_nr", "raw.empfaenger.ust_id_nr"], None),
-    "gesamtbetrag_netto": ([f"{_NEW}.gesamtbetrag_netto", "raw.gesamtbetrag_netto"], None),
-    "steuerbetrag": ([f"{_NEW}.umsatzsteuer_zusammenfassung[*].steuerbetrag", f"{_NEW}.steuerbetrag", "raw.steuerbetrag"], "sum"),
-    "gesamtbetrag_brutto": ([f"{_NEW}.gesamtbetrag_brutto", "raw.gesamtbetrag_brutto", "ext.total_amount"], None),
+    "gesamtbetrag_netto": ([f"{_NEW}.gesamtbetrag_netto", "raw.gesamtbetrag_netto", "ext.total_amount_netto"], None),
+    "steuerbetrag": ([f"{_NEW}.umsatzsteuer_zusammenfassung[*].steuerbetrag", f"{_NEW}.steuerbetrag", "raw.steuerbetrag", "ext.total_tax_value"], "sum"),
+    "gesamtbetrag_brutto": ([f"{_NEW}.gesamtbetrag_brutto", "raw.gesamtbetrag_brutto", "ext.total_amount_brutto", "ext.total_amount"], None),
     "rabatt_betrag": (["ext.discount_amount", f"{_NEW}.rabatt_betrag"], None),
     "skonto_prozent": ([f"{_NEW}.skonto.prozent"], None),
     "skonto_betrag": ([f"{_NEW}.skonto.betrag", "ext.cash_discount_amount"], None),
@@ -344,11 +344,11 @@ _DEFAULT_BELEG = {
     "waehrung": ([f"{_NEW}.waehrung", "raw.waehrung"], None),
 }
 _DEFAULT_LIEFERANT = {
-    "name": (["raw.lieferant.name", "ext.supplier_name", "sup.name"], None),
+    "name": (["raw.lieferant.name", "ext.vendor_id", "ext.supplier_name", "sup.name"], None),
     "strasse": (["raw.lieferant.anschrift.strasse", "sup.street"], None),
-    "plz": (["raw.lieferant.anschrift.plz", "sup.zip_code"], None),
+    "plz": (["raw.lieferant.anschrift.plz", "sup.postal_code", "sup.zip_code"], None),
     "ort": (["raw.lieferant.anschrift.ort", "sup.city"], None),
-    "land": (["raw.lieferant.anschrift.land"], None),
+    "land": (["raw.lieferant.anschrift.land", "sup.country"], None),
     "hrb_nummer": (["raw.lieferant.hrb_nummer", "ext.hrb_number", "sup.hrb_number"], None),
     "steuernummer": (["raw.lieferant.steuernummer", "ext.tax_number", "sup.tax_number"], None),
     "ust_id_nr": (["raw.lieferant.ust_id_nr", "ext.vat_id", "sup.vat_id"], None),
@@ -358,9 +358,9 @@ _DEFAULT_LIEFERANT = {
 }
 _DEFAULT_POSITION = {
     "position_nr": (["rawpos.position_nr"], None),
-    "artikelbezeichnung": (["rawpos.artikelbezeichnung", "pos.product_description"], None),
+    "artikelbezeichnung": (["rawpos.artikelbezeichnung", "pos.product_name", "pos.product_description"], None),
     "artikelnummer": (["rawpos.artikelnummer_lieferant", "pos.article_number"], None),
-    "einzelpreis": (["rawpos.einzelpreis", "pos.unit_price"], None),
+    "einzelpreis": (["rawpos.einzelpreis", "pos.unit_price_netto", "pos.unit_price"], None),
     "gesamtpreis": (["rawpos.gesamtpreis", "pos.total_price"], None),
     "steuersatz": (["rawpos.steuersatz"], None),
     "preisnachlass_betrag": (["rawpos.preisnachlass.betrag"], None),
@@ -443,15 +443,57 @@ def _in_clause(prefix: str, ids: list[int]) -> tuple[str, dict]:
     return ", ".join(f":{k}" for k in keys), keys
 
 
+def _col(row: dict, *names: str) -> Any:
+    """Erster vorhandener Schlüssel (auch wenn sein Wert None/0 ist) — für Spalten, die je MAIN-Version anders heißen."""
+    for n in names:
+        if n in row:
+            return row[n]
+    return None
+
+
+def _probe(bind) -> dict:
+    """Erkennt das MAIN-Schema, das je Version abweicht.
+    Neuere MAIN: Lieferantentabelle `vendor`, Verknüpfung über `invoice_extractions.vendor_id` (= Lieferantenname, Text).
+    Ältere MAIN: `suppliers`, Verknüpfung über `invoice_extractions.supplier_id` (Zahl-ID).
+    Löschkennzeichen am Beleg: `soft_deleted` (neu) bzw. `deleted_at` (alt)."""
+    from sqlalchemy import inspect
+    insp = inspect(bind)
+
+    def cols(t: str) -> set[str]:
+        try:
+            return {c["name"] for c in insp.get_columns(t)}
+        except Exception:
+            return set()
+
+    try:
+        tables = set(insp.get_table_names())
+    except Exception:
+        tables = set()
+    ext = cols("invoice_extractions")
+    docs = cols("documents")
+    sup_table = "vendor" if "vendor" in tables else ("suppliers" if "suppliers" in tables else "vendor")
+    if "supplier_id" in ext:
+        ext_link, sup_key = "supplier_id", "id"                      # ältere MAIN: Zahl-FK auf suppliers.id
+    else:
+        ext_link, sup_key = "vendor_id", "name"                      # neuere MAIN: Lieferantenname als Text → vendor.name
+    deleted = "soft_deleted" if "soft_deleted" in docs else ("deleted_at" if "deleted_at" in docs else "")
+    return {"sup_table": sup_table, "sup_key": sup_key, "ext_link": ext_link, "deleted": deleted}
+
+
 def count_source(engine: Engine) -> dict[str, int]:
     out: dict[str, int] = {}
+    probe = _probe(engine)
     with engine.connect() as conn:
         for key, table in (("batches", "import_batches"), ("documents", "documents"), ("extractions", "invoice_extractions"),
-                           ("positions", "order_positions"), ("suppliers", "suppliers")):
+                           ("positions", "order_positions")):
             try:
                 out[key] = int(conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0)
             except Exception as exc:
                 raise MigrationError(f"Tabelle {table} nicht lesbar — ist das die MAIN-Datenbank? ({exc})") from exc
+        try:                                                         # Lieferantentabelle optional — fehlt sie, zählt sie als 0
+            out["suppliers"] = int(conn.execute(text(f"SELECT COUNT(*) FROM {probe['sup_table']}")).scalar() or 0)
+        except Exception:
+            out["suppliers"] = 0
     return out
 
 
@@ -459,7 +501,7 @@ def discover_paths(engine: Engine, sample: int = 300) -> dict[str, list[str]]:
     """Spalten der MAIN-Tabellen + alle Pfade, die in den KI-Antworten einer Stichprobe vorkommen (für die Auswahl in der Oberfläche)."""
     out: dict[str, list[str]] = {}
     with engine.connect() as conn:
-        for ns, table in (("doc", "documents"), ("ext", "invoice_extractions"), ("sup", "suppliers"), ("pos", "order_positions")):
+        for ns, table in (("doc", "documents"), ("ext", "invoice_extractions"), ("sup", _probe(engine)["sup_table"]), ("pos", "order_positions")):
             rows = _rows(conn, f"SELECT * FROM {table} LIMIT 1")
             cols = list(rows[0].keys()) if rows else [c["name"] for c in _columns(engine, table)]
             out[ns] = [f"{ns}.{c}" for c in cols if c not in ("raw_response",)]
@@ -571,8 +613,9 @@ class RunOptions:
 _STATUS_MAP = {"done": "done", "error": "error"}
 
 
-def _find_pdf(root: Path, doc: dict, old_id: int) -> Path | None:
-    company, year = doc.get("company") or "", doc.get("year")
+def _find_pdf(root: Path, doc: dict, old_id: int, company: str | None = None, year: Any = None) -> Path | None:
+    company = doc.get("company") or company or ""            # MAIN speichert Firma/Jahr am Batch, nicht am Beleg → vom Batch übernehmen
+    year = doc.get("year") if doc.get("year") is not None else year
     folder = root / f"{company}_{year}"
     names = [doc.get("stored_filename"), f"{old_id}.pdf"]
     for base in (folder, root):
@@ -610,7 +653,7 @@ def _ensure_batch(db: Session, brow: dict, items: dict[int, MainMigrationItem], 
     if db.get(ImportBatch, old_id) is not None:
         raise MigrationError(f"Import-ID {old_id} ist im neuen System schon belegt — die IDs aus MAIN müssen frei sein.")
     batch = ImportBatch(
-        id=old_id, import_folder_path=brow.get("folder_path") or "", storage_folder_path=str(Path(settings.storage_path) / f"{company}_{year}"),
+        id=old_id, import_folder_path=_col(brow, "import_folder_path", "folder_path") or "", storage_folder_path=str(Path(settings.storage_path) / f"{company}_{year}"),
         company_name=company, year=year, comment=(brow.get("comment") or None), status="done", folder_sync=False, auto_export=False,
         hidden_at=_dt(hidden), started_at=_dt(brow.get("started_at")), finished_at=_dt(brow.get("finished_at")),
     )
@@ -689,20 +732,20 @@ def migrate_one(db: Session, version: SchemaVersion, built, resolver: UnitResolv
     new = Document(
         id=old_id, batch_id=batch_id, original_filename=doc.get("original_filename") or f"beleg_{old_id}.pdf",
         file_size_bytes=int(doc.get("file_size_bytes") or 0), page_count=int(doc.get("page_count") or 0),
-        document_type=_map_type(doc.get("document_type_id"), type_map), comment=doc.get("comment") or None, status="pending",
-        raw_response=(doc.get("error_message") or None) if mstatus == "error" else None,
+        document_type=_map_type(_col(doc, "document_type", "document_type_id"), type_map), comment=doc.get("comment") or None, status="pending",
+        raw_response=(_col(doc, "error_message", "raw_response") or None) if mstatus == "error" else None,
     )
     db.add(new)
     db.flush()
     created = _dt(doc.get("created_at"))
     if created:
         new.created_at = created
-    if doc.get("deleted_at"):
-        new.soft_deleted, new.deleted_at, new.deleted_reason = True, _dt(doc["deleted_at"]), "Aus MAIN übernommen (dort gelöscht)"
+    if doc.get("deleted_at") or doc.get("soft_deleted"):
+        new.soft_deleted, new.deleted_at, new.deleted_reason = True, _dt(doc.get("deleted_at")), "Aus MAIN übernommen (dort gelöscht)"
     notes: list[str] = []
 
     dest = Path(batch.storage_folder_path) / f"{new.id}.pdf"
-    pdf = _find_pdf(storage_root, doc, old_id) if storage_root else None
+    pdf = _find_pdf(storage_root, doc, old_id, batch.company_name, batch.year) if storage_root else None
     if dest.is_file():                                        # schon im Speicher dieses Systems (z. B. Ordner direkt hineinkopiert)
         new.stored_filename = dest.name
         new.file_size_bytes = dest.stat().st_size
@@ -758,6 +801,7 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
         built = build_extraction_model(version)
         resolver = UnitResolver(db)
         type_map = load_type_map(engine)
+        probe = _probe(engine)
         storage_root = Path(cfg.source_storage_path) if cfg.source_storage_path else None
         if storage_root is not None and not storage_root.is_dir():
             raise MigrationError(f"Ordner der MAIN-PDFs nicht gefunden: {storage_root}")
@@ -771,7 +815,9 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
             clause, keys = _in_clause("d", options.old_document_ids)
             where.append(f"id IN ({clause})")
             params.update(keys)
-        if not options.include_deleted:
+        if not options.include_deleted and probe["deleted"] == "soft_deleted":
+            where.append("NOT COALESCE(soft_deleted, FALSE)")
+        elif not options.include_deleted and probe["deleted"] == "deleted_at":
             where.append("deleted_at IS NULL")
         cond = " AND ".join(where)
 
@@ -782,7 +828,7 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
             _set(total=total, message="Übernahme läuft …")
 
             if options.suppliers and not options.old_document_ids:
-                _migrate_suppliers(conn, db, version, mapping, options)
+                _migrate_suppliers(conn, db, version, mapping, options, probe)
 
             last, done_in_run = 0, 0
             batch_cache: dict[int, dict] = {}
@@ -797,11 +843,11 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
                 poss: dict[int, list[dict]] = {}
                 for p in _rows(conn, f"SELECT * FROM order_positions WHERE document_id IN ({clause}) ORDER BY position_index, id", **keys):
                     poss.setdefault(p["document_id"], []).append(p)
-                sup_ids = sorted({e["supplier_id"] for e in exts.values() if e.get("supplier_id")})
-                sups: dict[int, dict] = {}
-                if sup_ids:
-                    sc, sk = _in_clause("s", sup_ids)
-                    sups = {s["id"]: s for s in _rows(conn, f"SELECT * FROM suppliers WHERE id IN ({sc})", **sk)}
+                link_vals = sorted({e[probe["ext_link"]] for e in exts.values() if e.get(probe["ext_link"])})
+                sups: dict = {}
+                if link_vals:
+                    sc, sk = _in_clause("s", link_vals)
+                    sups = {s[probe["sup_key"]]: s for s in _rows(conn, f"SELECT * FROM {probe['sup_table']} WHERE {probe['sup_key']} IN ({sc})", **sk)}
                 need_batches = sorted({d["batch_id"] for d in block if d["batch_id"] not in batch_cache})
                 if need_batches:
                     bc, bk = _in_clause("x", need_batches)
@@ -821,7 +867,7 @@ def run(session_factory: Callable[[], Session], options: RunOptions) -> dict:
                         with db.begin_nested():
                             bid = _ensure_batch(db, batch_cache.get(d["batch_id"]) or {"id": d["batch_id"]}, batch_items, options.dry_run)
                             new, status, note = migrate_one(db, version, built, resolver, mapping, d, exts.get(d["id"]),
-                                                            sups.get((exts.get(d["id"]) or {}).get("supplier_id")), poss.get(d["id"], []),
+                                                            sups.get((exts.get(d["id"]) or {}).get(probe["ext_link"])), poss.get(d["id"], []),
                                                             bid, storage_root, options.dry_run, type_map)
                             _remember(db, "document", d["id"], new.id, status, note, prev)
                         _bump(status)
@@ -878,7 +924,7 @@ def _rule_status(db: Session, document_id: int) -> str | None:
     return val.get("status") if isinstance(val, dict) else None
 
 
-def _migrate_suppliers(conn, db: Session, version: SchemaVersion, mapping: list[dict], options: RunOptions) -> None:
+def _migrate_suppliers(conn, db: Session, version: SchemaVersion, mapping: list[dict], options: RunOptions, probe: dict) -> None:
     """MAIN-Lieferanten-Stammdaten vorab übernehmen (über dieselbe Zuordnung wie bei den Belegen: IBAN → USt-IdNr. → Name)."""
     master = next((e for e in version.entities if e.is_master and e.master_table == "vendor"), None)
     if master is None:
@@ -886,7 +932,7 @@ def _migrate_suppliers(conn, db: Session, version: SchemaVersion, mapping: list[
     entries = _entries_for(mapping, master.name)
     last = 0
     while not _cancel.is_set():
-        rows = _rows(conn, "SELECT * FROM suppliers WHERE id > :last ORDER BY id LIMIT :n", last=last, n=BLOCK)
+        rows = _rows(conn, f"SELECT * FROM {probe['sup_table']} WHERE id > :last ORDER BY id LIMIT :n", last=last, n=BLOCK)
         if not rows:
             break
         last = rows[-1]["id"]
@@ -935,11 +981,13 @@ def preview(db: Session, old_document_id: int) -> dict:
         ext = exts[0] if exts else None
         positions = _rows(conn, "SELECT * FROM order_positions WHERE document_id = :i ORDER BY position_index, id", i=old_document_id)
         sup = None
-        if ext and ext.get("supplier_id"):
-            r = _rows(conn, "SELECT * FROM suppliers WHERE id = :i", i=ext["supplier_id"])
+        probe = _probe(conn)
+        link = (ext or {}).get(probe["ext_link"])
+        if link:
+            r = _rows(conn, f"SELECT * FROM {probe['sup_table']} WHERE {probe['sup_key']} = :i", i=link)
             sup = r[0] if r else None
     raw = _parse_raw((ext or {}).get("raw_response")) if ext else None
-    out: dict = {"document": {k: doc.get(k) for k in ("id", "original_filename", "status", "document_type_id", "company", "year")},
+    out: dict = {"document": {k: doc.get(k) for k in ("id", "original_filename", "status", "document_type", "document_type_id", "company", "year")},
                  "has_raw_response": raw is not None, "problems": check_mapping(version, cfg.mapping or [])}
     if raw is None:
         out["parsed"], out["schema_errors"] = None, ["Keine verwertbare KI-Antwort — der Beleg würde ohne Daten übernommen."]
