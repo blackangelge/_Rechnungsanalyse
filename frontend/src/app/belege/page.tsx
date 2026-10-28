@@ -1082,6 +1082,7 @@ export default function BelegePage() {
                 <span className="animate-spin mr-2 inline-block">⟳</span> Lade…
               </div>
             ) : viewedDoc ? (
+              <>
               <div className="flex gap-4">
                 <div className="w-1/2 shrink-0 overflow-y-auto card" style={{ maxHeight: "calc(113vh - 14rem)" }}>
                   <div className="sticky top-0 z-10 border-b bg-white px-5 py-3">
@@ -1107,6 +1108,9 @@ export default function BelegePage() {
                   />
                 </div>
               </div>
+              {/* Positionen über die volle Breite (nur Schema-/migrierte Belege) */}
+              <div className="mt-4"><SchemaPositions doc={viewedDoc} /></div>
+              </>
             ) : (
               <div className="card p-6 text-sm text-red-500">
                 Dokument konnte nicht geladen werden.
@@ -1644,6 +1648,118 @@ function schemaToRaw(schema: SchemaRecords): Record<string, unknown> | null {
   };
 }
 
+// ─── Positionen: volle Detailtabelle für Schema-/migrierte Belege ──────────────
+/** Euro-Formatierung (Modulebene, von SchemaPositions genutzt). */
+function fmtEur(n: unknown): string | null {
+  if (n == null) return null;
+  let num: number;
+  if (typeof n === "number") {
+    num = n;
+  } else {
+    const s = String(n).replace(/[€$£¥\s]/g, "");
+    num = parseFloat(s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s);
+  }
+  if (isNaN(num)) return String(n);
+  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(num);
+}
+
+const MENGE_STATUS_LABEL: Record<string, string> = {
+  ok: "", no_unit: "ohne Einheit", unknown_unit: "unbekannte Einheit",
+  wrong_group: "falsche Einheitengruppe", invalid: "ungültig", no_value: "kein Wert",
+};
+
+/**
+ * Volle Breite unter dem Infos/PDF-Split: zeigt ALLE ausgelesenen und verarbeiteten
+ * Positionswerte des neuen Schemas (Menge lt. Beleg + normiert mit Status, Einzelpreis,
+ * Preis je / Preiseinheit, Gesamtpreis, Steuer, Verpackung, Einheitentyp, Nachlass, Währung).
+ * Rendert nichts für Altbelege (die behalten ihre Tabelle in der Infos-Spalte).
+ */
+function SchemaPositions({ doc }: { doc: DocumentDetail }) {
+  const ext = doc.extraction;
+  const [schema, setSchema] = useState<SchemaRecords | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (ext?.raw_response) { setSchema(null); return; }
+    documentsApi.schemaRecords(doc.id).then((s) => { if (!cancelled) setSchema(s); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [doc.id, ext?.raw_response]);
+
+  if (!schema?.has_schema) return null;
+  const positions = schema.children.filter((c) => c.entity === "position").map((c) => c.data);
+  if (positions.length === 0) return null;
+
+  const q = (v: unknown) => v as Record<string, unknown> | null;
+  const numStr = (v: unknown) => (v == null ? "–" : Number(v).toLocaleString("de-DE", { maximumFractionDigits: 6 }));
+
+  return (
+    <div className="card overflow-x-auto p-4">
+      <h3 className="mb-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
+        Positionen ({positions.length}) — alle ausgelesenen und verarbeiteten Werte
+      </h3>
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 text-xs font-medium text-gray-500">
+          <tr>
+            <th className="px-2 py-2 text-left">Nr.</th>
+            <th className="px-2 py-2 text-left">Bezeichnung</th>
+            <th className="px-2 py-2 text-left">Art.-Nr.</th>
+            <th className="px-2 py-2 text-right">Menge (lt. Beleg)</th>
+            <th className="px-2 py-2 text-left">Einheit</th>
+            <th className="px-2 py-2 text-right">Menge (normiert)</th>
+            <th className="px-2 py-2 text-right">Einzelpreis</th>
+            <th className="px-2 py-2 text-right">Preis je</th>
+            <th className="px-2 py-2 text-left">Preiseinheit</th>
+            <th className="px-2 py-2 text-right">Gesamtpreis</th>
+            <th className="px-2 py-2 text-right">Steuer %</th>
+            <th className="px-2 py-2 text-left">Verpackung</th>
+            <th className="px-2 py-2 text-left">Einheitentyp</th>
+            <th className="px-2 py-2 text-left">Nachlass</th>
+            <th className="px-2 py-2 text-left">Whg</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {positions.map((p, i) => {
+            const menge = q(p.menge);
+            const pack = q(p.verpackungsinhalt);
+            const status = menge?.status as string | undefined;
+            const normiert = menge?.value != null
+              ? `${numStr(menge.value)} ${menge.unit ?? ""}`.trim()
+              : (status ? MENGE_STATUS_LABEL[status] ?? status : "–");
+            const typ = p.mengeneinheit_typ ? String(p.mengeneinheit_typ) : null;
+            const nachlass = [
+              p.preisnachlass_betrag != null ? fmtEur(p.preisnachlass_betrag) : null,
+              p.preisnachlass_prozent != null ? `${p.preisnachlass_prozent}%` : null,
+              p.preisnachlass_bezeichnung ? String(p.preisnachlass_bezeichnung) : null,
+            ].filter(Boolean).join(" / ");
+            return (
+              <tr key={i} className="align-top hover:bg-gray-50">
+                <td className="px-2 py-2 text-gray-500">{String(p.position_nr ?? i + 1)}</td>
+                <td className="px-2 py-2">{String(p.artikelbezeichnung ?? "–")}</td>
+                <td className="px-2 py-2 text-xs text-gray-500">{String(p.artikelnummer ?? "–")}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{numStr(menge?.original_value)}</td>
+                <td className="px-2 py-2 text-gray-600">{menge?.original_unit ? String(menge.original_unit) : "–"}</td>
+                <td className="px-2 py-2 text-right tabular-nums">
+                  {menge?.value != null
+                    ? <span className="text-emerald-700">{normiert}</span>
+                    : <span className="text-xs text-amber-600">{normiert}</span>}
+                </td>
+                <td className="px-2 py-2 text-right tabular-nums">{p.einzelpreis != null ? fmtEur(p.einzelpreis) : "–"}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{p.preis_je_menge != null ? numStr(p.preis_je_menge) : "–"}</td>
+                <td className="px-2 py-2 text-gray-600">{p.preiseinheit ? String(p.preiseinheit) : "–"}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{p.gesamtpreis != null ? fmtEur(p.gesamtpreis) : "–"}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{p.steuersatz != null ? `${p.steuersatz} %` : "–"}</td>
+                <td className="px-2 py-2 text-xs text-gray-600">{pack?.original_value != null ? `${numStr(pack.original_value)} ${pack.original_unit ?? ""}`.trim() : "–"}</td>
+                <td className="px-2 py-2 text-xs text-gray-500">{typ ? UNIT_TYPE_LABELS[typ] ?? typ : "–"}</td>
+                <td className="px-2 py-2 text-xs text-gray-500">{nachlass || "–"}</td>
+                <td className="px-2 py-2 text-xs text-gray-500">{p.waehrung ? String(p.waehrung) : "–"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── Formatierte Infos-Ansicht ────────────────────────────────────────────────
 /**
  * Zeigt die extrahierten Rechnungsdaten strukturiert an.
@@ -1816,8 +1932,8 @@ function InfosView({
         </div>
       )}
 
-      {/* Positionen */}
-      {(positionen ?? doc.order_positions).length > 0 && (
+      {/* Positionen (Altbelege; Schema-/migrierte Belege: volle Tabelle unter dem Split) */}
+      {!hasSchema && (positionen ?? doc.order_positions).length > 0 && (
         <div className="mb-2">
           <h3 className="mb-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
             Positionen ({(positionen ?? doc.order_positions).length})
