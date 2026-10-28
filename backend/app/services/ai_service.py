@@ -28,9 +28,23 @@ from app.services.lmstudioclient import LMStudioClient
 
 logger = logging.getLogger(__name__)
 
-# Timeout für einen einzelnen KI-API-Aufruf in Sekunden.
+# Timeout für einen einzelnen KI-API-Aufruf in Sekunden (Standard = kleine Belege).
 # Lokale Modelle können bei langen PDFs länger brauchen.
 REQUEST_TIMEOUT_SECONDS = 900
+
+
+def timeout_for_pages(page_count: int) -> int:
+    """KI-Request-Timeout je Seitenzahl — große Belege brauchen deutlich länger.
+    < 15 Seiten: 15 min · ab 15: 20 min · ab 20: 30 min · ab 30: 45 min · ab 50: 90 min."""
+    if page_count >= 50:
+        return 5400
+    if page_count >= 30:
+        return 2700
+    if page_count >= 20:
+        return 1800
+    if page_count >= 15:
+        return 1200
+    return REQUEST_TIMEOUT_SECONDS
 
 
 def _send_via_lmstudio(
@@ -57,11 +71,12 @@ def _send_via_lmstudio(
         "KI-Timeout", "KI-Verbindungsfehler:", "KI-Fehler:") entsprechen den
         bestehenden Konventionen, die documents.py::_is_ai_conn_error() prüft.
     """
+    tmo = timeout_for_pages(len(images_b64))
     client = LMStudioClient(
         base_url=config.api_url,
         model=config.model_name,
         access_token=config.api_key or None,
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=tmo,
     )
     reasoning = getattr(config, "reasoning", "off") or "off"
     reasoning_value = "high" if reasoning == "on" else reasoning
@@ -88,7 +103,7 @@ def _send_via_lmstudio(
     if response is None:
         if client.last_error_kind == "timeout":
             logger.error("LM Studio Timeout: %s", client.last_error)
-            return "", {}, f"KI-Timeout nach {REQUEST_TIMEOUT_SECONDS}s: {client.last_error}"
+            return "", {}, f"KI-Timeout nach {tmo}s: {client.last_error}"
         logger.error("LM Studio Verbindungsfehler: %s", client.last_error)
         return "", {}, f"KI-Verbindungsfehler: {client.last_error}"
 
@@ -203,7 +218,7 @@ def extract_invoice_data(
             request_body.clear()  # Bilddaten sofort freigeben
 
             _t_start = time.monotonic()
-            with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            with httpx.Client(timeout=timeout_for_pages(len(images_b64))) as client:
                 response = client.post(endpoint, content=serialized_body, headers=headers)
             _total_duration = time.monotonic() - _t_start
             del serialized_body
@@ -248,7 +263,7 @@ def extract_invoice_data(
                 return {}, [], raw_text, {}
 
         except httpx.TimeoutException as exc:
-            raw_text = f"KI-Timeout nach {REQUEST_TIMEOUT_SECONDS}s: {exc}"
+            raw_text = f"KI-Timeout nach {timeout_for_pages(len(images_b64))}s: {exc}"
             logger.error("KI-API Timeout: %s", exc)
             return {}, [], raw_text, {}
         except httpx.ConnectError as exc:
@@ -547,7 +562,7 @@ def detect_document_type(
             request_body.clear()
 
             _t_start = time.monotonic()
-            with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            with httpx.Client(timeout=timeout_for_pages(len(images_b64))) as client:
                 response = client.post(endpoint, content=serialized_body, headers=headers)
             _total_duration = time.monotonic() - _t_start
             del serialized_body
@@ -666,7 +681,7 @@ def ask_question(
         body["reasoning"] = reasoning_param
     try:
         t0 = time.monotonic()
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+        with httpx.Client(timeout=timeout_for_pages(len(images_b64))) as client:
             response = client.post(base + "/v1/chat/completions", content=json.dumps(body).encode("utf-8"), headers=headers)
         duration = time.monotonic() - t0
         if response.status_code != 200:
