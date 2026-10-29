@@ -105,16 +105,18 @@ def call_chat(config, system_prompt: str, user_content: list[dict], response_for
     preview = {k: v for k, v in body.items() if k != "messages"}
     preview["messages"] = [{"role": "system", "content": system_prompt}, {"role": "user", "content": texts[:500] + f" [+{n_img} Bild(er)]"}]
     result = StructuredResult(request_body_preview=preview)
+    from app.services.ai_service import timeout_for_pages  # erst hier: ai_service importiert dieses Modul
+    timeout_s = timeout_for_pages(n_img)                   # lange Belege brauchen länger (gleiche Staffelung wie im alten Pfad)
     try:
         payload = json.dumps(body).encode("utf-8")
         del body
         t0 = time.monotonic()
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+        with httpx.Client(timeout=timeout_s) as client:
             response = client.post(endpoint, content=payload, headers=headers)
         duration = time.monotonic() - t0
         del payload
     except httpx.TimeoutException as exc:
-        result.error = result.raw = f"KI-Timeout nach {REQUEST_TIMEOUT_SECONDS}s: {exc}"
+        result.error = result.raw = f"KI-Timeout nach {timeout_s}s: {exc}"
         return result
     except httpx.ConnectError as exc:
         result.error = result.raw = f"KI-Verbindungsfehler: {exc}"
