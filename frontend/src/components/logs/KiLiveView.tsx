@@ -11,11 +11,12 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Badge, Card, EmptyState } from "@/components/ui";
-import { KiLive, KiLiveRun, workerApi } from "@/lib/api";
+import { KiLive, KiLiveRun, KiServerStats, logsApi, workerApi } from "@/lib/api";
 
 const POLL_MS = 2000;
 const WARN_S = 120;       // ab 2 Minuten gelb
 const SLOW_S = 600;       // ab 10 Minuten rot
+const WINDOWS: [string, string][] = [["m1", "1 Min"], ["m5", "5 Min"], ["m10", "10 Min"], ["m60", "60 Min"], ["h4", "4 Std"], ["h24", "24 Std"], ["h48", "48 Std"]];
 
 export function fmtElapsed(s: number): string {
   const total = Math.max(0, Math.floor(s));
@@ -30,6 +31,7 @@ export default function KiLiveView() {
   const [fetchedAt, setFetchedAt] = useState(0);            // performance.now() beim letzten erfolgreichen Abruf
   const [now, setNow] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [srvStats, setSrvStats] = useState<KiServerStats | null>(null);
   const busy = useRef(false);
 
   useEffect(() => {
@@ -52,6 +54,17 @@ export default function KiLiveView() {
     const onVisible = () => { if (!document.hidden) poll(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { stopped = true; window.clearInterval(pollTimer); window.clearInterval(tick); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+
+  // Durchsatz je KI-Rechner: seltener (alle 20 s), da schwerer als die Live-Abfrage.
+  useEffect(() => {
+    let stopped = false;
+    const load = () => { if (!document.hidden) logsApi.serverStats().then((d) => { if (!stopped) setSrvStats(d); }).catch(() => undefined); };
+    load();
+    const t = window.setInterval(load, 20000);
+    const onVis = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stopped = true; window.clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, []);
 
   const elapsed = (r: KiLiveRun) => r.elapsed_seconds + (failed ? 0 : Math.max(0, (now - fetchedAt) / 1000));
@@ -91,8 +104,20 @@ export default function KiLiveView() {
                   </span></div>}>
                 {/* Feste Höhe je Karte: der Inhalt scrollt intern, damit die Karte nicht schrumpft/wächst,
                     wenn ein Beleg fertig wird — sonst springt das Browser-Fenster beim Aktualisieren hoch. */}
-                <div className="h-[500px] overflow-y-auto">
+                <div className="h-[550px] overflow-y-auto">
                 <div className="px-5 pb-1 pt-0 text-xs text-gray-400">{[s.model_name, s.url].filter(Boolean).join(" · ")}</div>
+                {srvStats?.servers[String(s.id)] && (() => {
+                  const st = srvStats.servers[String(s.id)] as unknown as Record<string, number>;
+                  return (
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 border-b border-gray-100 px-5 pb-2 pt-0.5 text-[11px] text-gray-500"
+                         title="Verarbeitete Dokumente je Zeitfenster (ab Einbau gezählt)">
+                      <span className="font-medium text-gray-600">Verarbeitet:</span>
+                      {WINDOWS.map(([k, label]) => (
+                        <span key={k}>{label}: <b className="tabular-nums text-gray-800">{st[k] ?? 0}</b></span>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {s.running.length === 0 ? (
                   <p className="px-5 py-4 text-sm text-gray-400">{s.active && !s.is_down ? "Leerlauf — keine Anfrage." : "—"}</p>
                 ) : (

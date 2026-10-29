@@ -300,6 +300,11 @@ export default function LogsPage() {
                 sub="erfolgreich über die Warteschlange"
               />
               <StatCard
+                label="Verarbeitet (letzte 120 Min.)"
+                value={fmt(kiStats.processed_last_120min)}
+                sub="erfolgreich über die Warteschlange"
+              />
+              <StatCard
                 label="Analysiert (letzte 24 Std.)"
                 value={fmt(kiStats.analyzed_last_24h)}
                 sub="alle abgeschlossenen Belege"

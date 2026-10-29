@@ -290,7 +290,7 @@ def _db_finish_empty(doc_id: int, page_count: int, batch_id: int | None, filenam
 
 
 def _db_finish_schema(doc_id: int, page_count: int, batch_id: int | None, filename: str, ki_stats: dict | None,
-                      document_type_id: int | None = None) -> None:
+                      document_type_id: int | None = None, ai_config_id: int | None = None) -> None:
     db = SessionLocal()
     try:
         doc = db.get(Document, doc_id)
@@ -305,7 +305,7 @@ def _db_finish_schema(doc_id: int, page_count: int, batch_id: int | None, filena
             if stats:
                 from app.models.document_token_count import DocumentTokenCount
                 db.add(DocumentTokenCount(
-                    document_id=doc_id, input_token_count=stats.get("input_tokens") or 0,
+                    document_id=doc_id, ai_client_id=ai_config_id, input_token_count=stats.get("input_tokens") or 0,
                     output_token_count=stats.get("output_tokens") or 0, reasoning_count=stats.get("reasoning_tokens") or 0,
                     time_spent_seconds=stats.get("total_duration") or 0.0,
                 ))
@@ -857,12 +857,12 @@ async def analyze_with_workflow(
 
     if ctx.schema_done:
         await asyncio.to_thread(_db_finish_schema, doc_id, ctx.page_count, ctx.batch_id, ctx.original_filename, ctx.ki_stats,
-                                ctx.document_type_id if ctx.type_detected else None)
+                                ctx.document_type_id if ctx.type_detected else None, ai_config_id)
     elif ctx.extracted:
         await asyncio.to_thread(
             docs._db_analyze_write, doc_id, ctx.original_filename, ctx.batch_id, ctx.ai_model_name,
             ctx.page_count, ctx.fields, ctx.positions, ctx.raw, ctx.ki_stats,
-            ctx.document_type_id, ctx.validation,
+            ctx.document_type_id, ctx.validation, ai_config_id,
         )
     elif ctx.type_detected:
         await asyncio.to_thread(

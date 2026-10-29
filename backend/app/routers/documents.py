@@ -984,6 +984,7 @@ def _db_analyze_write(
     ki_stats: dict | None = None,
     document_type_id: int | None = None,
     validation: dict | None = None,
+    ai_config_id: int | None = None,
 ) -> None:
     """
     ANALYSE-SCHRITT 4: KI-Ergebnisse in der DB speichern und Dokument abschließen.
@@ -1038,6 +1039,7 @@ def _db_analyze_write(
             raw_response=raw_response,
             ki_stats=ki_stats,
             validation=validation,
+            ai_client_id=ai_config_id,
         )
         extraction_ok = True   # Nur True wenn save_extraction ohne Exception durchläuft
 

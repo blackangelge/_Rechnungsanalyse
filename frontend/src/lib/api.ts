@@ -853,12 +853,22 @@ export interface KiStats {
   avg_duration_seconds: number | null;
   /** Belege mit status='done', deren letzter Status-Übergang <= 60 Minuten her ist */
   processed_last_60min: number;
+  /** wie oben, <= 120 Minuten */
+  processed_last_120min: number;
   /** Belege mit status IN ('done','error'), deren letzter Status-Übergang <= 24 Std. her ist */
   analyzed_last_24h: number;
 }
 
+/** Durchsatz je KI-Rechner über mehrere Zeitfenster (Schlüssel = ai_client_id als String). */
+export interface KiServerStats {
+  windows: string[];                       // ["m1","m5","m10","m60","h4","h24","h48"]
+  servers: Record<string, { name: string | null } & Record<string, number>>;
+  generated_at: string;
+}
+
 export const logsApi = {
   kiStats: () => apiClient.get<KiStats>("/api/logs/ki-stats/").then((r) => r.data),
+  serverStats: () => apiClient.get<KiServerStats>("/api/logs/ki-server-stats/").then((r) => r.data),
 };
 
 // ─── Typen: Workflows ─────────────────────────────────────────────────────────

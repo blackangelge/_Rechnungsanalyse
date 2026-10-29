@@ -29,6 +29,11 @@ class DocumentTokenCount(Base):
     document_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
     )
+    # Welcher KI-Rechner (ai_clients.id) diesen Durchlauf verarbeitet hat — für die Durchsatz-Statistik je Rechner.
+    # Erst ab Einbau gefüllt; Altbestand bleibt NULL.
+    ai_client_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("ai_clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # Token-Zähler — vom jeweiligen KI-Modell gemeldet
     output_token_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     input_token_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)

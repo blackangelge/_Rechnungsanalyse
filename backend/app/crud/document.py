@@ -400,6 +400,7 @@ def save_extraction(
     raw_response: str,
     ki_stats: dict | None = None,
     validation: dict | None = None,
+    ai_client_id: int | None = None,
 ) -> InvoiceExtraction:
     """
     Speichert extrahierte Rechnungsdaten. KI-Stats kommen in DocumentTokenCount.
@@ -498,6 +499,7 @@ def save_extraction(
     if ki_stats:
         token_count = DocumentTokenCount(
             document_id=doc_id,
+            ai_client_id=ai_client_id,
             input_token_count=(ki_stats.get("input_tokens") or 0),
             output_token_count=(ki_stats.get("output_tokens") or 0),
             reasoning_count=ki_stats.get("reasoning_tokens") or 0,

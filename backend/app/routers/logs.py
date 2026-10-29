@@ -55,6 +55,8 @@ def get_ki_stats(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     processed_last_60min = db.query(func.count(Document.id)).filter(
         Document.status == "done", Document.analyzed_at >= now - timedelta(minutes=60)).scalar() or 0
+    processed_last_120min = db.query(func.count(Document.id)).filter(
+        Document.status == "done", Document.analyzed_at >= now - timedelta(minutes=120)).scalar() or 0
     analyzed_last_24h = db.query(func.count(Document.id)).filter(
         Document.status.in_(("done", "error")), Document.analyzed_at >= now - timedelta(hours=24)).scalar() or 0
 
@@ -67,8 +69,41 @@ def get_ki_stats(db: Session = Depends(get_db)):
         "avg_input_tokens":   _float(row.avg_input_tokens),
         "avg_duration_seconds": _float(row.avg_duration),
         "processed_last_60min": int(processed_last_60min),
+        "processed_last_120min": int(processed_last_120min),
         "analyzed_last_24h":    int(analyzed_last_24h),
     }
+
+
+@router.get("/ki-server-stats")
+def get_ki_server_stats(db: Session = Depends(get_db)):
+    """
+    Durchsatz JE KI-Rechner über mehrere Zeitfenster: wie viele Dokumente der jeweilige
+    KI-Rechner in den letzten 1/5/10/60 Min und 4/24/48 Std verarbeitet hat (aus
+    documents_token_counts.ai_client_id, gefüllt ab Einbau — ältere Durchläufe ohne Rechner).
+    """
+    from datetime import timedelta
+    from sqlalchemy import case
+    from app.models.ai_clients import AIClients
+    from app.models.document_token_count import DocumentTokenCount
+
+    now = datetime.now(timezone.utc)
+    windows = [("m1", timedelta(minutes=1)), ("m5", timedelta(minutes=5)), ("m10", timedelta(minutes=10)),
+               ("m60", timedelta(minutes=60)), ("h4", timedelta(hours=4)), ("h24", timedelta(hours=24)), ("h48", timedelta(hours=48))]
+    cols = [DocumentTokenCount.ai_client_id]
+    for key, delta in windows:
+        cols.append(func.count(func.distinct(
+            case((DocumentTokenCount.created_at >= now - delta, DocumentTokenCount.document_id)))).label(key))
+    rows = (db.query(*cols)
+            .filter(DocumentTokenCount.ai_client_id.isnot(None),
+                    DocumentTokenCount.created_at >= now - windows[-1][1])      # nur das größte Fenster laden
+            .group_by(DocumentTokenCount.ai_client_id).all())
+
+    names = {c.id: c.name for c in db.query(AIClients.id, AIClients.name).all()}
+    servers = {}
+    for r in rows:
+        cid = r[0]
+        servers[str(cid)] = {"name": names.get(cid), **{windows[i][0]: int(r[i + 1] or 0) for i in range(len(windows))}}
+    return {"windows": [k for k, _ in windows], "servers": servers, "generated_at": now.isoformat()}
 
 
 @router.get("/worker-stats")
