@@ -113,13 +113,20 @@ def pdf_to_base64_images(
                 page = pdf[page_idx]
                 scale = dpi / 72.0
                 bitmap = page.render(scale=scale, rotation=0)
-                # .copy() ist Pflicht: laut pypdfium2-Doku teilt sich to_pil() für
-                # RGBA/RGBX/L-Puffer den Speicher mit dem PDFium-Bitmap-Objekt statt
-                # ihn zu kopieren. Ohne .copy() würde das PIL-Image nach pdf.close()
-                # (unten, noch innerhalb der Sperre) auf bereits freigegebenen Speicher
-                # zeigen — der eigentliche Grund, warum die Nachbearbeitung erst NACH
-                # dem Freigeben von PDFium (außerhalb der Sperre) passieren darf.
-                raw_bitmaps.append(bitmap.to_pil().copy())
+                try:
+                    # .copy() ist Pflicht: laut pypdfium2-Doku teilt sich to_pil() für
+                    # RGBA/RGBX/L-Puffer den Speicher mit dem PDFium-Bitmap-Objekt statt
+                    # ihn zu kopieren. Nach dem .copy() ist das PIL-Image eigenständig,
+                    # das Bitmap kann sofort geschlossen werden.
+                    raw_bitmaps.append(bitmap.to_pil().copy())
+                finally:
+                    # Bitmap und Page SOFORT (noch unter der Sperre) schließen. Sonst würden
+                    # ihre Destruktoren erst beim Garbage Collection laufen — und die rufen in
+                    # PDFium hinein. Läuft der GC später außerhalb der Sperre (z.B. während ein
+                    # anderer Thread gerade rendert), greifen zwei Threads gleichzeitig auf
+                    # PDFium zu → Heap-Korruption ("free(): corrupted unsorted chunks")/Segfault.
+                    bitmap.close()
+                    page.close()
         except Exception as exc:
             logger.error("Fehler beim Rendern von '%s': %s", path.name, exc)
             raw_bitmaps = []
@@ -175,7 +182,14 @@ def render_page_thumbnail(pdf_path: str | Path, page_number: int, width_px: int 
                 raise IndexError(f"Seite {page_number} existiert nicht (1–{len(pdf)})")
             page = pdf[page_number - 1]
             scale = width_px / max(page.get_width(), 1.0)
-            image = page.render(scale=scale).to_pil().convert("RGB").copy()
+            bitmap = page.render(scale=scale)
+            try:
+                image = bitmap.to_pil().convert("RGB").copy()
+            finally:
+                # Bitmap/Page sofort schließen (siehe pdf_to_base64_images): sonst laufen die
+                # PDFium-Destruktoren erst beim GC außerhalb der Sperre → Thread-Korruption.
+                bitmap.close()
+                page.close()
         finally:
             pdf.close()
     buffer = io.BytesIO()
