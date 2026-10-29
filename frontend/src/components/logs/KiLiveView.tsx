@@ -89,6 +89,9 @@ export default function KiLiveView() {
                     ))}
                     <span className="ml-1 text-xs tabular-nums text-gray-500">{s.busy}/{s.parallel_request}</span>
                   </span></div>}>
+                {/* Feste Höhe je Karte: der Inhalt scrollt intern, damit die Karte nicht schrumpft/wächst,
+                    wenn ein Beleg fertig wird — sonst springt das Browser-Fenster beim Aktualisieren hoch. */}
+                <div className="h-[500px] overflow-y-auto">
                 <div className="px-5 pb-1 pt-0 text-xs text-gray-400">{[s.model_name, s.url].filter(Boolean).join(" · ")}</div>
                 {s.running.length === 0 ? (
                   <p className="px-5 py-4 text-sm text-gray-400">{s.active && !s.is_down ? "Leerlauf — keine Anfrage." : "—"}</p>
@@ -113,6 +116,7 @@ export default function KiLiveView() {
                     </tbody>
                   </table>
                 )}
+                </div>
               </Card>
             );
           })}

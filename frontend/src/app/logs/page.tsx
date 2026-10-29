@@ -260,8 +260,6 @@ export default function LogsPage() {
 
       {/* ── KI-Statistiken ────────────────────────────────────────────── */}
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-gray-800">Analyse-Statistiken</h2>
-
         {kiStatsError && (
           <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
             {kiStatsError}
