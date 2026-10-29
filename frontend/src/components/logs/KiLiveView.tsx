@@ -106,11 +106,13 @@ export default function KiLiveView() {
                     wenn ein Beleg fertig wird — sonst springt das Browser-Fenster beim Aktualisieren hoch. */}
                 <div className="h-[550px] overflow-y-auto">
                 <div className="px-5 pb-1 pt-0 text-xs text-gray-400">{[s.model_name, s.url].filter(Boolean).join(" · ")}</div>
-                {srvStats?.servers[String(s.id)] && (() => {
-                  const st = srvStats.servers[String(s.id)] as unknown as Record<string, number>;
+                {srvStats && (() => {
+                  // Zeile IMMER anzeigen (auch mit Nullen) — ein Rechner, der noch nichts
+                  // abgeschlossen hat, taucht sonst gar nicht auf.
+                  const st = (srvStats.servers[String(s.id)] ?? {}) as unknown as Record<string, number>;
                   return (
                     <div className="flex flex-wrap gap-x-3 gap-y-0.5 border-b border-gray-100 px-5 pb-2 pt-0.5 text-[11px] text-gray-500"
-                         title="Verarbeitete Dokumente je Zeitfenster (ab Einbau gezählt)">
+                         title="Verarbeitete (abgeschlossene) Dokumente je Zeitfenster — ab Einbau gezählt">
                       <span className="font-medium text-gray-600">Verarbeitet:</span>
                       {WINDOWS.map(([k, label]) => (
                         <span key={k}>{label}: <b className="tabular-nums text-gray-800">{st[k] ?? 0}</b></span>
