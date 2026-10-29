@@ -34,8 +34,9 @@ import random
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Protocol
+from urllib.parse import urlsplit
 
 import asyncpg
 
@@ -59,6 +60,14 @@ POLL_INTERVAL_SEC = 20
 
 #: Maximale Wartezeit eines Workers auf einen freien Slot.
 SLOT_ACQUIRE_TIMEOUT = 60.0
+
+#: So lange (Sekunden) gilt ein KI-Rechner nach einem Verbindungsfehler als „gesperrt / nicht erreichbar".
+#: Der Dispatcher erneuert die Sperre in jedem Zyklus, solange der Rechner nicht antwortet; antwortet er
+#: wieder, läuft sie von selbst ab und er wird automatisch wieder benutzt.
+SERVER_DOWN_SECONDS = 60
+
+#: Zeitlimit (Sekunden) des TCP-Tests, der einen toten Rechner von einer einzelnen langsamen Anfrage unterscheidet.
+SERVER_PROBE_TIMEOUT = 3.0
 
 #: Grobe Schätzung des Token-Verbrauchs pro gerenderter PDF-Seite (Bild + Anteil
 #: Prompt/Ausgabe). Wird mit AIClients.max_context_tokens verrechnet, um zu
@@ -155,10 +164,15 @@ class AIServer:
 
     @property
     def is_down(self) -> bool:
-        """True, wenn ``timeout_at`` gesetzt ist (Server gilt als nicht
-        erreichbar). Wird ausschließlich von der externen AIClient-Klasse
-        gesetzt/zurückgesetzt – der Dispatcher liest nur."""
-        return self.timeout_at is not None
+        """True, solange ``timeout_at`` in der Zukunft liegt (Server gilt als
+        gesperrt / nicht erreichbar). Gesetzt wird es vom Worker bei einem
+        Verbindungsfehler (``Worker._block_if_unreachable``); abgelaufen = wieder versuchen."""
+        ta = self.timeout_at
+        if ta is None:
+            return False
+        if ta.tzinfo is None:
+            ta = ta.replace(tzinfo=timezone.utc)
+        return ta > datetime.now(timezone.utc)
 
     @property
     def max_pages(self) -> int | None:
@@ -175,6 +189,22 @@ class AIServer:
             return True  # Seitenzahl (noch) unbekannt — nicht vorab ausschließen
         limit = self.max_pages
         return limit is None or page_count <= limit
+
+
+async def block_server(db_pool, server: "AIServer") -> None:
+    """Sperrt den KI-Rechner für SERVER_DOWN_SECONDS (``ai_clients.timeout_at``) — in der DB und im Pool.
+    Die Live-Ansicht zeigt ihn dann als „gesperrt / nicht erreichbar"; es werden keine Belege mehr hingeschickt."""
+    was_down = server.is_down
+    async with db_pool.acquire() as conn:
+        server.timeout_at = await conn.fetchval(
+            """UPDATE ai_clients
+               SET timeout_at = NOW() + make_interval(secs => $2)
+               WHERE id = $1
+               RETURNING timeout_at""",
+            server.id, float(SERVER_DOWN_SECONDS),
+        )
+    if not was_down:
+        log.warning(f"KI-Rechner '{server.name}' nicht erreichbar — gesperrt, bis er wieder antwortet")
 
 
 @dataclass
@@ -292,6 +322,10 @@ class ServerPool:
                 raise TimeoutError("Kein freier Server-Slot verfügbar")
             await asyncio.sleep(0.5)
 
+    def active_servers(self) -> list["AIServer"]:
+        """Alle aktiven Server (auch gesperrte) — für die Erreichbarkeitsprüfung."""
+        return [s for s in self._servers.values() if s.active]
+
     def total_capacity(self) -> int:
         """Summe der Kapazitäten aller einsatzbereiten Server."""
         return sum(
@@ -383,6 +417,47 @@ class Worker:
             f"[{self.worker_id}] Task {task.id} zurück auf 'pending' "
             f"({reason} — Versuch nicht gezählt)"
         )
+
+    @staticmethod
+    async def _server_reachable(server: "AIServer") -> bool:
+        """Kurzer TCP-Test (Host/Port der KI-URL): unterscheidet einen toten/abgeschalteten
+        Rechner von einer einzelnen langsamen oder abgelehnten Anfrage."""
+        parts = urlsplit(server.url)
+        host = parts.hostname
+        if not host:
+            return True  # nicht beurteilbar → nicht sperren
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=SERVER_PROBE_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        return True
+
+    async def _block_if_unreachable(self, server: "AIServer") -> None:
+        """Sperrt den KI-Rechner für SERVER_DOWN_SECONDS (``ai_clients.timeout_at``), wenn er nach einem
+        Verbindungsfehler tatsächlich nicht erreichbar ist. So erscheint er in der Live-Ansicht als
+        „gesperrt / nicht erreichbar", und die Slots werden auf die erreichbaren Rechner verteilt,
+        statt Belege nacheinander gegen den toten Rechner laufen zu lassen. Nach Ablauf wird er automatisch
+        wieder versucht. Fehler hier sind nie kritisch."""
+        if server.is_down:
+            return  # schon gesperrt (z.B. von einem anderen Worker)
+        try:
+            if await self._server_reachable(server):
+                return
+            await block_server(self.db_pool, server)
+        except Exception as exc:  # noqa: BLE001
+            log.error(f"[{self.worker_id}] Sperren von '{server.name}' fehlgeschlagen (nicht kritisch): {exc}")
+
+    async def _clear_block(self, server: "AIServer") -> None:
+        """Hebt eine (abgelaufene oder noch laufende) Sperre auf, sobald der Rechner wieder erfolgreich geantwortet hat."""
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("UPDATE ai_clients SET timeout_at = NULL WHERE id = $1", server.id)
+            server.timeout_at = None
+            log.info(f"[{self.worker_id}] KI-Rechner '{server.name}' wieder erreichbar — Sperre aufgehoben")
+        except Exception as exc:  # noqa: BLE001
+            log.error(f"[{self.worker_id}] Sperre von '{server.name}' nicht aufgehoben (nicht kritisch): {exc}")
 
     async def _set_document_error(self, task: Task, reason: str) -> None:
         """Setzt das verknüpfte Dokument auf 'error', falls der Payload eine document_id enthält.
@@ -537,6 +612,8 @@ class Worker:
                     result = await self.ai_client.send(server, task.payload)
                     await self._mark_completed(task, result)
                     log.info(f"[{self.worker_id}] Task {task.id} fertig")
+                    if server.timeout_at is not None:
+                        await self._clear_block(server)
 
                 except ConnectionError as e:
                     # Server-/Verbindungsproblem (timeout_at wurde von der AIClient-
@@ -552,6 +629,7 @@ class Worker:
                     await self._release_for_retry_no_penalty(
                         task, reason=f"Verbindung zu {server.name} verloren"
                     )
+                    await self._block_if_unreachable(server)
 
                 except Exception as e:
                     # Inhaltlicher Fehler – nicht erneut versuchen (siehe Antwort
@@ -716,6 +794,19 @@ class Dispatcher:
             for r in rows
         ]
 
+    async def _check_servers(self) -> None:
+        """TCP-Test aller aktiven KI-Rechner (parallel); nicht erreichbare werden gesperrt bzw. die Sperre erneuert."""
+        servers = self.pool.active_servers()
+        if not servers:
+            return
+        results = await asyncio.gather(*(Worker._server_reachable(s) for s in servers), return_exceptions=True)
+        for srv, ok in zip(servers, results):
+            if ok is False:  # Ausnahme/unklar (return_exceptions) → nicht sperren
+                try:
+                    await block_server(self.db_pool, srv)
+                except Exception as exc:  # noqa: BLE001
+                    log.error(f"Sperren von '{srv.name}' fehlgeschlagen (nicht kritisch): {exc}")
+
     async def _load_tasks(self) -> list[Task]:
         """Holt neue Tasks atomar aus der DB und übernimmt sie in die interne Queue.
 
@@ -863,6 +954,11 @@ class Dispatcher:
                 # 1. Server-Stand synchronisieren
                 servers = await self._load_servers()
                 await self.pool.update(servers)
+
+                # 1b. Erreichbarkeit prüfen: tote Rechner sperren, bevor Belege hingeschickt werden
+                #     (sonst hängen deren Slots bis zum langen HTTP-Timeout). Antwortet ein Rechner
+                #     wieder, läuft die Sperre von selbst ab.
+                await self._check_servers()
 
                 # 2. Worker-Anzahl an Kapazität anpassen
                 await self._scale_workers(self.pool.total_capacity())
